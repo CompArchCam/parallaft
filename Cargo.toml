@@ -13,8 +13,10 @@ log = "0.4.17"
 nix = { path = "/home/peter/nix" }
 compel = { path = "/home/peter/compel" }
 parasite = { path = "parasite" }
+procfs = { path = "/home/peter/procfs" }
+pretty-hex = "0.3.0"
 
-[build_dependencies]
+[build-dependencies]
 cc = "1.0.78"
 
 [profile.release]
