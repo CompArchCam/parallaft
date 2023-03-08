@@ -4,7 +4,9 @@ use syscalls::{syscall, Sysno};
 
 pub struct FdOut<const FD: usize>;
 
+#[allow(dead_code)]
 pub static mut STDOUT: FdOut<1> = FdOut;
+#[allow(dead_code)]
 pub static mut STDERR: FdOut<2> = FdOut;
 
 impl<const FD: usize> Write for FdOut<FD> {
