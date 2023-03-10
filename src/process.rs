@@ -1,9 +1,4 @@
-use std::{
-    cell::{RefCell, RefMut},
-    collections::HashSet,
-    fmt::Debug,
-    rc::Rc,
-};
+use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use compel::{
     syscalls::{syscall_args, SyscallArgs, Sysno},
@@ -21,37 +16,46 @@ use nix::{
 };
 use parasite::commands::{Request, Response};
 
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
+
 use crate::{dirty_page_tracer::DirtyPageTracer, page_diff::page_diff};
 
 pub struct Process {
     pub pid: Pid,
-    pub parent: Option<Rc<Process>>,
-    pub zombie_children: RefCell<HashSet<Pid>>,
+    pub parent: Option<Arc<Process>>,
+    pub zombie_children: Mutex<HashSet<Pid>>,
 
-    dirty_page_tracer: RefCell<Option<DirtyPageTracer>>,
+    dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
 }
 
 pub trait ProcessCloneExt {
-    fn clone_process(&self) -> Rc<Process>;
+    fn clone_process(&self) -> Arc<Process>;
 }
 
-impl ProcessCloneExt for Rc<Process> {
-    fn clone_process(&self) -> Rc<Process> {
+impl ProcessCloneExt for Arc<Process> {
+    fn clone_process(&self) -> Arc<Process> {
         let parent = self.clone();
-        let child_pid = self.syscall(Sysno::clone, syscall_args!(libc::SIGCHLD as _, 0, 0, 0, 0));
+
+        #[cfg(not(feature = "dont_send_sigchld"))]
+        let flags = libc::SIGCHLD as _;
+
+        #[cfg(feature = "dont_send_sigchld")]
+        let flags = 0;
+
+        let child_pid = self.syscall(Sysno::clone, syscall_args!(flags, 0, 0, 0, 0));
         let child = Process::new(Pid::from_raw(child_pid as _), Some(parent));
-        Rc::new(child)
+        Arc::new(child)
     }
 }
 
 #[allow(unused)]
 impl Process {
-    pub fn new(pid: Pid, parent: Option<Rc<Process>>) -> Self {
+    pub fn new(pid: Pid, parent: Option<Arc<Process>>) -> Self {
         Self {
             pid,
-            dirty_page_tracer: RefCell::new(None),
+            dirty_page_tracer: Mutex::new(None),
             parent,
-            zombie_children: RefCell::new(HashSet::new()),
+            zombie_children: Mutex::new(HashSet::new()),
         }
     }
 
@@ -79,7 +83,7 @@ impl Process {
     }
 
     pub fn reap_zombie_children(&self) {
-        let mut zombie_children = self.zombie_children.borrow_mut();
+        let mut zombie_children = self.zombie_children.lock();
         let mut parasite_ctl = self.compel_prepare::<Request, Response>();
 
         for child_pid in zombie_children.iter() {
@@ -98,7 +102,7 @@ impl Process {
     }
 
     pub fn reap_zombie_child(&self, pid: Pid) {
-        let mut zombie_children = self.zombie_children.borrow_mut();
+        let mut zombie_children = self.zombie_children.lock();
         zombie_children
             .take(&pid)
             .map(|_| self.waitpid(pid).unwrap())
@@ -117,9 +121,9 @@ impl Process {
         }
     }
 
-    fn dirty_page_tracer(&self) -> RefMut<DirtyPageTracer> {
-        RefMut::map(self.dirty_page_tracer.borrow_mut(), |x| {
-            x.get_or_insert_with(|| DirtyPageTracer::new(self.pid.as_raw()))
+    fn dirty_page_tracer(&self) -> MappedMutexGuard<DirtyPageTracer> {
+        MutexGuard::map(self.dirty_page_tracer.lock(), |t| {
+            t.get_or_insert_with(|| DirtyPageTracer::new(self.pid.as_raw()))
         })
     }
 
@@ -160,7 +164,7 @@ impl Drop for Process {
     fn drop(&mut self) {
         let pid = self.pid;
         if let Some(parent) = &self.parent {
-            parent.zombie_children.borrow_mut().insert(pid);
+            parent.zombie_children.lock().insert(pid);
         }
 
         let result = kill(pid, Signal::SIGKILL);

@@ -64,8 +64,10 @@ fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<
                 let from_pid = Pid::from_raw(sig_info._pad[1] as _);
                 info!("Child {} received signal {} from {}", pid, sig, from_pid);
 
+                #[cfg(not(feature = "dont_handle_sigchld"))]
                 let handled = check_coord.handle_sigchld(pid, from_pid);
-
+                #[cfg(feature = "dont_handle_sigchld")]
+                let handled = true;
                 ptrace::syscall(pid, if handled { None } else { Some(sig) }).unwrap();
             }
             WaitStatus::Exited(pid, _) => {
@@ -138,7 +140,8 @@ fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     compel::log_init(log::Level::Error);
 

@@ -1,6 +1,6 @@
 use std::io::IoSliceMut;
 
-use log::{trace, info};
+use log::{info, trace};
 use nix::sys::uio::{process_vm_readv, RemoteIoVec};
 use nix::unistd::sysconf;
 use nix::unistd::Pid;
