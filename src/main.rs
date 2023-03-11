@@ -8,35 +8,64 @@ mod utils;
 use std::ffi::CString;
 use std::iter;
 
+use bitflags::bitflags;
 use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::sys::signal::{raise, Signal};
-use nix::sys::wait::{wait, waitpid, WaitStatus};
+use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execvp, fork, ForkResult, Pid};
 
 use clap::Parser;
 
 use log::info;
 
-use crate::checkpoint::CheckCoordinator;
+use crate::checkpoint::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::process::Process;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct CliArgs {
-    // Main CPU set
+    /// Main CPU set
     #[arg(short, long, use_value_delimiter = true)]
     main_cpu_set: Vec<usize>,
 
-    // Checker CPU set
+    /// Checker CPU set
     #[arg(short, long, use_value_delimiter = true)]
     checker_cpu_set: Vec<usize>,
+
+    /// Poll non-blocking waitpid instead of using blocking waitpid.
+    #[arg(short, long)]
+    poll_waitpid: bool,
+
+    /// Don't compare dirty memory between the checker and the reference.
+    #[arg(short, long)]
+    no_mem_check: bool,
+
+    /// Don't run the checker process. Just fork, and kill it until the next checkpoint.
+    #[arg(short, long)]
+    dont_run_checker: bool,
+
+    /// Check dirty memory synchronously.
+    #[arg(short, long)]
+    sync_mem_check: bool,
 
     command: String,
     args: Vec<String>,
 }
 
-fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<usize>) {
+bitflags! {
+    struct RunnerFlags: u32 {
+        const POLL_WAITPID = 0b00000001;
+    }
+}
+
+fn parent_work(
+    child_pid: Pid,
+    checker_cpu_set: &Vec<usize>,
+    main_cpu_set: &Vec<usize>,
+    flags: RunnerFlags,
+    check_coord_flags: CheckCoordinatorFlags,
+) {
     ptrace::seize(
         child_pid,
         ptrace::Options::PTRACE_O_TRACESYSGOOD
@@ -48,31 +77,35 @@ fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<
     assert!(matches!(status, WaitStatus::Stopped(_, _)));
     info!("Child process tracing started");
 
-    let mut check_coord = CheckCoordinator::new(Process::new(child_pid, None), checker_cpu_set);
+    let check_coord = CheckCoordinator::new(
+        Process::new(child_pid, None),
+        checker_cpu_set,
+        check_coord_flags,
+    );
+
     check_coord.main.set_cpu_affinity(main_cpu_set);
     check_coord.main.resume();
 
     let mut main_finished = false;
 
     loop {
-        let status = wait().unwrap();
+        let status = if flags.contains(RunnerFlags::POLL_WAITPID) {
+            waitpid(None, Some(WaitPidFlag::WNOHANG)).unwrap()
+        } else {
+            wait().unwrap()
+        };
 
         match status {
-            WaitStatus::Stopped(pid, sig) => {
-                let sig_info = ptrace::getsiginfo(pid).unwrap();
-                #[allow(deprecated)]
-                let from_pid = Pid::from_raw(sig_info._pad[1] as _);
-                info!("Child {} received signal {} from {}", pid, sig, from_pid);
-
-                #[cfg(not(feature = "dont_handle_sigchld"))]
-                let handled = check_coord.handle_sigchld(pid, from_pid);
-                #[cfg(feature = "dont_handle_sigchld")]
-                let handled = true;
-                ptrace::syscall(pid, if handled { None } else { Some(sig) }).unwrap();
-            }
+            WaitStatus::Stopped(pid, sig) => ptrace::syscall(pid, sig).unwrap(),
             WaitStatus::Exited(pid, _) => {
                 info!("Child {} exited", pid);
-                break;
+                if pid == check_coord.main.pid {
+                    main_finished = true;
+
+                    if check_coord.is_all_finished() {
+                        break;
+                    }
+                }
             }
             WaitStatus::PtraceSyscall(pid) => {
                 let syscall_info = ptrace::getsyscallinfo(pid);
@@ -82,8 +115,6 @@ fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<
                     Err(Errno::ESRCH) => continue, // TODO: why?
                     err => panic!("failed to get syscall info: {:?}", err),
                 };
-
-                // TODO: fix random zombie process
 
                 match syscall_info.op {
                     ptrace::SyscallInfoOp::Entry { nr: 0xff77, .. } => {
@@ -111,16 +142,16 @@ fn parent_work(child_pid: Pid, checker_cpu_set: &Vec<usize>, main_cpu_set: &Vec<
                         ptrace::setregs(pid, regs).expect("failed to set registers");
                         ptrace::syscall(pid, None).unwrap();
                     }
-                    ptrace::SyscallInfoOp::Entry { nr, .. }
-                        if [libc::SYS_exit, libc::SYS_exit_group].contains(&nr as _) =>
-                    {
-                        info!("Child called exit");
-                        assert!(pid == child_pid);
-                        main_finished = true;
-                        if check_coord.is_all_finished() {
-                            ptrace::syscall(pid, None).unwrap();
-                        }
-                    }
+                    // ptrace::SyscallInfoOp::Entry { nr, .. }
+                    //     if [libc::SYS_exit, libc::SYS_exit_group].contains(&nr as _) =>
+                    // {
+                    //     info!("Child called exit");
+                    //     assert!(pid == child_pid);
+                    //     main_finished.store(true, Ordering::SeqCst);
+                    //     if check_coord.is_all_finished() {
+                    //         ptrace::syscall(pid, None).unwrap();
+                    //     }
+                    // }
                     _ => {
                         ptrace::syscall(pid, None).unwrap();
                     }
@@ -147,10 +178,25 @@ async fn main() {
 
     let cli = CliArgs::parse();
 
+    let mut runner_flags = RunnerFlags::empty();
+    runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
+
+    let mut check_coord_flags = CheckCoordinatorFlags::empty();
+    check_coord_flags.set(CheckCoordinatorFlags::SYNC_MEM_CHECK, cli.sync_mem_check);
+    check_coord_flags.set(CheckCoordinatorFlags::NO_MEM_CHECK, cli.no_mem_check);
+    check_coord_flags.set(
+        CheckCoordinatorFlags::DONT_RUN_CHECKER,
+        cli.dont_run_checker,
+    );
+
     match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => {
-            parent_work(child, &cli.checker_cpu_set, &cli.main_cpu_set)
-        }
+        Ok(ForkResult::Parent { child }) => parent_work(
+            child,
+            &cli.checker_cpu_set,
+            &cli.main_cpu_set,
+            runner_flags,
+            check_coord_flags,
+        ),
         Ok(ForkResult::Child) => {
             let argv: Vec<CString> = iter::once(cli.command)
                 .chain(cli.args.into_iter())

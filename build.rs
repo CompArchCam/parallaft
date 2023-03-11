@@ -1,7 +1,10 @@
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=parasite");
+    println!("cargo:rerun-if-changed=parasite/src");
+    println!("cargo:rerun-if-changed=parasite/.cargo");
+    println!("cargo:rerun-if-changed=parasite/Cargo.toml");
+    println!("cargo:rerun-if-changed=parasite/Makefile");
     println!("cargo:rerun-if-changed=parasite-shim.c");
 
     let status = Command::new("make")

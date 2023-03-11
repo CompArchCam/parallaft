@@ -4,10 +4,11 @@ use compel::{
     syscalls::{syscall_args, SyscallArgs, Sysno},
     ParasiteCtl,
 };
+
 use log::{debug, info};
 use nix::{
     errno::Errno,
-    sched::{sched_setaffinity, CpuSet},
+    sched::{sched_setaffinity, CloneFlags, CpuSet},
     sys::{
         ptrace,
         signal::{kill, Signal},
@@ -29,20 +30,16 @@ pub struct Process {
 }
 
 pub trait ProcessCloneExt {
-    fn clone_process(&self) -> Arc<Process>;
+    fn clone_process(&self, flags: CloneFlags, signal: Option<Signal>) -> Arc<Process>;
 }
 
 impl ProcessCloneExt for Arc<Process> {
-    fn clone_process(&self) -> Arc<Process> {
+    fn clone_process(&self, flags: CloneFlags, signal: Option<Signal>) -> Arc<Process> {
         let parent = self.clone();
 
-        #[cfg(not(feature = "dont_send_sigchld"))]
-        let flags = libc::SIGCHLD as _;
+        let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
-        #[cfg(feature = "dont_send_sigchld")]
-        let flags = 0;
-
-        let child_pid = self.syscall(Sysno::clone, syscall_args!(flags, 0, 0, 0, 0));
+        let child_pid = self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0));
         let child = Process::new(Pid::from_raw(child_pid as _), Some(parent));
         Arc::new(child)
     }
@@ -151,6 +148,18 @@ impl Process {
             }
             sched_setaffinity(self.pid, &cpuset).unwrap();
         }
+    }
+
+    pub fn clone_process_without_parent(
+        &self,
+        flags: CloneFlags,
+        signal: Option<Signal>,
+    ) -> Process {
+        let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
+
+        let child_pid = self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0));
+        let child = Process::new(Pid::from_raw(child_pid as _), None);
+        child
     }
 }
 

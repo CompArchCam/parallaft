@@ -1,14 +1,18 @@
-use std::{collections::LinkedList, mem, ops::DerefMut, ptr, sync::Arc};
+use std::collections::LinkedList;
+use std::ops::DerefMut;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::{mem, ptr};
 
+use bitflags::bitflags;
 use log::info;
-use nix::unistd::Pid;
+use nix::{sched::CloneFlags, unistd::Pid};
 
 use parking_lot::{Mutex, RwLock};
 
-#[cfg(feature = "async_check")]
 use tokio::task;
 
-use crate::process::{Process, ProcessCloneExt};
+use crate::process::Process;
 
 #[derive(Debug)]
 pub enum CheckpointError {
@@ -19,7 +23,7 @@ type Result<T> = std::result::Result<T, CheckpointError>;
 
 #[derive(Debug)]
 pub enum CheckpointKind {
-    Subsequent { reference: Arc<Process> },
+    Subsequent { reference: Process },
     Initial,
 }
 
@@ -30,7 +34,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn new(epoch: u32, reference: Arc<Process>) -> Self {
+    pub fn new(epoch: u32, reference: Process) -> Self {
         Self {
             epoch,
             kind: CheckpointKind::Subsequent { reference },
@@ -55,10 +59,10 @@ impl Checkpoint {
 #[derive(Debug)]
 pub enum SegmentStatus {
     New {
-        checker: Arc<Process>,
+        checker: Process,
     },
     ReadyToCheck {
-        checker: Arc<Process>,
+        checker: Process,
         checkpoint_end: Arc<Checkpoint>,
     },
     Checked {
@@ -110,7 +114,7 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: Arc<Process>) -> Self {
+    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: Process) -> Self {
         Self {
             checkpoint_start,
             status: SegmentStatus::New { checker },
@@ -136,12 +140,17 @@ impl Segment {
         } = &self.status
         {
             let result = checker.dirty_page_delta_against(checkpoint_end.reference().unwrap());
-            self.status.mark_as_checked()?;
+            self.mark_as_checked()?;
 
             Ok(result)
         } else {
             Err(CheckpointError::InvalidState)
         }
+    }
+
+    /// Mark this segment as "checked" without comparing dirty memory.
+    pub fn mark_as_checked(&mut self) -> Result<()> {
+        self.status.mark_as_checked()
     }
 
     /// Get the checker process, if it exists.
@@ -156,19 +165,33 @@ impl Segment {
 
 pub struct CheckCoordinator<'c> {
     pub segments: Arc<RwLock<LinkedList<Arc<Mutex<Segment>>>>>,
-    pub main: Arc<Process>,
-    pub epoch: u32,
+    pub main: Process,
+    pub epoch: AtomicU32,
+    flags: CheckCoordinatorFlags,
     checker_cpu_affinity: &'c Vec<usize>,
+}
+
+bitflags! {
+    pub struct CheckCoordinatorFlags: u32 {
+        const SYNC_MEM_CHECK = 0b00000001;
+        const NO_MEM_CHECK = 0b00000010;
+        const DONT_RUN_CHECKER = 0b00000100;
+    }
 }
 
 #[allow(unused)]
 impl<'c> CheckCoordinator<'c> {
-    pub fn new(main: Process, checker_cpu_affinity: &'c Vec<usize>) -> Self {
+    pub fn new(
+        main: Process,
+        checker_cpu_affinity: &'c Vec<usize>,
+        flags: CheckCoordinatorFlags,
+    ) -> Self {
         Self {
-            main: Arc::new(main),
+            main,
             segments: Arc::new(RwLock::new(LinkedList::new())),
-            epoch: 0,
+            epoch: AtomicU32::new(0),
             checker_cpu_affinity,
+            flags,
         }
     }
 
@@ -181,6 +204,7 @@ impl<'c> CheckCoordinator<'c> {
             .map(|t| t.clone())
     }
 
+    #[cfg(feature = "track_zombie_children")]
     pub fn handle_sigchld(&self, to_pid: Pid, from_pid: Pid) -> bool {
         if to_pid == self.main.pid && self.main.zombie_children.lock().contains(&from_pid) {
             self.main.reap_zombie_child(from_pid);
@@ -203,43 +227,59 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     /// Handle checkpoint request from the target
-    pub fn handle_checkpoint(&mut self, pid: Pid, is_finishing: bool) {
+    pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool) {
         if pid == self.main.pid {
+            let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
+            let clone_signal = None;
+            let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
+
             if !is_finishing {
-                let reference = self.main.clone_process();
+                let reference = self
+                    .main
+                    .clone_process_without_parent(clone_flags, clone_signal);
                 self.main.clear_dirty_page_bits();
                 self.main.resume();
 
                 let (checker, checkpoint) = match self.is_last_checkpoint_finishing() {
-                    true => (reference, Checkpoint::new_initial(self.epoch)),
+                    true => (reference, Checkpoint::new_initial(epoch_local)),
                     false => (
-                        reference.clone_process(),
-                        Checkpoint::new(self.epoch, reference),
+                        reference.clone_process_without_parent(clone_flags, clone_signal),
+                        Checkpoint::new(epoch_local, reference),
                     ),
                 };
 
-                checker.set_cpu_affinity(self.checker_cpu_affinity);
+                checker.set_cpu_affinity(&self.checker_cpu_affinity);
                 checker.clear_dirty_page_bits();
 
                 info!("New checkpoint: {:?}", checkpoint);
                 self.add_checkpoint(checkpoint, Some(checker));
             } else {
                 if !self.is_last_checkpoint_finishing() {
-                    let reference = self.main.clone_process();
+                    let reference = self
+                        .main
+                        .clone_process_without_parent(clone_flags, clone_signal);
                     self.main.resume();
-                    let checkpoint = Checkpoint::new(self.epoch, reference);
+                    let checkpoint = Checkpoint::new(epoch_local, reference);
 
                     info!("New checkpoint: {:?}", checkpoint);
                     self.add_checkpoint(checkpoint, None);
                 }
             }
-
-            self.epoch += 1;
         } else if let Some(segment) = self.lookup_segment_by_checker_pid_mut(pid) {
             info!("Checker called checkpoint");
 
-            #[cfg(feature = "async_check")]
-            {
+            if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
+                segment.lock().mark_as_checked().unwrap();
+                Self::cleanup_committed_segments(self.segments.write().deref_mut());
+            } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
+                let result = segment.lock().check().unwrap();
+
+                if !result {
+                    panic!("check fails");
+                }
+                info!("Check passed");
+                Self::cleanup_committed_segments(self.segments.write().deref_mut());
+            } else {
                 let segment = segment.clone();
                 let segments = self.segments.clone();
 
@@ -252,17 +292,6 @@ impl<'c> CheckCoordinator<'c> {
                     info!("Check passed");
                     Self::cleanup_committed_segments(segments.write().deref_mut());
                 });
-            }
-
-            #[cfg(not(feature = "async_check"))]
-            {
-                let result = segment.lock().check().unwrap();
-
-                if !result {
-                    panic!("check fails");
-                }
-                info!("Check passed");
-                Self::cleanup_committed_segments(self.segments.write().deref_mut());
             }
         } else {
             panic!("invalid pid");
@@ -288,20 +317,31 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
-    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<Arc<Process>>) {
+    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<Process>) {
         let checkpoint = Arc::new(checkpoint);
         let mut segments = self.segments.write();
+        let mut do_cleanup = false;
 
         if let Some(last_segment) = segments.back_mut() {
             let mut last_segment = last_segment.lock();
             last_segment.mark_as_ready(checkpoint.clone()).unwrap();
-            last_segment.checker().unwrap().resume();
+
+            if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
+                last_segment.mark_as_checked();
+                do_cleanup = true;
+            } else {
+                last_segment.checker().unwrap().resume();
+            }
         }
 
         if let Some(checker) = checker {
             let segment = Segment::new(checkpoint, checker);
             info!("New segment: {:?}", segment);
             segments.push_back(Arc::new(Mutex::new(segment)));
+        }
+
+        if do_cleanup {
+            Self::cleanup_committed_segments(segments.deref_mut());
         }
     }
 
