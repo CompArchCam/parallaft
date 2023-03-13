@@ -172,6 +172,7 @@ dependencies = [
 [[package]]
 name = "compel"
 version = "0.1.0"
+source = "git+https://github.com/mbyzhang/compel-rs.git#3e85eac03a1e0829248a7fdf937199ab2adf02dd"
 dependencies = [
  "compel-sys",
  "libc 0.2.139 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -184,6 +185,7 @@ dependencies = [
 [[package]]
 name = "compel-sys"
 version = "0.1.0"
+source = "git+https://github.com/mbyzhang/compel-rs.git#3e85eac03a1e0829248a7fdf937199ab2adf02dd"
 dependencies = [
  "bindgen",
 ]
@@ -512,6 +514,7 @@ dependencies = [
 [[package]]
 name = "nix"
 version = "0.26.1"
+source = "git+https://github.com/mbyzhang/nix.git#eba62828cce1c9691020f53de52f3ecb5628d9c6"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -676,6 +679,7 @@ dependencies = [
 [[package]]
 name = "procfs"
 version = "0.15.1"
+source = "git+https://github.com/mbyzhang/procfs.git#9fb79bf02f93da567120d7a0affe9c918d7c3667"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -1068,3 +1072,7 @@ name = "windows_x86_64_msvc"
 version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "447660ad36a13288b1db4d4248e857b510e8c3a225c822ba4fb748c0aafecffd"
+
+[[patch.unused]]
+name = "nix"
+version = "0.26.1"
