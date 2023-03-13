@@ -74,7 +74,7 @@ fn parent_work(
     )
     .unwrap();
     let status = waitpid(child_pid, None).unwrap();
-    assert!(matches!(status, WaitStatus::Stopped(_, _)));
+    assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
     info!("Child process tracing started");
 
     let check_coord = CheckCoordinator::new(
