@@ -66,6 +66,9 @@ fn parent_work(
     flags: RunnerFlags,
     check_coord_flags: CheckCoordinatorFlags,
 ) {
+    info!("Starting");
+    let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
+    assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
     ptrace::seize(
         child_pid,
         ptrace::Options::PTRACE_O_TRACESYSGOOD
@@ -73,8 +76,7 @@ fn parent_work(
             | ptrace::Options::PTRACE_O_TRACEFORK,
     )
     .unwrap();
-    let status = waitpid(child_pid, None).unwrap();
-    assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
+
     info!("Child process tracing started");
 
     let check_coord = CheckCoordinator::new(
