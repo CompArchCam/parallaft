@@ -5,13 +5,15 @@ use compel::{
     ParasiteCtl,
 };
 
+use libc::user_regs_struct;
 use log::{debug, info};
 use nix::{
     errno::Errno,
     sched::{sched_setaffinity, CloneFlags, CpuSet},
     sys::{
-        ptrace,
+        ptrace::{self, SyscallInfoOp},
         signal::{kill, Signal},
+        wait::{waitpid, WaitStatus},
     },
     unistd::Pid,
 };
@@ -67,6 +69,206 @@ impl Process {
             .expect("failed to make remote syscall")
     }
 
+    pub fn syscall_direct(
+        &self,
+        nr: Sysno,
+        args: SyscallArgs,
+        restart_parent_old_syscall: bool,
+        restart_child_old_syscall: bool,
+    ) -> i64 {
+        assert!(matches!(
+            ptrace::getsyscallinfo(self.pid).unwrap().op,
+            SyscallInfoOp::Entry { .. }
+        ));
+
+        // save the old states
+        let (saved_regs, saved_sigmask) = Self::save_state(self.pid);
+
+        // prepare the injected syscall number and arguments
+        let mut new_regs = saved_regs;
+
+        if cfg!(target_arch = "x86_64") {
+            new_regs.orig_rax = nr.id() as _;
+            new_regs.rax = nr.id() as _;
+            new_regs.rdi = args.arg0 as _;
+            new_regs.rsi = args.arg1 as _;
+            new_regs.rdx = args.arg2 as _;
+            new_regs.rcx = args.arg3 as _;
+            new_regs.r8 = args.arg4 as _;
+            new_regs.r9 = args.arg5 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        ptrace::setregs(self.pid, new_regs).unwrap();
+
+        // block signals during our injected syscall
+        ptrace::setsigmask(self.pid, !0).unwrap();
+
+        // execute our injected syscall
+        ptrace::syscall(self.pid, None).unwrap();
+
+        // expect the syscall event
+        let mut wait_status = waitpid(self.pid, None).unwrap();
+
+        // handle fork/clone event
+        let child_pid = if let WaitStatus::PtraceEvent(pid, sig, event) = wait_status {
+            let child_pid = Pid::from_raw(match event {
+                libc::PTRACE_EVENT_CLONE | libc::PTRACE_EVENT_FORK => {
+                    ptrace::getevent(pid).unwrap() as _
+                }
+                _ => panic!("Unexpected ptrace event received"),
+            });
+
+            ptrace::syscall(self.pid, None).unwrap();
+            wait_status = waitpid(self.pid, None).unwrap();
+            Some(child_pid)
+        } else {
+            None
+        };
+
+        assert_eq!(wait_status, WaitStatus::PtraceSyscall(self.pid));
+
+        // get the syscall return value
+        let syscall_info = ptrace::getsyscallinfo(self.pid).unwrap();
+        let syscall_ret = if let SyscallInfoOp::Exit { ret_val, .. } = syscall_info.op {
+            ret_val
+        } else {
+            panic!("Unexpected syscall info: {:?}", syscall_info);
+        };
+
+        Self::restore_state(
+            self.pid,
+            saved_regs,
+            saved_sigmask,
+            restart_parent_old_syscall,
+        );
+
+        if let Some(child_pid) = child_pid {
+            let wait_status = waitpid(child_pid, None).unwrap();
+            assert!(
+                matches!(wait_status, WaitStatus::PtraceEvent(pid, sig, ev) if pid == child_pid && sig == Signal::SIGTRAP)
+            );
+
+            Self::restore_state(
+                child_pid,
+                saved_regs,
+                saved_sigmask,
+                restart_child_old_syscall,
+            );
+        }
+
+        syscall_ret
+    }
+
+    fn save_state(pid: Pid) -> (user_regs_struct, u64) {
+        (
+            ptrace::getregs(pid).unwrap(),
+            ptrace::getsigmask(pid).unwrap(),
+        )
+    }
+
+    fn restore_state(
+        pid: Pid,
+        saved_regs: user_regs_struct,
+        saved_sigmask: u64,
+        restart_old_syscall: bool,
+    ) {
+        let mut saved_regs = saved_regs;
+
+        if restart_old_syscall {
+            // jump back to the previous instruction
+            if cfg!(target_arch = "x86_64") {
+                let last_instr =
+                    (ptrace::read(pid, (saved_regs.rip - 2) as _).unwrap() as u64) & 0xffff;
+                assert_eq!(last_instr, 0x050f);
+                saved_regs.rip -= 2;
+                saved_regs.rax = saved_regs.orig_rax;
+            } else {
+                panic!("Unsupported architecture");
+            }
+        }
+
+        // restore the registers
+        ptrace::setregs(pid, saved_regs).unwrap();
+
+        if restart_old_syscall {
+            // execute the original syscall
+            ptrace::syscall(pid, None).unwrap();
+
+            // expect the syscall event
+            // TODO: handle death
+            let wait_status = waitpid(pid, None).unwrap();
+            assert_eq!(wait_status, WaitStatus::PtraceSyscall(pid));
+
+            // expect the syscall nr
+            let syscall_info = ptrace::getsyscallinfo(pid).unwrap();
+
+            let orig_nr = if cfg!(target_arch = "x86_64") {
+                saved_regs.orig_rax as usize
+            } else {
+                panic!("Unsupported architecture");
+            };
+
+            assert!(
+                matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
+            );
+        }
+
+        // restore the signal mask
+        ptrace::setsigmask(pid, saved_sigmask).unwrap();
+    }
+
+    // pub fn syscall_replace(&self, nr: Sysno, args: SyscallArgs) -> i64 {
+    //     // save the old states
+    //     let mut saved_regs = ptrace::getregs(self.pid).unwrap();
+    //     let saved_sigmask = ptrace::getsigmask(self.pid).unwrap();
+
+    //     // prepare the injected syscall number and arguments
+    //     let mut new_regs = saved_regs;
+
+    //     if cfg!(target_arch = "x86_64") {
+    //         new_regs.orig_rax = nr.id() as _;
+    //         new_regs.rax = nr.id() as _;
+    //         new_regs.rdi = args.arg0 as _;
+    //         new_regs.rsi = args.arg1 as _;
+    //         new_regs.rdx = args.arg2 as _;
+    //         new_regs.rcx = args.arg3 as _;
+    //         new_regs.r8 = args.arg4 as _;
+    //         new_regs.r9 = args.arg5 as _;
+    //     } else {
+    //         panic!("Unsupported architecture");
+    //     }
+
+    //     ptrace::setregs(self.pid, new_regs).unwrap();
+
+    //     // block signals during our injected syscall
+    //     ptrace::setsigmask(self.pid, !0).unwrap();
+
+    //     // execute our injected syscall
+    //     ptrace::syscall(self.pid, None).unwrap();
+
+    //     // expect the syscall event
+    //     let wait_status = waitpid(self.pid, None).unwrap();
+    //     assert_eq!(wait_status, WaitStatus::PtraceSyscall(self.pid));
+
+    //     // get the syscall return value
+    //     let syscall_info = ptrace::getsyscallinfo(self.pid).unwrap();
+    //     let syscall_ret = if let SyscallInfoOp::Exit { ret_val, .. } = syscall_info.op {
+    //         ret_val
+    //     } else {
+    //         panic!("Unexpected syscall info: {:?}", syscall_info);
+    //     };
+
+    //     // restore the registers
+    //     ptrace::setregs(self.pid, saved_regs).unwrap();
+
+    //     // restore the signal mask
+    //     ptrace::setsigmask(self.pid, saved_sigmask).unwrap();
+
+    //     syscall_ret
+    // }
+
     pub fn waitpid(&self, pid: Pid) -> Result<bool, Errno> {
         let result = self.syscall(
             Sysno::wait4,
@@ -106,15 +308,16 @@ impl Process {
             .unwrap();
     }
 
-    pub fn dirty_page_delta_against(&self, other: &Process) -> bool {
+    pub fn dirty_page_delta_against(&self, other: &Process) -> (bool, usize) {
         let dirty_pages_myself = self.get_dirty_pages();
         let dirty_pages_other = other.get_dirty_pages();
+        info!("{} dirty pages", dirty_pages_myself.len());
         let result =
             page_diff(self.pid, other.pid, &dirty_pages_myself, &dirty_pages_other).unwrap();
 
         match result {
-            crate::page_diff::PageDiffResult::Equal => true,
-            _ => false,
+            crate::page_diff::PageDiffResult::Equal => (true, dirty_pages_myself.len()),
+            _ => (true, dirty_pages_myself.len()),
         }
     }
 
@@ -154,10 +357,23 @@ impl Process {
         &self,
         flags: CloneFlags,
         signal: Option<Signal>,
+        use_libcompel: bool,
     ) -> Process {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
-        let child_pid = self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0));
+        let child_pid = if use_libcompel {
+            info!("Using libcompel for syscall injection");
+            self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0))
+        } else {
+            info!("Using ptrace for syscall injection");
+            self.syscall_direct(
+                Sysno::clone,
+                syscall_args!(clone_flags, 0, 0, 0, 0),
+                false,
+                true,
+            )
+        };
+
         let child = Process::new(Pid::from_raw(child_pid as _), None);
         child
     }

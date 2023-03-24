@@ -5,15 +5,16 @@ mod page_diff;
 mod process;
 mod utils;
 
-use std::ffi::CString;
-use std::iter;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use bitflags::bitflags;
 use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::sys::signal::{raise, Signal};
 use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{execvp, fork, ForkResult, Pid};
+use nix::unistd::{fork, ForkResult, Pid};
 
 use clap::Parser;
 
@@ -34,20 +35,36 @@ struct CliArgs {
     checker_cpu_set: Vec<usize>,
 
     /// Poll non-blocking waitpid instead of using blocking waitpid.
-    #[arg(short, long)]
+    #[arg(long)]
     poll_waitpid: bool,
 
     /// Don't compare dirty memory between the checker and the reference.
-    #[arg(short, long)]
+    #[arg(long)]
     no_mem_check: bool,
 
     /// Don't run the checker process. Just fork, and kill it until the next checkpoint.
-    #[arg(short, long)]
+    #[arg(long)]
     dont_run_checker: bool,
 
+    /// Don't clear soft-dirty bits in each iteration. Depends on `--no-mem-check`.
+    #[arg(long)]
+    dont_clear_soft_dirty: bool,
+
     /// Check dirty memory synchronously.
-    #[arg(short, long)]
+    #[arg(long)]
     sync_mem_check: bool,
+
+    /// Use libcompel for syscall injection, instead of using ptrace directly.
+    #[arg(long)]
+    use_libcompel: bool,
+
+    /// Dump statistics.
+    #[arg(long)]
+    dump_stats: bool,
+
+    /// Checkpoint frequency to pass to the main process.
+    #[arg(long, default_value_t = 1)]
+    checkpoint_freq: u32,
 
     command: String,
     args: Vec<String>,
@@ -56,6 +73,7 @@ struct CliArgs {
 bitflags! {
     struct RunnerFlags: u32 {
         const POLL_WAITPID = 0b00000001;
+        const DUMP_STATS = 0b00000010;
     }
 }
 
@@ -89,6 +107,9 @@ fn parent_work(
     check_coord.main.resume();
 
     let mut main_finished = false;
+    let mut main_exec_time = Duration::ZERO;
+
+    let exec_start_time = Instant::now();
 
     loop {
         let status = if flags.contains(RunnerFlags::POLL_WAITPID) {
@@ -103,6 +124,7 @@ fn parent_work(
                 info!("Child {} exited", pid);
                 if pid == check_coord.main.pid {
                     main_finished = true;
+                    main_exec_time = exec_start_time.elapsed();
 
                     if check_coord.is_all_finished() {
                         break;
@@ -171,6 +193,20 @@ fn parent_work(
             _ => (),
         }
     }
+
+    let all_exec_time = exec_start_time.elapsed();
+
+    if flags.contains(RunnerFlags::DUMP_STATS) {
+        let nr_checkpoints = check_coord.epoch();
+        println!("main_exec_time={}", main_exec_time.as_secs_f64());
+        println!("all_exec_time={}", all_exec_time.as_secs_f64());
+        println!("nr_checkpoints={}", nr_checkpoints);
+        println!(
+            "avg_checkpoint_freq={}",
+            (nr_checkpoints as f64) / main_exec_time.as_secs_f64()
+        );
+        println!("avg_nr_dirty_pages={}", check_coord.avg_nr_dirty_pages());
+    }
 }
 
 #[tokio::main]
@@ -182,6 +218,7 @@ async fn main() {
 
     let mut runner_flags = RunnerFlags::empty();
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
+    runner_flags.set(RunnerFlags::DUMP_STATS, cli.dump_stats);
 
     let mut check_coord_flags = CheckCoordinatorFlags::empty();
     check_coord_flags.set(CheckCoordinatorFlags::SYNC_MEM_CHECK, cli.sync_mem_check);
@@ -190,6 +227,11 @@ async fn main() {
         CheckCoordinatorFlags::DONT_RUN_CHECKER,
         cli.dont_run_checker,
     );
+    check_coord_flags.set(
+        CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY,
+        cli.dont_clear_soft_dirty,
+    );
+    check_coord_flags.set(CheckCoordinatorFlags::USE_LIBCOMPEL, cli.use_libcompel);
 
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => parent_work(
@@ -200,13 +242,17 @@ async fn main() {
             check_coord_flags,
         ),
         Ok(ForkResult::Child) => {
-            let argv: Vec<CString> = iter::once(cli.command)
-                .chain(cli.args.into_iter())
-                .map(|str| CString::new(str).unwrap())
-                .collect();
-
-            raise(Signal::SIGSTOP).unwrap();
-            execvp(&argv[0], &argv).unwrap();
+            let err = unsafe {
+                Command::new(cli.command)
+                    .args(cli.args)
+                    .env("CHECKER_CHECKPOINT_FREQ", cli.checkpoint_freq.to_string())
+                    .pre_exec(|| {
+                        raise(Signal::SIGSTOP).unwrap();
+                        Ok(())
+                    })
+                    .exec()
+            };
+            panic!("failed to spawn subcommand: {:?}", err);
         }
         Err(err) => panic!("Fork failed: {}", err),
     }

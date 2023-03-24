@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::{mem, ptr};
 
 use bitflags::bitflags;
+
 use log::info;
 use nix::{sched::CloneFlags, unistd::Pid};
 
@@ -105,6 +106,14 @@ impl SegmentStatus {
             }
         }
     }
+
+    pub fn checkpoint_end<'a>(&'a self) -> Option<&'a Arc<Checkpoint>> {
+        match self {
+            SegmentStatus::ReadyToCheck { checkpoint_end, .. } => Some(checkpoint_end),
+            SegmentStatus::Checked { checkpoint_end } => Some(checkpoint_end),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -133,16 +142,17 @@ impl Segment {
 
     /// Compare dirty memory of the checker process and the reference process and mark the segment status as checked.
     /// This should be called after the checker process invokes the checkpoint syscall.
-    pub fn check(&mut self) -> Result<bool> {
+    pub fn check(&mut self) -> Result<(bool, usize)> {
         if let SegmentStatus::ReadyToCheck {
             checker,
             checkpoint_end,
         } = &self.status
         {
-            let result = checker.dirty_page_delta_against(checkpoint_end.reference().unwrap());
+            let (result, nr_dirty_pages) =
+                checker.dirty_page_delta_against(checkpoint_end.reference().unwrap());
             self.mark_as_checked()?;
 
-            Ok(result)
+            Ok((result, nr_dirty_pages))
         } else {
             Err(CheckpointError::InvalidState)
         }
@@ -165,10 +175,12 @@ impl Segment {
 
 pub struct CheckCoordinator<'c> {
     pub segments: Arc<RwLock<LinkedList<Arc<Mutex<Segment>>>>>,
-    pub main: Process,
+    pub main: Arc<Process>,
     pub epoch: AtomicU32,
     flags: CheckCoordinatorFlags,
     checker_cpu_affinity: &'c Vec<usize>,
+    pending_sync: Arc<Mutex<Option<u32>>>,
+    avg_nr_dirty_pages: Arc<Mutex<f64>>,
 }
 
 bitflags! {
@@ -176,6 +188,8 @@ bitflags! {
         const SYNC_MEM_CHECK = 0b00000001;
         const NO_MEM_CHECK = 0b00000010;
         const DONT_RUN_CHECKER = 0b00000100;
+        const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
+        const USE_LIBCOMPEL = 0b00010000;
     }
 }
 
@@ -187,11 +201,13 @@ impl<'c> CheckCoordinator<'c> {
         flags: CheckCoordinatorFlags,
     ) -> Self {
         Self {
-            main,
+            main: Arc::new(main),
             segments: Arc::new(RwLock::new(LinkedList::new())),
             epoch: AtomicU32::new(0),
             checker_cpu_affinity,
             flags,
+            pending_sync: Arc::new(Mutex::new(None)),
+            avg_nr_dirty_pages: Arc::new(Mutex::new(0.0)),
         }
     }
 
@@ -229,35 +245,70 @@ impl<'c> CheckCoordinator<'c> {
     /// Handle checkpoint request from the target
     pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool) {
         if pid == self.main.pid {
+            // ****
+            // let test_pid = self
+            //     .main
+            //     .syscall_direct(Sysno::getpid, syscall_args!(), false, false);
+            // info!("My PID is {}", test_pid);
+            // let test_pid = self
+            //     .main
+            //     .syscall_direct(Sysno::getpid, syscall_args!(), false, false);
+            // info!("My PID is {}", test_pid);
+            // let test_pid = self
+            //     .main
+            //     .syscall_direct(Sysno::getpid, syscall_args!(), true, false);
+            // info!("My PID is {}", test_pid);
+            // ****
+
             let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
             let clone_signal = None;
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
+            let use_libcompel = self.flags.contains(CheckCoordinatorFlags::USE_LIBCOMPEL);
 
             if !is_finishing {
-                let reference = self
-                    .main
-                    .clone_process_without_parent(clone_flags, clone_signal);
-                self.main.clear_dirty_page_bits();
+                let reference = self.main.clone_process_without_parent(
+                    clone_flags,
+                    clone_signal,
+                    use_libcompel,
+                );
+
+                if !self
+                    .flags
+                    .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
+                {
+                    self.main.clear_dirty_page_bits();
+                }
                 self.main.resume();
 
                 let (checker, checkpoint) = match self.is_last_checkpoint_finishing() {
                     true => (reference, Checkpoint::new_initial(epoch_local)),
                     false => (
-                        reference.clone_process_without_parent(clone_flags, clone_signal),
+                        reference.clone_process_without_parent(
+                            clone_flags,
+                            clone_signal,
+                            use_libcompel,
+                        ),
                         Checkpoint::new(epoch_local, reference),
                     ),
                 };
 
                 checker.set_cpu_affinity(&self.checker_cpu_affinity);
-                checker.clear_dirty_page_bits();
+                if !self
+                    .flags
+                    .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
+                {
+                    checker.clear_dirty_page_bits();
+                }
 
                 info!("New checkpoint: {:?}", checkpoint);
                 self.add_checkpoint(checkpoint, Some(checker));
             } else {
                 if !self.is_last_checkpoint_finishing() {
-                    let reference = self
-                        .main
-                        .clone_process_without_parent(clone_flags, clone_signal);
+                    let reference = self.main.clone_process_without_parent(
+                        clone_flags,
+                        clone_signal,
+                        use_libcompel,
+                    );
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference);
 
@@ -270,27 +321,59 @@ impl<'c> CheckCoordinator<'c> {
 
             if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
                 segment.lock().mark_as_checked().unwrap();
-                Self::cleanup_committed_segments(self.segments.write().deref_mut());
+                Self::cleanup_committed_segments(
+                    self.pending_sync.lock().deref_mut(),
+                    self.segments.write().deref_mut(),
+                );
             } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
-                let result = segment.lock().check().unwrap();
+                let mut segment = segment.lock();
+                let (result, nr_dirty_pages) = segment.check().unwrap();
+                let mut avg_nr_dirty_pages = self.avg_nr_dirty_pages.lock();
+
+                let alpha = segment.checkpoint_start.epoch as f64;
+
+                *avg_nr_dirty_pages =
+                    *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
+
+                drop(avg_nr_dirty_pages);
+                drop(segment);
 
                 if !result {
                     panic!("check fails");
                 }
                 info!("Check passed");
-                Self::cleanup_committed_segments(self.segments.write().deref_mut());
+                Self::cleanup_committed_segments(
+                    self.pending_sync.lock().deref_mut(),
+                    self.segments.write().deref_mut(),
+                );
             } else {
                 let segment = segment.clone();
                 let segments = self.segments.clone();
 
+                let pending_sync = self.pending_sync.clone();
+                let avg_nr_dirty_pages = self.avg_nr_dirty_pages.clone();
+
                 task::spawn_blocking(move || {
-                    let result = segment.lock().check().unwrap();
+                    let mut segment = segment.lock();
+                    let (result, nr_dirty_pages) = segment.check().unwrap();
+                    let mut avg_nr_dirty_pages = avg_nr_dirty_pages.lock();
+
+                    let alpha = segment.checkpoint_start.epoch as f64;
+
+                    *avg_nr_dirty_pages =
+                        *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
+
+                    drop(avg_nr_dirty_pages);
+                    drop(segment);
 
                     if !result {
                         panic!("check fails");
                     }
                     info!("Check passed");
-                    Self::cleanup_committed_segments(segments.write().deref_mut());
+                    Self::cleanup_committed_segments(
+                        pending_sync.lock().deref_mut(),
+                        segments.write().deref_mut(),
+                    );
                 });
             }
         } else {
@@ -298,7 +381,31 @@ impl<'c> CheckCoordinator<'c> {
         }
     }
 
-    fn cleanup_committed_segments(segments: &mut LinkedList<Arc<Mutex<Segment>>>) {
+    pub fn handle_sync(&self) {
+        let segments = self.segments.read();
+
+        if let Some(last_segment) = segments.back() {
+            let epoch = last_segment
+                .lock()
+                .status
+                .checkpoint_end()
+                .expect("Attempt to sync before checkpoint_fini is called")
+                .epoch;
+
+            let mut pending_sync = self.pending_sync.lock();
+
+            assert!(pending_sync.is_none());
+            pending_sync.insert(epoch);
+        } else {
+            self.main.resume();
+        }
+    }
+
+    fn cleanup_committed_segments(
+        // main: &Process,
+        pending_sync: &mut Option<u32>,
+        segments: &mut LinkedList<Arc<Mutex<Segment>>>,
+    ) {
         loop {
             let mut should_break = true;
             let front = segments.front();
@@ -314,25 +421,38 @@ impl<'c> CheckCoordinator<'c> {
                 break;
             }
         }
+
+        if let Some(epoch) = pending_sync.as_ref() {
+            if let Some(front) = segments.front() {
+                if front.lock().checkpoint_start.epoch > *epoch {
+                    pending_sync.take().map(drop);
+                    todo!();
+                    // main.resume()
+                }
+            }
+        }
     }
 
     /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
     fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<Process>) {
         let checkpoint = Arc::new(checkpoint);
-        let mut segments = self.segments.write();
         let mut do_cleanup = false;
 
-        if let Some(last_segment) = segments.back_mut() {
-            let mut last_segment = last_segment.lock();
-            last_segment.mark_as_ready(checkpoint.clone()).unwrap();
+        if !self.is_last_checkpoint_finishing() {
+            if let Some(last_segment) = self.segments.read().back() {
+                let mut last_segment = last_segment.lock();
+                last_segment.mark_as_ready(checkpoint.clone()).unwrap();
 
-            if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
-                last_segment.mark_as_checked();
-                do_cleanup = true;
-            } else {
-                last_segment.checker().unwrap().resume();
+                if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
+                    last_segment.mark_as_checked();
+                    do_cleanup = true;
+                } else {
+                    last_segment.checker().unwrap().resume();
+                }
             }
         }
+
+        let mut segments = self.segments.write();
 
         if let Some(checker) = checker {
             let segment = Segment::new(checkpoint, checker);
@@ -341,8 +461,21 @@ impl<'c> CheckCoordinator<'c> {
         }
 
         if do_cleanup {
-            Self::cleanup_committed_segments(segments.deref_mut());
+            Self::cleanup_committed_segments(
+                self.pending_sync.lock().deref_mut(),
+                segments.deref_mut(),
+            );
         }
+    }
+
+    /// Get the current epoch.
+    pub fn epoch(&self) -> u32 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+
+    /// Get the average number of dirty pages per iteration.
+    pub fn avg_nr_dirty_pages(&self) -> f64 {
+        *self.avg_nr_dirty_pages.lock()
     }
 
     /// Check if all checkers has finished.

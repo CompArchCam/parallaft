@@ -26,7 +26,7 @@ pub fn page_diff(
         return Ok(PageDiffResult::PageSetDiff);
     }
 
-    let block_size = 32;
+    let block_size = 128;
     let page_size = sysconf(nix::unistd::SysconfVar::PAGE_SIZE)
         .unwrap()
         .unwrap() as usize;
