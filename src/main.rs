@@ -1,4 +1,5 @@
 mod checkpoint;
+mod client_control;
 mod compel_parasite;
 mod dirty_page_tracer;
 mod page_diff;
@@ -7,6 +8,7 @@ mod utils;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use bitflags::bitflags;
@@ -14,7 +16,7 @@ use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::sys::signal::{raise, Signal};
 use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{fork, ForkResult, Pid};
+use nix::unistd::{fork, gettid, ForkResult, Pid};
 
 use clap::Parser;
 
@@ -49,6 +51,10 @@ struct CliArgs {
     /// Don't clear soft-dirty bits in each iteration. Depends on `--no-mem-check`.
     #[arg(long)]
     dont_clear_soft_dirty: bool,
+
+    /// Don't fork the main process. Implies `--dont-run-checker`, `--no-mem-check` and `--dont-clear-soft-dirty`.
+    #[arg(long)]
+    dont_fork: bool,
 
     /// Check dirty memory synchronously.
     #[arg(long)]
@@ -97,8 +103,10 @@ fn parent_work(
 
     info!("Child process tracing started");
 
+    let (tracer_op_tx, tracer_op_rx) = mpsc::sync_channel(1024);
+
     let check_coord = CheckCoordinator::new(
-        Process::new(child_pid, None),
+        Process::new(child_pid, gettid(), Some(tracer_op_tx), None),
         checker_cpu_set,
         check_coord_flags,
     );
@@ -110,12 +118,31 @@ fn parent_work(
     let mut main_exec_time = Duration::ZERO;
 
     let exec_start_time = Instant::now();
+    let mut syscall_cnt = 0;
 
     loop {
+        loop {
+            match tracer_op_rx.try_recv() {
+                Ok(op) => match op {
+                    process::TracerOp::PtraceSyscall(pid) => {
+                        ptrace::syscall(pid, None).unwrap();
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(e) => panic!("failed to receive tracer op: {:?}", e),
+            }
+        }
+
         let status = if flags.contains(RunnerFlags::POLL_WAITPID) {
-            waitpid(None, Some(WaitPidFlag::WNOHANG)).unwrap()
+            waitpid(None, Some(WaitPidFlag::WNOHANG))
         } else {
-            wait().unwrap()
+            wait()
+        };
+
+        let status = if let Err(Errno::EINTR) = status {
+            continue;
+        } else {
+            status.unwrap()
         };
 
         match status {
@@ -149,6 +176,18 @@ fn parent_work(
                         info!("Checkpoint finish requested by {}", pid);
                         check_coord.handle_checkpoint(pid, true);
                     }
+                    ptrace::SyscallInfoOp::Entry {
+                        nr: 0xff79,
+                        args: [base_address, ..],
+                    } => {
+                        assert!(pid == check_coord.main.pid);
+                        info!(
+                            "Set client control base address {:p} requested",
+                            base_address as *const u8
+                        );
+                        check_coord.set_client_control_addr(base_address as _);
+                        ptrace::syscall(pid, None).unwrap();
+                    }
                     ptrace::SyscallInfoOp::Entry { nr, .. }
                         if [
                             libc::SYS_rseq,
@@ -180,6 +219,10 @@ fn parent_work(
                         ptrace::syscall(pid, None).unwrap();
                     }
                 }
+
+                if pid == check_coord.main.pid {
+                    syscall_cnt += 1;
+                }
             }
             WaitStatus::PtraceEvent(_pid, _sig, event) => {
                 info!("Ptrace event = {:}", event);
@@ -194,6 +237,8 @@ fn parent_work(
         }
     }
 
+    syscall_cnt /= 2;
+
     let all_exec_time = exec_start_time.elapsed();
 
     if flags.contains(RunnerFlags::DUMP_STATS) {
@@ -206,6 +251,7 @@ fn parent_work(
             (nr_checkpoints as f64) / main_exec_time.as_secs_f64()
         );
         println!("avg_nr_dirty_pages={}", check_coord.avg_nr_dirty_pages());
+        println!("syscall_cnt={}", syscall_cnt);
     }
 }
 
@@ -231,6 +277,7 @@ async fn main() {
         CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY,
         cli.dont_clear_soft_dirty,
     );
+    check_coord_flags.set(CheckCoordinatorFlags::DONT_FORK, cli.dont_fork);
     check_coord_flags.set(CheckCoordinatorFlags::USE_LIBCOMPEL, cli.use_libcompel);
 
     match unsafe { fork() } {

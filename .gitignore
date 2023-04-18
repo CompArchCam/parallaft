@@ -1,6 +1,7 @@
-/target
+target/
 run
 .vscode/
 *.log
 *.svg
 stresstest.sh
+experiment/

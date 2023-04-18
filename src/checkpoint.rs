@@ -6,13 +6,14 @@ use std::{mem, ptr};
 
 use bitflags::bitflags;
 
-use log::info;
+use log::{info, warn};
 use nix::{sched::CloneFlags, unistd::Pid};
 
 use parking_lot::{Mutex, RwLock};
 
 use tokio::task;
 
+use crate::client_control;
 use crate::process::Process;
 
 #[derive(Debug)]
@@ -120,13 +121,15 @@ impl SegmentStatus {
 pub struct Segment {
     pub checkpoint_start: Arc<Checkpoint>,
     pub status: SegmentStatus,
+    pub nr: u32,
 }
 
 impl Segment {
-    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: Process) -> Self {
+    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: Process, nr: u32) -> Self {
         Self {
             checkpoint_start,
             status: SegmentStatus::New { checker },
+            nr,
         }
     }
 
@@ -142,14 +145,14 @@ impl Segment {
 
     /// Compare dirty memory of the checker process and the reference process and mark the segment status as checked.
     /// This should be called after the checker process invokes the checkpoint syscall.
-    pub fn check(&mut self) -> Result<(bool, usize)> {
+    pub fn check(&mut self, ignored_pages: &[u64]) -> Result<(bool, usize)> {
         if let SegmentStatus::ReadyToCheck {
             checker,
             checkpoint_end,
         } = &self.status
         {
-            let (result, nr_dirty_pages) =
-                checker.dirty_page_delta_against(checkpoint_end.reference().unwrap());
+            let (result, nr_dirty_pages) = checker
+                .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages);
             self.mark_as_checked()?;
 
             Ok((result, nr_dirty_pages))
@@ -181,6 +184,8 @@ pub struct CheckCoordinator<'c> {
     checker_cpu_affinity: &'c Vec<usize>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     avg_nr_dirty_pages: Arc<Mutex<f64>>,
+    nr_segments: AtomicU32,
+    client_control_addr: Arc<RwLock<Option<usize>>>,
 }
 
 bitflags! {
@@ -190,6 +195,7 @@ bitflags! {
         const DONT_RUN_CHECKER = 0b00000100;
         const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
         const USE_LIBCOMPEL = 0b00010000;
+        const DONT_FORK = 0b00100000;
     }
 }
 
@@ -208,6 +214,8 @@ impl<'c> CheckCoordinator<'c> {
             flags,
             pending_sync: Arc::new(Mutex::new(None)),
             avg_nr_dirty_pages: Arc::new(Mutex::new(0.0)),
+            nr_segments: AtomicU32::new(0),
+            client_control_addr: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -245,24 +253,15 @@ impl<'c> CheckCoordinator<'c> {
     /// Handle checkpoint request from the target
     pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool) {
         if pid == self.main.pid {
-            // ****
-            // let test_pid = self
-            //     .main
-            //     .syscall_direct(Sysno::getpid, syscall_args!(), false, false);
-            // info!("My PID is {}", test_pid);
-            // let test_pid = self
-            //     .main
-            //     .syscall_direct(Sysno::getpid, syscall_args!(), false, false);
-            // info!("My PID is {}", test_pid);
-            // let test_pid = self
-            //     .main
-            //     .syscall_direct(Sysno::getpid, syscall_args!(), true, false);
-            // info!("My PID is {}", test_pid);
-            // ****
+            let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
+
+            if self.flags.contains(CheckCoordinatorFlags::DONT_FORK) {
+                self.main.resume();
+                return;
+            }
 
             let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
             let clone_signal = None;
-            let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
             let use_libcompel = self.flags.contains(CheckCoordinatorFlags::USE_LIBCOMPEL);
 
             if !is_finishing {
@@ -326,39 +325,47 @@ impl<'c> CheckCoordinator<'c> {
                     self.segments.write().deref_mut(),
                 );
             } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
-                let mut segment = segment.lock();
-                let (result, nr_dirty_pages) = segment.check().unwrap();
-                let mut avg_nr_dirty_pages = self.avg_nr_dirty_pages.lock();
+                todo!();
+                // let mut segment = segment.lock();
+                // let (result, nr_dirty_pages) = segment.check().unwrap();
+                // let mut avg_nr_dirty_pages = self.avg_nr_dirty_pages.lock();
 
-                let alpha = segment.checkpoint_start.epoch as f64;
+                // let alpha = 1.0 / segment.checkpoint_start.epoch as f64;
+                // info!("alpha = {}", alpha);
 
-                *avg_nr_dirty_pages =
-                    *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
+                // *avg_nr_dirty_pages =
+                //     *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
 
-                drop(avg_nr_dirty_pages);
-                drop(segment);
+                // drop(avg_nr_dirty_pages);
+                // drop(segment);
 
-                if !result {
-                    panic!("check fails");
-                }
-                info!("Check passed");
-                Self::cleanup_committed_segments(
-                    self.pending_sync.lock().deref_mut(),
-                    self.segments.write().deref_mut(),
-                );
+                // if !result {
+                //     panic!("check fails");
+                // }
+                // info!("Check passed");
+                // Self::cleanup_committed_segments(
+                //     self.pending_sync.lock().deref_mut(),
+                //     self.segments.write().deref_mut(),
+                // );
             } else {
                 let segment = segment.clone();
                 let segments = self.segments.clone();
 
                 let pending_sync = self.pending_sync.clone();
                 let avg_nr_dirty_pages = self.avg_nr_dirty_pages.clone();
+                let client_control_addr = self.client_control_addr.clone();
 
                 task::spawn_blocking(move || {
                     let mut segment = segment.lock();
-                    let (result, nr_dirty_pages) = segment.check().unwrap();
+                    let client_control_addr = client_control_addr.read();
+                    let ignored_pages = client_control_addr
+                        .as_ref()
+                        .map_or(vec![], |a| vec![*a as u64]);
+
+                    let (result, nr_dirty_pages) = segment.check(ignored_pages.as_slice()).unwrap();
                     let mut avg_nr_dirty_pages = avg_nr_dirty_pages.lock();
 
-                    let alpha = segment.checkpoint_start.epoch as f64;
+                    let alpha = 1.0 / (segment.nr + 1) as f64; // TODO: segments may finish out-of-order
 
                     *avg_nr_dirty_pages =
                         *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
@@ -367,9 +374,10 @@ impl<'c> CheckCoordinator<'c> {
                     drop(segment);
 
                     if !result {
-                        panic!("check fails");
+                        warn!("Check fails");
+                    } else {
+                        info!("Check passed");
                     }
-                    info!("Check passed");
                     Self::cleanup_committed_segments(
                         pending_sync.lock().deref_mut(),
                         segments.write().deref_mut(),
@@ -447,7 +455,18 @@ impl<'c> CheckCoordinator<'c> {
                     last_segment.mark_as_checked();
                     do_cleanup = true;
                 } else {
-                    last_segment.checker().unwrap().resume();
+                    let last_checker = last_segment.checker().unwrap();
+
+                    // patch the checker's client_control struct
+                    if let Some(base_address) = self.client_control_addr.read().as_ref() {
+                        let this_reference = checkpoint.reference().unwrap();
+                        let mut ctl =
+                            client_control::read(this_reference.pid, *base_address).unwrap();
+                        ctl.mode = client_control::CliMode::Checker;
+                        client_control::write(&ctl, last_checker.pid, *base_address).unwrap();
+                    }
+
+                    last_checker.resume();
                 }
             }
         }
@@ -455,7 +474,11 @@ impl<'c> CheckCoordinator<'c> {
         let mut segments = self.segments.write();
 
         if let Some(checker) = checker {
-            let segment = Segment::new(checkpoint, checker);
+            let segment = Segment::new(
+                checkpoint,
+                checker,
+                self.nr_segments.fetch_add(1, Ordering::SeqCst),
+            );
             info!("New segment: {:?}", segment);
             segments.push_back(Arc::new(Mutex::new(segment)));
         }
@@ -481,5 +504,9 @@ impl<'c> CheckCoordinator<'c> {
     /// Check if all checkers has finished.
     pub fn is_all_finished(&self) -> bool {
         self.segments.read().is_empty()
+    }
+
+    pub fn set_client_control_addr(&self, base_address: usize) {
+        self.client_control_addr.write().insert(base_address);
     }
 }

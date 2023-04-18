@@ -15,7 +15,7 @@ use nix::{
         signal::{kill, Signal},
         wait::{waitpid, WaitStatus},
     },
-    unistd::Pid,
+    unistd::{gettid, Pid},
 };
 use parasite::commands::{Request, Response};
 
@@ -23,8 +23,16 @@ use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use crate::{dirty_page_tracer::DirtyPageTracer, page_diff::page_diff};
 
+use std::sync::mpsc;
+
+pub enum TracerOp {
+    PtraceSyscall(Pid),
+}
+
 pub struct Process {
     pub pid: Pid,
+    tracer_pid: Pid,
+    tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
     pub parent: Option<Arc<Process>>,
     pub zombie_children: Mutex<HashSet<Pid>>,
 
@@ -42,16 +50,28 @@ impl ProcessCloneExt for Arc<Process> {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
         let child_pid = self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0));
-        let child = Process::new(Pid::from_raw(child_pid as _), Some(parent));
+        let child = Process::new(
+            Pid::from_raw(child_pid as _),
+            self.tracer_pid,
+            self.tracer_op_tx.clone(),
+            Some(parent),
+        );
         Arc::new(child)
     }
 }
 
 #[allow(unused)]
 impl Process {
-    pub fn new(pid: Pid, parent: Option<Arc<Process>>) -> Self {
+    pub fn new(
+        pid: Pid,
+        tracer_pid: Pid,
+        tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
+        parent: Option<Arc<Process>>,
+    ) -> Self {
         Self {
             pid,
+            tracer_pid,
+            tracer_op_tx,
             dirty_page_tracer: Mutex::new(None),
             parent,
             zombie_children: Mutex::new(HashSet::new()),
@@ -308,16 +328,30 @@ impl Process {
             .unwrap();
     }
 
-    pub fn dirty_page_delta_against(&self, other: &Process) -> (bool, usize) {
-        let dirty_pages_myself = self.get_dirty_pages();
-        let dirty_pages_other = other.get_dirty_pages();
+    pub fn dirty_page_delta_against(
+        &self,
+        other: &Process,
+        ignored_pages: &[u64],
+    ) -> (bool, usize) {
+        let dirty_pages_myself: Vec<u64> = self
+            .get_dirty_pages()
+            .into_iter()
+            .filter(|addr| !ignored_pages.contains(addr))
+            .collect();
+
+        let dirty_pages_other: Vec<u64> = other
+            .get_dirty_pages()
+            .into_iter()
+            .filter(|addr| !ignored_pages.contains(addr))
+            .collect();
+
         info!("{} dirty pages", dirty_pages_myself.len());
         let result =
             page_diff(self.pid, other.pid, &dirty_pages_myself, &dirty_pages_other).unwrap();
 
         match result {
             crate::page_diff::PageDiffResult::Equal => (true, dirty_pages_myself.len()),
-            _ => (true, dirty_pages_myself.len()),
+            _ => (false, dirty_pages_myself.len()),
         }
     }
 
@@ -336,7 +370,9 @@ impl Process {
     }
 
     pub fn resume(&self) {
-        ptrace::syscall(self.pid, None).unwrap();
+        if gettid() == self.tracer_pid {
+            ptrace::syscall(self.pid, None).unwrap();
+        }
     }
 
     pub fn interrupt(&self) {
@@ -362,10 +398,10 @@ impl Process {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
         let child_pid = if use_libcompel {
-            info!("Using libcompel for syscall injection");
+            debug!("Using libcompel for syscall injection");
             self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0))
         } else {
-            info!("Using ptrace for syscall injection");
+            debug!("Using ptrace for syscall injection");
             self.syscall_direct(
                 Sysno::clone,
                 syscall_args!(clone_flags, 0, 0, 0, 0),
@@ -374,7 +410,12 @@ impl Process {
             )
         };
 
-        let child = Process::new(Pid::from_raw(child_pid as _), None);
+        let child = Process::new(
+            Pid::from_raw(child_pid as _),
+            self.tracer_pid,
+            self.tracer_op_tx.clone(),
+            None,
+        );
         child
     }
 }
