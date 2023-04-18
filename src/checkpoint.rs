@@ -265,11 +265,9 @@ impl<'c> CheckCoordinator<'c> {
             let use_libcompel = self.flags.contains(CheckCoordinatorFlags::USE_LIBCOMPEL);
 
             if !is_finishing {
-                let reference = self.main.clone_process_without_parent(
-                    clone_flags,
-                    clone_signal,
-                    use_libcompel,
-                );
+                let reference = self
+                    .main
+                    .clone_process(clone_flags, clone_signal, use_libcompel);
 
                 if !self
                     .flags
@@ -282,11 +280,7 @@ impl<'c> CheckCoordinator<'c> {
                 let (checker, checkpoint) = match self.is_last_checkpoint_finishing() {
                     true => (reference, Checkpoint::new_initial(epoch_local)),
                     false => (
-                        reference.clone_process_without_parent(
-                            clone_flags,
-                            clone_signal,
-                            use_libcompel,
-                        ),
+                        reference.clone_process(clone_flags, clone_signal, use_libcompel),
                         Checkpoint::new(epoch_local, reference),
                     ),
                 };
@@ -303,11 +297,9 @@ impl<'c> CheckCoordinator<'c> {
                 self.add_checkpoint(checkpoint, Some(checker));
             } else {
                 if !self.is_last_checkpoint_finishing() {
-                    let reference = self.main.clone_process_without_parent(
-                        clone_flags,
-                        clone_signal,
-                        use_libcompel,
-                    );
+                    let reference =
+                        self.main
+                            .clone_process(clone_flags, clone_signal, use_libcompel);
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference);
 

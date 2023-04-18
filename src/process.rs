@@ -323,7 +323,7 @@ impl Process {
         }
     }
 
-    pub fn clone_process_without_parent(
+    pub fn clone_process(
         &self,
         flags: CloneFlags,
         signal: Option<Signal>,
