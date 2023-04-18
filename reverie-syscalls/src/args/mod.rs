@@ -517,10 +517,10 @@ command_enum! {
     pub enum ArchPrctlCmd<'a>: libc::c_int {
         ARCH_SET_GS(u64) = 0x1001,
         ARCH_SET_FS(u64) = 0x1002,
-        ARCH_GET_FS(Option<Addr<'a, libc::c_ulong>>) = 0x1003,
-        ARCH_GET_GS(Option<Addr<'a, libc::c_ulong>>) = 0x1004,
+        ARCH_GET_FS(Option<AddrMut<'a, libc::c_ulong>>) = 0x1003,
+        ARCH_GET_GS(Option<AddrMut<'a, libc::c_ulong>>) = 0x1004,
 
-        ARCH_GET_CPUID(Option<Addr<'a, libc::c_ulong>>) = 0x1011,
+        ARCH_GET_CPUID(u64) = 0x1011,
         ARCH_SET_CPUID(u64) = 0x1012,
     }
 }
