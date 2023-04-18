@@ -11,6 +11,9 @@ pub mod may_rw;
 
 use ::syscalls::SyscallArgs;
 use ::syscalls::Sysno;
+use reverie_memory::AddrSlice;
+use reverie_memory::AddrSliceMut;
+use reverie_memory::MemoryAccess;
 // Re-export flags that used by syscalls from the `nix` crate so downstream
 // projects don't need to add another dependency on it.
 pub use nix::fcntl::AtFlags;
@@ -47,6 +50,12 @@ use crate::display::Displayable;
 use crate::raw::FromToRaw;
 use crate::Addr;
 use crate::AddrMut;
+use crate::Errno;
+
+use self::may_rw::RangesSyscallMayReadBuilder;
+use self::may_rw::RangesSyscallMayWriteBuilder;
+use self::may_rw::SyscallMayRead;
+use self::may_rw::SyscallMayWrite;
 
 /// A trait that all syscalls implement.
 pub trait SyscallInfo: Displayable + Copy + Send {
@@ -496,20 +505,26 @@ syscall_list! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Read {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
         // the read.
+        #[buf_may_written_with_len = len]
         buf: Option<AddrMut<u8>>,
         len: usize,
     }
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Write {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
         // the write (after the syscall has been executed).
+        #[buf_may_read_with_len = len]
         buf: Option<Addr<u8>>,
         len: usize,
     }
@@ -559,6 +574,8 @@ impl From<Creat> for Open {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Close {
         fd: i32,
     }
@@ -613,6 +630,8 @@ typed_syscall! {
 // Lseek not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Lseek {
         fd: i32,
         offset: libc::off_t,
@@ -621,6 +640,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Mprotect {
         addr: Option<AddrMut<libc::c_void>>,
         len: usize,
@@ -629,6 +650,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Munmap {
         addr: Option<Addr<libc::c_void>>,
         len: usize,
@@ -636,15 +659,21 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Brk {
         addr: Option<AddrMut<libc::c_void>>,
     }
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct RtSigaction {
         signum: i32,
+        #[object_may_read]
         action: Option<Addr<libc::sigaction>>,
+        #[object_may_written]
         old_action: Option<AddrMut<libc::sigaction>>,
         /// Should always be 8 (`size_of::<u64>()`).
         sigsetsize: usize,
@@ -667,6 +696,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[may_read_anything]
+    #[impl_may_write]
+    #[may_write_anything]
     pub struct Ioctl {
         fd: i32,
         request: {
@@ -685,10 +718,13 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Pread64 {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
         // the read.
+        #[buf_may_written_with_len = len]
         buf: Option<AddrMut<u8>>,
         len: usize,
         offset: libc::off_t,
@@ -725,7 +761,10 @@ typed_syscall! {
 // Access not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Access {
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         mode: Mode,
     }
@@ -863,6 +902,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Getpid {}
 }
 
@@ -1201,6 +1242,57 @@ typed_syscall! {
     }
 }
 
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Fcntl {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayWriteBuilder::new(memory);
+
+        match self.cmd() {
+            FcntlCmd::F_GETLK(flock) => builder.may_write_object(flock),
+            FcntlCmd::F_GETLK64(flock64) => builder.may_write_object(flock64),
+            FcntlCmd::F_GETOWN_EX(f_owner_ex) => builder.may_write_object(f_owner_ex),
+            FcntlCmd::F_OFD_GETLK(flock) => builder.may_write_object(flock),
+            FcntlCmd::F_GET_RW_HINT(hint) => builder.may_write_object(hint),
+            FcntlCmd::F_GET_FILE_RW_HINT(hint) => builder.may_write_object(hint),
+            FcntlCmd::Other(_, _) => builder.may_write_anything(),
+            _ => builder,
+        }
+        .build()
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for Fcntl {
+    fn may_read(&'a self, memory: &'a M) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayReadBuilder::new(memory);
+
+        match self.cmd() {
+            FcntlCmd::F_GETLK(flock) => builder.may_read_object(flock.map(|x| x.as_addr())),
+            FcntlCmd::F_GETLK64(flock64) => builder.may_read_object(flock64.map(|x| x.as_addr())),
+            FcntlCmd::F_GETOWN_EX(f_owner_ex) => {
+                builder.may_read_object(f_owner_ex.map(|x| x.as_addr()))
+            }
+            FcntlCmd::F_OFD_GETLK(flock) => builder.may_read_object(flock.map(|x| x.as_addr())),
+            FcntlCmd::F_GET_RW_HINT(hint) => builder.may_read_object(hint.map(|x| x.as_addr())),
+            FcntlCmd::F_GET_FILE_RW_HINT(hint) => {
+                builder.may_read_object(hint.map(|x| x.as_addr()))
+            }
+
+            FcntlCmd::F_SETLK(flock) => builder.may_read_object(flock),
+            FcntlCmd::F_SETLKW(flock) => builder.may_read_object(flock),
+            FcntlCmd::F_SETLK64(flock64) => builder.may_read_object(flock64),
+            FcntlCmd::F_SETLKW64(flock64) => builder.may_read_object(flock64),
+            FcntlCmd::F_SETOWN_EX(f_owner_ex) => builder.may_read_object(f_owner_ex),
+            FcntlCmd::F_OFD_SETLK(flock) => builder.may_read_object(flock),
+            FcntlCmd::F_OFD_SETLKW(flock) => builder.may_read_object(flock),
+            FcntlCmd::F_SET_RW_HINT(hint) => builder.may_read_object(hint),
+            FcntlCmd::F_SET_FILE_RW_HINT(hint) => builder.may_read_object(hint),
+
+            FcntlCmd::Other(_, _) => builder.may_read_anything(),
+            _ => builder,
+        }
+        .build()
+    }
+}
+
 typed_syscall! {
     pub struct Flock {
         fd: i32,
@@ -1245,8 +1337,11 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Getcwd {
         // TODO: Replace this with a PathPtrMut.
+        #[buf_may_written_with_len = size]
         buf: Option<AddrMut<libc::c_char>>,
         size: usize,
     }
@@ -1321,9 +1416,13 @@ typed_syscall! {
 // Readlink not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Readlink {
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         // TODO: Replace this with a PathPtrMut
+        #[buf_may_written_with_len = bufsize]
         buf: Option<AddrMut<libc::c_char>>,
         bufsize: usize,
     }
@@ -1419,7 +1518,11 @@ typed_syscall! {
     }
 }
 
-typed_syscall! { pub struct Getuid {} }
+typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
+    pub struct Getuid {}
+}
 
 typed_syscall! {
     pub struct Syslog {
@@ -1429,11 +1532,27 @@ typed_syscall! {
     }
 }
 
-typed_syscall! { pub struct Getgid {} }
+typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
+    pub struct Getgid {}
+}
+
 typed_syscall! { pub struct Setuid { uid: libc::uid_t, } }
 typed_syscall! { pub struct Setgid { uid: libc::gid_t, } }
-typed_syscall! { pub struct Geteuid {} }
-typed_syscall! { pub struct Getegid {} }
+
+typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
+    pub struct Geteuid {}
+}
+
+typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
+    pub struct Getegid {}
+}
+
 typed_syscall! { pub struct Setpgid { pid: libc::pid_t, pgid: libc::pid_t, } }
 typed_syscall! { pub struct Getppid {} }
 
@@ -1755,6 +1874,32 @@ typed_syscall! {
                 self
             }
         },
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for ArchPrctl {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayWriteBuilder::new(memory);
+
+        match self.cmd() {
+            crate::ArchPrctlCmd::ARCH_GET_FS(addr) => builder.may_write_object(addr),
+            crate::ArchPrctlCmd::ARCH_GET_GS(addr) => builder.may_write_object(addr),
+            crate::ArchPrctlCmd::Other(_, _) => builder.may_write_anything(),
+            _ => builder,
+        }
+        .build()
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for ArchPrctl {
+    fn may_read(&'a self, memory: &'a M) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayReadBuilder::new(memory);
+
+        match self.cmd() {
+            crate::ArchPrctlCmd::Other(_, _) => builder.may_read_anything(),
+            _ => builder,
+        }
+        .build()
     }
 }
 
@@ -2111,9 +2256,12 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct SchedGetaffinity {
         pid: libc::pid_t,
         len: u32,
+        #[object_may_written]
         mask: Option<AddrMut<libc::c_ulong>>,
     }
 }
@@ -2226,7 +2374,17 @@ typed_syscall! {
     }
 }
 
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Getdents64 {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        RangesSyscallMayWriteBuilder::new(memory)
+            .may_write_buf_with_len(self.dirent().map(|d| d.cast::<u8>()), self.count() as _)
+            .build()
+    }
+}
+
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct SetTidAddress {
         tidptr: Option<AddrMut<libc::c_int>>,
     }
@@ -2540,8 +2698,11 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Openat {
         dirfd: i32,
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         flags: OFlag,
 
@@ -2662,11 +2823,26 @@ typed_syscall! {
 // Newfstatat not available in aarch64
 #[cfg(target_arch = "x86_64")]
 typed_syscall! {
+    #[impl_may_read]
     pub struct Newfstatat {
         dirfd: i32,
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         stat: Option<StatPtr>,
         flags: AtFlags,
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Newfstatat {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayWriteBuilder::new(memory);
+
+        if let Some(buf) = self.stat() {
+            builder.may_write_object(Some(buf.0))
+        } else {
+            builder
+        }
+        .build()
     }
 }
 
@@ -3181,10 +3357,14 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Prlimit64 {
         pid: libc::pid_t,
         resource: u32,
+        #[object_may_read]
         new_rlim: Option<Addr<libc::rlimit64>>,
+        #[object_may_written]
         old_rlim: Option<AddrMut<libc::rlimit64>>,
     }
 }
@@ -3347,7 +3527,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
+    #[impl_may_write]
     pub struct Getrandom {
+        #[buf_may_written_with_len = buflen]
         /// The buffer should never be NULL (None), or this represents an invalid call when passed
         /// to the kernel.  Nevertheless, we retain the ability here to represent that invalid call.
         buf: Option<AddrMut<u8>>,
