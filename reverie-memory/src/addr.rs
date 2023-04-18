@@ -124,6 +124,16 @@ impl<'a, T> Addr<'a, T> {
     pub unsafe fn add(self, count: usize) -> Self {
         self.offset(count as isize)
     }
+
+    /// Returns the `AddrSlice` of this address with one number of element.
+    pub unsafe fn into_addr_slice(self) -> AddrSlice<'a, T> {
+        self.into_addr_slice_with_len(1)
+    }
+
+    /// Returns the `AddrSlice` of this address with `len` number of elements.
+    pub unsafe fn into_addr_slice_with_len(self, len: usize) -> AddrSlice<'a, T> {
+        AddrSlice::from_raw_parts(self, len)
+    }
 }
 
 impl<'a, T> From<&'a T> for Addr<'a, T> {
@@ -246,6 +256,24 @@ impl<'a, T> AddrMut<'a, T> {
     pub unsafe fn add(self, count: usize) -> Self {
         self.offset(count as isize)
     }
+
+    /// Returns the `AddrSliceMut` of this address with one number of element.
+    pub unsafe fn into_addr_slice_mut(self) -> AddrSliceMut<'a, T> {
+        self.into_addr_slice_mut_with_len(1)
+    }
+
+    /// Returns the `AddrSliceMut` of this address with one number of element.
+    pub unsafe fn into_addr_slice_mut_with_len(self, len: usize) -> AddrSliceMut<'a, T> {
+        AddrSliceMut::from_raw_parts(self, len)
+    }
+
+    /// Converts this mutable address to a immutable one.
+    pub fn as_addr(self) -> Addr<'a, T> {
+        Addr {
+            inner: self.inner,
+            _p: PhantomData,
+        }
+    }
 }
 
 impl<'a, T> From<AddrMut<'a, T>> for Addr<'a, T> {
@@ -339,6 +367,18 @@ impl<'a, T> AddrSlice<'a, T> {
             None
         }
     }
+
+    /// Converts this `AddrSlice<T>` to an `AddrSlice<u8>`.
+    pub fn as_addr_slice_u8(&mut self) -> AddrSlice<'a, u8> {
+        AddrSlice {
+            inner: unsafe {
+                ::core::slice::from_raw_parts(
+                    self.inner.as_ptr() as *const u8,
+                    self.len() * ::core::mem::size_of::<T>(),
+                )
+            },
+        }
+    }
 }
 
 impl<'a> AddrSlice<'a, u8> {
@@ -401,6 +441,18 @@ impl<'a, T> AddrSliceMut<'a, T> {
             Some(self.split_at(offset))
         } else {
             None
+        }
+    }
+
+    /// Converts this `AddrSliceMut<T>` to an `AddrSliceMut<u8>`.
+    pub fn as_addr_slice_mut_u8(&mut self) -> AddrSliceMut<'a, u8> {
+        AddrSliceMut {
+            inner: unsafe {
+                ::core::slice::from_raw_parts_mut(
+                    self.inner.as_mut_ptr() as *mut u8,
+                    self.len() * ::core::mem::size_of::<T>(),
+                )
+            },
         }
     }
 }
