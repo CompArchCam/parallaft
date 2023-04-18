@@ -7,6 +7,7 @@
  */
 
 pub mod family;
+pub mod may_rw;
 
 use ::syscalls::SyscallArgs;
 use ::syscalls::Sysno;
