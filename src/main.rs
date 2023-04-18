@@ -4,7 +4,6 @@ mod compel_parasite;
 mod dirty_page_tracer;
 mod page_diff;
 mod process;
-mod utils;
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;

@@ -6,8 +6,6 @@ use nix::unistd::sysconf;
 use nix::unistd::Pid;
 use pretty_hex::PrettyHex;
 
-use crate::utils::format_vec_pointer;
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum PageDiffResult {
     Equal,
@@ -63,7 +61,7 @@ pub fn page_diff(
 
         if buf_p1 != buf_p2 {
             let pages: Vec<u64> = remote_iov.iter().map(|i| i.base as _).collect();
-            info!("Page data does not match: {}", format_vec_pointer(&pages));
+            info!("Page data does not match: {:#018x?}", &pages);
             return Ok(PageDiffResult::PageDataDiff);
         }
     }
