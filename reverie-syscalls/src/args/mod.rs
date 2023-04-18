@@ -170,6 +170,11 @@ impl<'a> CStrPtr<'a> {
     pub fn from_ptr(r: *const libc::c_char) -> Option<Self> {
         Addr::from_ptr(r as *const u8).map(CStrPtr)
     }
+
+    /// Get the underlying Addr.
+    pub fn into_inner(&self) -> Addr<'a, u8> {
+        self.0
+    }
 }
 
 impl<'a> ReadAddr for CStrPtr<'a> {
@@ -238,6 +243,11 @@ impl<'a> PathPtr<'a> {
     /// pointer is NULL.
     pub fn from_ptr(r: *const libc::c_char) -> Option<Self> {
         CStrPtr::from_ptr(r).map(PathPtr)
+    }
+
+    /// Get the underlying CStrPtr.
+    pub fn into_inner(&self) -> CStrPtr<'a> {
+        self.0
     }
 }
 
