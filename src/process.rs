@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use compel::{
     syscalls::{syscall_args, SyscallArgs, Sysno},
@@ -33,31 +33,7 @@ pub struct Process {
     pub pid: Pid,
     tracer_pid: Pid,
     tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
-    pub parent: Option<Arc<Process>>,
-    pub zombie_children: Mutex<HashSet<Pid>>,
-
     dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
-}
-
-pub trait ProcessCloneExt {
-    fn clone_process(&self, flags: CloneFlags, signal: Option<Signal>) -> Arc<Process>;
-}
-
-impl ProcessCloneExt for Arc<Process> {
-    fn clone_process(&self, flags: CloneFlags, signal: Option<Signal>) -> Arc<Process> {
-        let parent = self.clone();
-
-        let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
-
-        let child_pid = self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0));
-        let child = Process::new(
-            Pid::from_raw(child_pid as _),
-            self.tracer_pid,
-            self.tracer_op_tx.clone(),
-            Some(parent),
-        );
-        Arc::new(child)
-    }
 }
 
 #[allow(unused)]
@@ -66,15 +42,12 @@ impl Process {
         pid: Pid,
         tracer_pid: Pid,
         tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
-        parent: Option<Arc<Process>>,
     ) -> Self {
         Self {
             pid,
             tracer_pid,
             tracer_op_tx,
             dirty_page_tracer: Mutex::new(None),
-            parent,
-            zombie_children: Mutex::new(HashSet::new()),
         }
     }
 
@@ -289,45 +262,6 @@ impl Process {
     //     syscall_ret
     // }
 
-    pub fn waitpid(&self, pid: Pid) -> Result<bool, Errno> {
-        let result = self.syscall(
-            Sysno::wait4,
-            syscall_args!(pid.as_raw() as _, 0, libc::WNOHANG as _, 0),
-        );
-        if result < 0 {
-            Err(Errno::from_i32(-result as _))
-        } else {
-            Ok(result > 0)
-        }
-    }
-
-    pub fn reap_zombie_children(&self) {
-        let mut zombie_children = self.zombie_children.lock();
-        let mut parasite_ctl = self.compel_prepare::<Request, Response>();
-
-        for child_pid in zombie_children.iter() {
-            info!("Reaping child {}", child_pid);
-            let child_pid = *child_pid;
-            let result = parasite_ctl
-                .syscall(
-                    Sysno::wait4,
-                    syscall_args!(child_pid.as_raw() as _, 0, 0, 0),
-                )
-                .unwrap();
-            debug!("wait4 result = {}", result);
-        }
-
-        zombie_children.clear();
-    }
-
-    pub fn reap_zombie_child(&self, pid: Pid) {
-        let mut zombie_children = self.zombie_children.lock();
-        zombie_children
-            .take(&pid)
-            .map(|_| self.waitpid(pid).unwrap())
-            .unwrap();
-    }
-
     pub fn dirty_page_delta_against(
         &self,
         other: &Process,
@@ -414,7 +348,6 @@ impl Process {
             Pid::from_raw(child_pid as _),
             self.tracer_pid,
             self.tracer_op_tx.clone(),
-            None,
         );
         child
     }
@@ -428,19 +361,14 @@ impl Debug for Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        let pid = self.pid;
-        if let Some(parent) = &self.parent {
-            parent.zombie_children.lock().insert(pid);
-        }
-
-        let result = kill(pid, Signal::SIGKILL);
+        let result = kill(self.pid, Signal::SIGKILL);
 
         // we don't need to reap zombie children here because they will be adpoted and reaped by PID 1 anyway after this process dies
 
         match result {
             Ok(_) | Err(Errno::ESRCH) => (),
             err => {
-                panic!("Failed to kill process {:?}: {:?}", pid, err);
+                panic!("Failed to kill process {:?}: {:?}", self.pid, err);
             }
         }
     }

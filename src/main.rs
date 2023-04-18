@@ -105,7 +105,7 @@ fn parent_work(
     let (tracer_op_tx, tracer_op_rx) = mpsc::sync_channel(1024);
 
     let check_coord = CheckCoordinator::new(
-        Process::new(child_pid, gettid(), Some(tracer_op_tx), None),
+        Process::new(child_pid, gettid(), Some(tracer_op_tx)),
         checker_cpu_set,
         check_coord_flags,
     );
@@ -195,7 +195,7 @@ fn parent_work(
                             // libc::SYS_set_tid_address,
                             // libc::SYS_arch_prctl,
                         ]
-                        .contains(&nr) =>
+                        .contains(&nr as _) =>
                     {
                         info!("Rewriting unsupported syscall {}", nr);
                         let mut regs = ptrace::getregs(pid).expect("failed to get registers");
