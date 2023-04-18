@@ -64,6 +64,10 @@ macro_rules! typed_syscall {
                     $($opt_set_impl:tt)*
                 }
             },)*],
+            may_read: [$($may_read_entries:tt)*],
+            may_written: [$($may_written_entries:tt)*],
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
         }
     ) => {
         #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -176,7 +180,83 @@ macro_rules! typed_syscall {
             [$($opt,)*],
             attrs: [$(#[$attrs])*],
         }
+
+        typed_syscall! {
+            @impl_may_read
+            $impl_may_read,
+            $Name,
+            [$($may_read_entries)*]
+            attrs: [$(#[$attrs])*],
+        }
+
+        typed_syscall! {
+            @impl_may_write
+            $impl_may_write,
+            $Name,
+            [$($may_written_entries)*]
+            attrs: [$(#[$attrs])*],
+        }
     };
+
+    // Implement SyscallMayRead
+    (@impl_may_read
+        true,
+        $Name:ident,
+        [$([$method:ident, $($entries:ident),*])*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {
+        $(#[$attrs])*
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayRead<'a, M> for $Name {
+            fn may_read(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSlice<'a, u8>]>, $crate::Errno> {
+                let builder = $crate::syscalls::may_rw::RangesSyscallMayReadBuilder::new(memory);
+
+                builder
+                    $(
+                        .$method($(self.$entries()),*)
+                    )*
+
+                .build()
+            }
+        }
+    };
+
+    // Do nothing if #[impl_may_read] is unspecified
+    (@impl_may_read
+        false,
+        $Name:ident,
+        [$($may_read_entries:tt)*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {};
+
+    // Implement SyscallMayWrite
+    (@impl_may_write
+        true,
+        $Name:ident,
+        [$([$method:ident, $($entries:ident),*])*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {
+        $(#[$attrs])*
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayWrite<'a, M> for $Name {
+            fn may_write(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSliceMut<'a, u8>]>, $crate::Errno> {
+                let builder = $crate::syscalls::may_rw::RangesSyscallMayWriteBuilder::new(memory);
+
+                builder
+                    $(
+                        .$method($(self.$entries()),*)
+                    )*
+
+                .build()
+            }
+        }
+    };
+
+    // Do nothing if #[impl_may_write] is unspecified
+    (@impl_may_write
+        false,
+        $Name:ident,
+        [$($may_written_entries:tt)*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {};
 
     // Display zero args
     (@impl_display
@@ -273,7 +353,11 @@ macro_rules! typed_syscall {
             name: $Name:ident,
             attrs: [$(#[$attrs:meta])*],
             ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
         },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
         [$($req_entries:tt)*],
         [$($optional_entries:tt)*],
         [$($raw:ident,)*],
@@ -294,14 +378,155 @@ macro_rules! typed_syscall {
                     ),
                     required: [$($req_entries)*],
                     optional: [$($optional_entries)*],
+                    may_read: [$($may_read_entries)*],
+                    may_written: [$($may_written_entries)*],
+                    impl_may_read: $impl_may_read,
+                    impl_may_write: $impl_may_write,
                 }
             }
+        }
+    };
+
+    // Munch a required entry with path_ptr_may_read attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[path_ptr_may_read]
+        $(#[$meta:meta])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)* [may_read_path_ptr, $entry]],
+            [$($may_written_entries)*],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with object_may_read attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[object_may_read]
+        $(#[$meta:meta])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)* [may_read_object, $entry]],
+            [$($may_written_entries)*],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with buf_may_read_with_len attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[buf_may_read_with_len = $len:ident]
+        $(#[$meta:meta])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)* [may_read_buf_with_len, $entry, $len]],
+            [$($may_written_entries)*],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with object_may_written attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[object_may_written]
+        $(#[$meta:meta])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)* [may_write_object, $entry]],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with buf_may_written_with_len attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[buf_may_written_with_len = $len:ident]
+        $(#[$meta:meta])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)* [may_write_buf_with_len, $entry, $len]],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
         }
     };
 
     // Munch a required entry
     (@accumulate_entries
         $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
         [$($req_entries:tt)*],
         [$($optional_entries:tt)*],
         [$raw:ident, $($rawtail:ident,)*],
@@ -312,6 +537,8 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @accumulate_entries
             $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             [
                 $($req_entries)*
                 // Append the munched entry
@@ -339,6 +566,8 @@ macro_rules! typed_syscall {
     // Munch a required function entry
     (@accumulate_entries
         $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
         [$($req_entries:tt)*],
         [$($optional_entries:tt)*],
         [$raw:ident, $($rawtail:ident,)*],
@@ -355,6 +584,8 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @accumulate_entries
             $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             [
                 $($req_entries)*
                 // Append the munched entry
@@ -379,6 +610,8 @@ macro_rules! typed_syscall {
     // Munch an optional entry
     (@accumulate_entries
         $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
         [$($req_entries:tt)*],
         [$($optional_entries:tt)*],
         [$raw:ident, $($rawtail:ident,)*],
@@ -389,6 +622,8 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @accumulate_entries
             $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             [$($req_entries)*],
             [
                 $($optional_entries)*
@@ -416,6 +651,8 @@ macro_rules! typed_syscall {
     // Munch an optional function entry
     (@accumulate_entries
         $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
         [$($req_entries:tt)*],
         [$($optional_entries:tt)*],
         [$raw:ident, $($rawtail:ident,)*],
@@ -432,6 +669,8 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @accumulate_entries
             $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             [$($req_entries)*],
             [
                 $($optional_entries)*
@@ -453,23 +692,149 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Entry rule.
-    (
-        $(#[$attrs:meta])*
-        $vis:vis struct $Name:ident -> $ret:ty {
-            $($vals:tt)*
-        }
+    // Consume #[impl_may_read]
+    (@accumulate_global_may_rw
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[impl_may_read]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
     ) => {
         typed_syscall! {
-            @accumulate_entries
-            // Meta data that is passed through the munching pipeline until we
-            // are ready to generate all of the code.
+            @accumulate_global_may_rw
             {
                 vis: $vis,
                 name: $Name,
-                attrs: [$(#[$attrs])*],
+                attrs: [$(#[$($attrs)*])*],
                 ret: $ret,
+                impl_may_read: true,
+                impl_may_write: $impl_may_write,
             },
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
+            $($vals)*
+        }
+    };
+
+    // Consume #[impl_may_write]
+    (@accumulate_global_may_rw
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[impl_may_write]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: $impl_may_read,
+                impl_may_write: true,
+            },
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
+            $($vals)*
+        }
+    };
+
+    // Consume #[may_read_anything]
+    (@accumulate_global_may_rw
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[may_read_anything]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: $impl_may_read,
+                impl_may_write: $impl_may_write,
+            },
+            [$($may_read_entries)* [may_read_anything, ]],
+            [$($may_written_entries)*],
+            $($vals)*
+        }
+    };
+
+    // Consume #[may_write_anything]
+    (@accumulate_global_may_rw
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[may_write_anything]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: $impl_may_read,
+                impl_may_write: $impl_may_write,
+            },
+            [$($may_read_entries)*],
+            [$($may_written_entries)* [may_write_anything, ]],
+            $($vals)*
+        }
+    };
+
+    (@accumulate_global_may_rw
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             // List of required entries accumulated thus far.
             [],
             // List of optional entries accumulated thus far.
@@ -477,6 +842,33 @@ macro_rules! typed_syscall {
             // Queue of raw args. This are popped off in sequence and used for
             // the default implementation of getting and setting raw registers.
             [arg0, arg1, arg2, arg3, arg4, arg5,],
+            $($vals)*
+        }
+    };
+
+    // Entry rule.
+    (
+        $(#[$($attrs:tt)*])*
+        $vis:vis struct $Name:ident -> $ret:ty {
+            $($vals:tt)*
+        }
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw
+            // Meta data that is passed through the munching pipeline until we
+            // are ready to generate all of the code.
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: false,
+                impl_may_write: false,
+            },
+            // List of entries whose pointed target may be read by the syscall.
+            [],
+            // List of entries whose pointed target may be written by the syscall.
+            [],
             // The unprocessed entries, including their metadata.
             $($vals)*
         }
@@ -484,13 +876,13 @@ macro_rules! typed_syscall {
 
     // Entry rule (with a default return type).
     (
-        $(#[$attrs:meta])*
+        $(#[$($attrs:tt)*])*
         $vis:vis struct $Name:ident {
             $($vals:tt)*
         }
     ) => {
         typed_syscall! {
-            $(#[$attrs])*
+            $(#[$($attrs)*])*
             $vis struct $Name -> usize {
                 $($vals)*
             }
