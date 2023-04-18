@@ -9,6 +9,7 @@
 use std::os::unix::io::RawFd;
 
 use super::Addr;
+use super::AddrMut;
 use super::Pid;
 use crate::FromToRaw;
 
@@ -28,21 +29,21 @@ command_enum! {
         F_SETFD(RawFd) = 2,
         F_GETFL = 3,
         F_SETFL(i32) = 4,
-        F_GETLK(Option<Addr<'a, libc::flock>>) = 5,
+        F_GETLK(Option<AddrMut<'a, libc::flock>>) = 5,
         F_SETLK(Option<Addr<'a, libc::flock>>) = 6,
         F_SETLKW(Option<Addr<'a, libc::flock>>) = 7,
         F_SETOWN = 8,
         F_GETOWN(Pid) = 9,
         F_SETSIG(i32) = 10,
         F_GETSIG = 11,
-        F_GETLK64(Option<Addr<'a, libc::flock64>>) = 12,
+        F_GETLK64(Option<AddrMut<'a, libc::flock64>>) = 12,
         F_SETLK64(Option<Addr<'a, libc::flock64>>) = 13,
         F_SETLKW64(Option<Addr<'a, libc::flock64>>) = 14,
         F_SETOWN_EX(Option<Addr<'a, f_owner_ex>>) = 15,
-        F_GETOWN_EX(Option<Addr<'a, f_owner_ex>>) = 16,
+        F_GETOWN_EX(Option<AddrMut<'a, f_owner_ex>>) = 16,
         F_GETOWNER_UIDS = 17,
 
-        F_OFD_GETLK(Option<Addr<'a, libc::flock>>) = 36,
+        F_OFD_GETLK(Option<AddrMut<'a, libc::flock>>) = 36,
         F_OFD_SETLK(Option<Addr<'a, libc::flock>>) = 37,
         F_OFD_SETLKW(Option<Addr<'a, libc::flock>>) = 38,
 
@@ -55,9 +56,9 @@ command_enum! {
         F_ADD_SEALS(i32) = 1033,
         F_GET_SEALS = 1034,
 
-        F_GET_RW_HINT(Option<Addr<'a, u64>>) = 1035,
+        F_GET_RW_HINT(Option<AddrMut<'a, u64>>) = 1035,
         F_SET_RW_HINT(Option<Addr<'a, u64>>) = 1036,
-        F_GET_FILE_RW_HINT(Option<Addr<'a, u64>>) = 1037,
+        F_GET_FILE_RW_HINT(Option<AddrMut<'a, u64>>) = 1037,
         F_SET_FILE_RW_HINT(Option<Addr<'a, u64>>) = 1038,
     }
 }
