@@ -5,8 +5,8 @@ use compel::{
     ParasiteCtl,
 };
 
-use nix::libc::user_regs_struct;
 use log::{debug, info};
+use nix::libc::user_regs_struct;
 use nix::{
     errno::Errno,
     sched::{sched_setaffinity, CloneFlags, CpuSet},
@@ -306,6 +306,22 @@ impl Process {
     pub fn resume(&self) {
         if gettid() == self.tracer_pid {
             ptrace::syscall(self.pid, None).unwrap();
+        } else {
+            self.tracer_op_tx
+                .clone()
+                .unwrap()
+                .send(TracerOp::PtraceSyscall(self.pid))
+                .unwrap();
+
+            unsafe {
+                nix::libc::syscall(
+                    nix::libc::SYS_tgkill,
+                    -1,
+                    self.tracer_pid,
+                    nix::libc::SIGUSR1,
+                )
+            };
+            // TODO: check syscall
         }
     }
 

@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use bitflags::bitflags;
 use nix::errno::Errno;
 use nix::sys::ptrace;
-use nix::sys::signal::{raise, Signal};
+use nix::sys::signal::{raise, sigaction, SaFlags, SigAction, SigHandler, Signal};
+use nix::sys::signalfd::SigSet;
 use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, gettid, ForkResult, Pid};
 
@@ -82,6 +83,13 @@ bitflags! {
     }
 }
 
+extern "C" fn sigusr1_handler(
+    _sig: nix::libc::c_int,
+    _info: *mut nix::libc::siginfo_t,
+    _uctx: *mut nix::libc::c_void,
+) {
+}
+
 fn parent_work(
     child_pid: Pid,
     checker_cpu_set: &Vec<usize>,
@@ -90,6 +98,18 @@ fn parent_work(
     check_coord_flags: CheckCoordinatorFlags,
 ) {
     info!("Starting");
+
+    let mut sigset = SigSet::empty();
+    sigset.add(Signal::SIGUSR1);
+    sigset.thread_block().unwrap();
+
+    let sa = SigAction::new(
+        SigHandler::SigAction(sigusr1_handler),
+        SaFlags::empty(),
+        SigSet::empty(),
+    );
+    unsafe { sigaction(Signal::SIGUSR1, &sa).unwrap() };
+
     let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
     assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
     ptrace::seize(
@@ -132,11 +152,15 @@ fn parent_work(
             }
         }
 
+        sigset.thread_unblock().unwrap();
+
         let status = if flags.contains(RunnerFlags::POLL_WAITPID) {
             waitpid(None, Some(WaitPidFlag::WNOHANG))
         } else {
             wait()
         };
+
+        sigset.thread_block().unwrap();
 
         let status = if let Err(Errno::EINTR) = status {
             continue;
@@ -158,9 +182,7 @@ fn parent_work(
                 }
             }
             WaitStatus::PtraceSyscall(pid) => {
-                let syscall_info = ptrace::getsyscallinfo(pid);
-
-                let syscall_info = match syscall_info {
+                let syscall_info = match ptrace::getsyscallinfo(pid) {
                     Ok(syscall_info) => syscall_info,
                     Err(Errno::ESRCH) => continue, // TODO: why?
                     err => panic!("failed to get syscall info: {:?}", err),
@@ -186,6 +208,12 @@ fn parent_work(
                         );
                         check_coord.set_client_control_addr(base_address as _);
                         ptrace::syscall(pid, None).unwrap();
+                    }
+                    ptrace::SyscallInfoOp::Entry { nr: 0xff7a, .. } => {
+                        if pid == check_coord.main.pid {
+                            info!("Sync requested by main");
+                            check_coord.handle_sync();
+                        }
                     }
                     ptrace::SyscallInfoOp::Entry { nr, .. }
                         if [

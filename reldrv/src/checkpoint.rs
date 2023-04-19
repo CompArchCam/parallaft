@@ -313,6 +313,7 @@ impl<'c> CheckCoordinator<'c> {
             if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
                 segment.lock().mark_as_checked().unwrap();
                 Self::cleanup_committed_segments(
+                    &self.main,
                     self.pending_sync.lock().deref_mut(),
                     self.segments.write().deref_mut(),
                 );
@@ -347,6 +348,8 @@ impl<'c> CheckCoordinator<'c> {
                 let avg_nr_dirty_pages = self.avg_nr_dirty_pages.clone();
                 let client_control_addr = self.client_control_addr.clone();
 
+                let main = self.main.clone();
+
                 task::spawn_blocking(move || {
                     let mut segment = segment.lock();
                     let client_control_addr = client_control_addr.read();
@@ -371,6 +374,7 @@ impl<'c> CheckCoordinator<'c> {
                         info!("Check passed");
                     }
                     Self::cleanup_committed_segments(
+                        &main,
                         pending_sync.lock().deref_mut(),
                         segments.write().deref_mut(),
                     );
@@ -402,7 +406,7 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     fn cleanup_committed_segments(
-        // main: &Process,
+        main: &Process,
         pending_sync: &mut Option<u32>,
         segments: &mut LinkedList<Arc<Mutex<Segment>>>,
     ) {
@@ -426,9 +430,11 @@ impl<'c> CheckCoordinator<'c> {
             if let Some(front) = segments.front() {
                 if front.lock().checkpoint_start.epoch > *epoch {
                     pending_sync.take().map(drop);
-                    todo!();
-                    // main.resume()
+                    main.resume();
                 }
+            } else {
+                pending_sync.take().map(drop);
+                main.resume();
             }
         }
     }
@@ -477,6 +483,7 @@ impl<'c> CheckCoordinator<'c> {
 
         if do_cleanup {
             Self::cleanup_committed_segments(
+                &self.main,
                 self.pending_sync.lock().deref_mut(),
                 segments.deref_mut(),
             );
