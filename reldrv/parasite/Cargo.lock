@@ -25,9 +25,5 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "nix"
-version = "0.26.1"
-
-[[patch.unused]]
-name = "vsprintf"
-version = "2.0.0"
+name = "libc"
+version = "0.2.140"

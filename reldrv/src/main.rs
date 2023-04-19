@@ -189,7 +189,7 @@ fn parent_work(
                     }
                     ptrace::SyscallInfoOp::Entry { nr, .. }
                         if [
-                            libc::SYS_rseq,
+                            nix::libc::SYS_rseq,
                             // libc::SYS_get_robust_list,
                             // libc::SYS_set_robust_list,
                             // libc::SYS_set_tid_address,

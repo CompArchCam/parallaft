@@ -5,7 +5,7 @@ use compel::{
     ParasiteCtl,
 };
 
-use libc::user_regs_struct;
+use nix::libc::user_regs_struct;
 use log::{debug, info};
 use nix::{
     errno::Errno,
@@ -107,7 +107,7 @@ impl Process {
         // handle fork/clone event
         let child_pid = if let WaitStatus::PtraceEvent(pid, sig, event) = wait_status {
             let child_pid = Pid::from_raw(match event {
-                libc::PTRACE_EVENT_CLONE | libc::PTRACE_EVENT_FORK => {
+                nix::libc::PTRACE_EVENT_CLONE | nix::libc::PTRACE_EVENT_FORK => {
                     ptrace::getevent(pid).unwrap() as _
                 }
                 _ => panic!("Unexpected ptrace event received"),
