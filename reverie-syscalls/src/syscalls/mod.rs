@@ -477,7 +477,7 @@ syscall_list! {
         pkey_free => PkeyFree,
         statx => Statx,
         // Missing: io_pgetevents => IoPgetevents,
-        // Missing: rseq => Rseq,
+        rseq => Rseq,
         // Missing: pidfd_send_signal => PidfdSendSignal,
         io_uring_setup => IoUringSetup,
         io_uring_enter => IoUringEnter,
@@ -3673,6 +3673,15 @@ typed_syscall! {
         flags: AtFlags,
         mask: StatxMask,
         statx: Option<StatxPtr>,
+    }
+}
+
+typed_syscall! {
+    pub struct Rseq {
+        rseq: Option<Addr<libc::c_void>>,
+        rseq_len: usize,
+        flags: u32,
+        sig: u32,
     }
 }
 
