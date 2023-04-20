@@ -2367,6 +2367,7 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[impl_may_read]
     pub struct Getdents64 {
         fd: u32,
         dirent: Option<AddrMut<libc::dirent64>>,
