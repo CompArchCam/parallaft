@@ -68,6 +68,8 @@ macro_rules! typed_syscall {
             may_written: [$($may_written_entries:tt)*],
             impl_may_read: $impl_may_read:ident,
             impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
         }
     ) => {
         #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -184,6 +186,7 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @impl_may_read
             $impl_may_read,
+            $may_read_specified_only,
             $Name,
             [$($may_read_entries)*]
             attrs: [$(#[$attrs])*],
@@ -192,6 +195,7 @@ macro_rules! typed_syscall {
         typed_syscall! {
             @impl_may_write
             $impl_may_write,
+            $may_write_specified_only,
             $Name,
             [$($may_written_entries)*]
             attrs: [$(#[$attrs])*],
@@ -200,6 +204,7 @@ macro_rules! typed_syscall {
 
     // Implement SyscallMayRead
     (@impl_may_read
+        true,
         true,
         $Name:ident,
         [$([$method:ident, $($entries:ident),*])*]
@@ -220,9 +225,26 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Do nothing if #[impl_may_read] is unspecified
+    // Implement SyscallMayRead that potentially reads anything
+    (@impl_may_read
+        true,
+        false,
+        $Name:ident,
+        [$([$method:ident, $($entries:ident),*])*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {
+        $(#[$attrs])*
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayRead<'a, M> for $Name {
+            fn may_read(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSlice<'a, u8>]>, $crate::Errno> {
+                $crate::syscalls::may_rw::RangesSyscallMayReadBuilder::new(memory).may_read_anything().build()
+            }
+        }
+    };
+
+    // Do nothing if #[no_impl_may_read] is specified
     (@impl_may_read
         false,
+        $may_read_specified_only:ident,
         $Name:ident,
         [$($may_read_entries:tt)*]
         attrs: [$(#[$attrs:meta])*],
@@ -230,6 +252,7 @@ macro_rules! typed_syscall {
 
     // Implement SyscallMayWrite
     (@impl_may_write
+        true,
         true,
         $Name:ident,
         [$([$method:ident, $($entries:ident),*])*]
@@ -250,9 +273,26 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Do nothing if #[impl_may_write] is unspecified
+    // Implement SyscallMayWrite that potentially writes anything
+    (@impl_may_write
+        true,
+        false,
+        $Name:ident,
+        [$([$method:ident, $($entries:ident),*])*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {
+        $(#[$attrs])*
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayWrite<'a, M> for $Name {
+            fn may_write(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSliceMut<'a, u8>]>, $crate::Errno> {
+                $crate::syscalls::may_rw::RangesSyscallMayWriteBuilder::new(memory).may_write_anything().build()
+            }
+        }
+    };
+
+    // Do nothing if #[no_impl_may_write] is specified
     (@impl_may_write
         false,
+        $may_read_specified_only:ident,
         $Name:ident,
         [$($may_written_entries:tt)*]
         attrs: [$(#[$attrs:meta])*],
@@ -355,6 +395,8 @@ macro_rules! typed_syscall {
             ret: $ret:ty,
             impl_may_read: $impl_may_read:ident,
             impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -382,6 +424,8 @@ macro_rules! typed_syscall {
                     may_written: [$($may_written_entries)*],
                     impl_may_read: $impl_may_read,
                     impl_may_write: $impl_may_write,
+                    may_read_specified_only: $may_read_specified_only,
+                    may_write_specified_only: $may_write_specified_only,
                 }
             }
         }
@@ -692,18 +736,20 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Consume #[impl_may_read]
+    // Consume #[no_impl_may_read]
     (@accumulate_global_may_rw
         {
             vis: $vis:vis,
             name: $Name:ident,
             attrs: [
-                #[impl_may_read]
+                #[no_impl_may_read]
                 $(#[$($attrs:tt)*])*
             ],
             ret: $ret:ty,
             impl_may_read: $impl_may_read:ident,
             impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -716,8 +762,10 @@ macro_rules! typed_syscall {
                 name: $Name,
                 attrs: [$(#[$($attrs)*])*],
                 ret: $ret,
-                impl_may_read: true,
+                impl_may_read: false,
                 impl_may_write: $impl_may_write,
+                may_read_specified_only: $may_read_specified_only,
+                may_write_specified_only: $may_write_specified_only,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -725,18 +773,20 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Consume #[impl_may_write]
+    // Consume #[no_impl_may_write]
     (@accumulate_global_may_rw
         {
             vis: $vis:vis,
             name: $Name:ident,
             attrs: [
-                #[impl_may_write]
+                #[no_impl_may_write]
                 $(#[$($attrs:tt)*])*
             ],
             ret: $ret:ty,
             impl_may_read: $impl_may_read:ident,
             impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -750,7 +800,9 @@ macro_rules! typed_syscall {
                 attrs: [$(#[$($attrs)*])*],
                 ret: $ret,
                 impl_may_read: $impl_may_read,
-                impl_may_write: true,
+                impl_may_write: false,
+                may_read_specified_only: $may_read_specified_only,
+                may_write_specified_only: $may_write_specified_only,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -758,51 +810,20 @@ macro_rules! typed_syscall {
         }
     };
 
-    // Consume #[may_read_anything]
+    // Consume #[may_read_specified_only]
     (@accumulate_global_may_rw
         {
             vis: $vis:vis,
             name: $Name:ident,
             attrs: [
-                #[may_read_anything]
+                #[may_read_specified_only]
                 $(#[$($attrs:tt)*])*
             ],
             ret: $ret:ty,
             impl_may_read: $impl_may_read:ident,
             impl_may_write: $impl_may_write:ident,
-        },
-        [$($may_read_entries:tt)*],
-        [$($may_written_entries:tt)*],
-        $($vals:tt)*
-    ) => {
-        typed_syscall! {
-            @accumulate_global_may_rw
-            {
-                vis: $vis,
-                name: $Name,
-                attrs: [$(#[$($attrs)*])*],
-                ret: $ret,
-                impl_may_read: $impl_may_read,
-                impl_may_write: $impl_may_write,
-            },
-            [$($may_read_entries)* [may_read_anything, ]],
-            [$($may_written_entries)*],
-            $($vals)*
-        }
-    };
-
-    // Consume #[may_write_anything]
-    (@accumulate_global_may_rw
-        {
-            vis: $vis:vis,
-            name: $Name:ident,
-            attrs: [
-                #[may_write_anything]
-                $(#[$($attrs:tt)*])*
-            ],
-            ret: $ret:ty,
-            impl_may_read: $impl_may_read:ident,
-            impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -817,9 +838,48 @@ macro_rules! typed_syscall {
                 ret: $ret,
                 impl_may_read: $impl_may_read,
                 impl_may_write: $impl_may_write,
+                may_read_specified_only: true,
+                may_write_specified_only: $may_write_specified_only,
             },
             [$($may_read_entries)*],
-            [$($may_written_entries)* [may_write_anything, ]],
+            [$($may_written_entries)*],
+            $($vals)*
+        }
+    };
+
+    // Consume #[may_write_specified_only]
+    (@accumulate_global_may_rw
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[may_write_specified_only]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: $impl_may_read,
+                impl_may_write: $impl_may_write,
+                may_read_specified_only: $may_read_specified_only,
+                may_write_specified_only: true,
+            },
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
             $($vals)*
         }
     };
@@ -862,8 +922,10 @@ macro_rules! typed_syscall {
                 name: $Name,
                 attrs: [$(#[$($attrs)*])*],
                 ret: $ret,
-                impl_may_read: false,
-                impl_may_write: false,
+                impl_may_read: true,
+                impl_may_write: true,
+                may_read_specified_only: false,
+                may_write_specified_only: false,
             },
             // List of entries whose pointed target may be read by the syscall.
             [],

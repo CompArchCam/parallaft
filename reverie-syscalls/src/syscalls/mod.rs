@@ -505,8 +505,8 @@ syscall_list! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Read {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
@@ -518,8 +518,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Write {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
@@ -574,8 +574,8 @@ impl From<Creat> for Open {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Close {
         fd: i32,
     }
@@ -630,8 +630,8 @@ typed_syscall! {
 // Lseek not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Lseek {
         fd: i32,
         offset: libc::off_t,
@@ -640,8 +640,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Mprotect {
         addr: Option<AddrMut<libc::c_void>>,
         len: usize,
@@ -650,8 +650,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Munmap {
         addr: Option<Addr<libc::c_void>>,
         len: usize,
@@ -659,16 +659,16 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Brk {
         addr: Option<AddrMut<libc::c_void>>,
     }
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct RtSigaction {
         signum: i32,
         #[object_may_read]
@@ -696,10 +696,6 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[may_read_anything]
-    #[impl_may_write]
-    #[may_write_anything]
     pub struct Ioctl {
         fd: i32,
         request: {
@@ -718,8 +714,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Pread64 {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
@@ -761,8 +757,8 @@ typed_syscall! {
 // Access not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Access {
         #[path_ptr_may_read]
         path: Option<PathPtr>,
@@ -902,8 +898,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getpid {}
 }
 
@@ -1223,6 +1219,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[no_impl_may_read]
+    #[no_impl_may_write]
     pub struct Fcntl {
         /// The file descriptor to perform the operation on.
         fd: i32,
@@ -1337,8 +1335,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getcwd {
         // TODO: Replace this with a PathPtrMut.
         #[buf_may_written_with_len = size]
@@ -1416,8 +1414,8 @@ typed_syscall! {
 // Readlink not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Readlink {
         #[path_ptr_may_read]
         path: Option<PathPtr>,
@@ -1519,8 +1517,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getuid {}
 }
 
@@ -1533,8 +1531,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getgid {}
 }
 
@@ -1542,14 +1540,14 @@ typed_syscall! { pub struct Setuid { uid: libc::uid_t, } }
 typed_syscall! { pub struct Setgid { uid: libc::gid_t, } }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Geteuid {}
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getegid {}
 }
 
@@ -1861,6 +1859,8 @@ typed_syscall! {
 // ArchPrctl not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[no_impl_may_read]
+    #[no_impl_may_write]
     pub struct ArchPrctl {
         cmd: {
             fn get(&self) -> args::ArchPrctlCmd {
@@ -2256,8 +2256,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct SchedGetaffinity {
         pid: libc::pid_t,
         len: u32,
@@ -2367,7 +2367,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
+    #[may_read_specified_only]
+    #[no_impl_may_write]
     pub struct Getdents64 {
         fd: u32,
         dirent: Option<AddrMut<libc::dirent64>>,
@@ -2384,8 +2385,8 @@ impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Getdents64 {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct SetTidAddress {
         tidptr: Option<AddrMut<libc::c_int>>,
     }
@@ -2699,8 +2700,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Openat {
         dirfd: i32,
         #[path_ptr_may_read]
@@ -2824,7 +2825,8 @@ typed_syscall! {
 // Newfstatat not available in aarch64
 #[cfg(target_arch = "x86_64")]
 typed_syscall! {
-    #[impl_may_read]
+    #[may_read_specified_only]
+    #[no_impl_may_write]
     pub struct Newfstatat {
         dirfd: i32,
         #[path_ptr_may_read]
@@ -3358,8 +3360,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Prlimit64 {
         pid: libc::pid_t,
         resource: u32,
@@ -3528,8 +3530,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
-    #[impl_may_read]
-    #[impl_may_write]
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getrandom {
         #[buf_may_written_with_len = buflen]
         /// The buffer should never be NULL (None), or this represents an invalid call when passed
