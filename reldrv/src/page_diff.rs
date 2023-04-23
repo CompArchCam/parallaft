@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::IoSliceMut;
 
 use log::{info, trace};
@@ -19,10 +20,28 @@ pub fn page_diff(
     pages_p1: &Vec<u64>,
     pages_p2: &Vec<u64>,
 ) -> Result<PageDiffResult, ()> {
-    if pages_p1 != pages_p2 {
-        info!("Page sets do not match");
-        return Ok(PageDiffResult::PageSetDiff);
-    }
+    // if pages_p1 != pages_p2 {
+    //     info!("Page sets do not match");
+    //     info!(
+    //         "Pages P1: {:?}",
+    //         pages_p1
+    //             .into_iter()
+    //             .map(|&p| p as *const u8)
+    //             .collect::<Vec<*const u8>>()
+    //     );
+    //     info!(
+    //         "Pages P2: {:?}",
+    //         pages_p2
+    //             .into_iter()
+    //             .map(|&p| p as *const u8)
+    //             .collect::<Vec<*const u8>>()
+    //     );
+    //     return Ok(PageDiffResult::PageSetDiff);
+    // }
+
+    let mut pages: HashSet<u64> = HashSet::new();
+    pages.extend(pages_p1.iter());
+    pages.extend(pages_p2.iter());
 
     let block_size = 128;
     let page_size = sysconf(nix::unistd::SysconfVar::PAGE_SIZE)
@@ -31,10 +50,10 @@ pub fn page_diff(
     let mut buf_p1 = vec![0_u8; block_size * page_size];
     let mut buf_p2 = vec![0_u8; block_size * page_size];
 
-    let remote_iovs: Vec<RemoteIoVec> = pages_p1
+    let remote_iovs: Vec<RemoteIoVec> = pages
         .into_iter()
         .map(|p| RemoteIoVec {
-            base: *p as _,
+            base: p as _,
             len: page_size,
         })
         .collect();
@@ -61,7 +80,13 @@ pub fn page_diff(
 
         if buf_p1 != buf_p2 {
             let pages: Vec<u64> = remote_iov.iter().map(|i| i.base as _).collect();
-            info!("Page data does not match: {:#018x?}", &pages);
+            info!(
+                "Page data does not match: {:?}",
+                &pages
+                    .into_iter()
+                    .map(|p| p as *const u8)
+                    .collect::<Vec<*const u8>>()
+            );
             return Ok(PageDiffResult::PageDataDiff);
         }
     }

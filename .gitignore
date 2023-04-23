@@ -5,3 +5,4 @@ run
 *.svg
 stresstest.sh
 experiment/
+a.out

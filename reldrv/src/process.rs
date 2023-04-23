@@ -21,7 +21,9 @@ use parasite::commands::{Request, Response};
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
-use crate::{dirty_page_tracer::DirtyPageTracer, page_diff::page_diff};
+use crate::{
+    dirty_page_tracer::DirtyPageTracer, page_diff::page_diff, remote_memory::RemoteMemory,
+};
 
 use std::sync::mpsc;
 
@@ -34,6 +36,7 @@ pub struct Process {
     tracer_pid: Pid,
     tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
     dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
+    memory: Mutex<RemoteMemory>,
 }
 
 #[allow(unused)]
@@ -48,7 +51,89 @@ impl Process {
             tracer_pid,
             tracer_op_tx,
             dirty_page_tracer: Mutex::new(None),
+            memory: Mutex::new(RemoteMemory::new(pid)),
         }
+    }
+
+    pub fn set_syscall_args(
+        &self,
+        args: SyscallArgs,
+        old_regs: Option<user_regs_struct>,
+    ) -> user_regs_struct {
+        let mut new_regs = old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
+
+        if cfg!(target_arch = "x86_64") {
+            new_regs.rdi = args.arg0 as _;
+            new_regs.rsi = args.arg1 as _;
+            new_regs.rdx = args.arg2 as _;
+            new_regs.rcx = args.arg3 as _;
+            new_regs.r8 = args.arg4 as _;
+            new_regs.r9 = args.arg5 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        ptrace::setregs(self.pid, new_regs).unwrap();
+        new_regs
+    }
+
+    pub fn set_syscall(
+        &self,
+        nr: Sysno,
+        args: SyscallArgs,
+        old_regs: Option<user_regs_struct>,
+    ) -> user_regs_struct {
+        let mut new_regs = old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
+
+        if cfg!(target_arch = "x86_64") {
+            new_regs.orig_rax = nr.id() as _;
+            new_regs.rax = nr.id() as _;
+            new_regs.rdi = args.arg0 as _;
+            new_regs.rsi = args.arg1 as _;
+            new_regs.rdx = args.arg2 as _;
+            new_regs.rcx = args.arg3 as _;
+            new_regs.r8 = args.arg4 as _;
+            new_regs.r9 = args.arg5 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        ptrace::setregs(self.pid, new_regs).unwrap();
+        new_regs
+    }
+
+    pub fn set_syscall_ret_val(
+        &self,
+        ret_val: isize,
+        old_regs: Option<user_regs_struct>,
+    ) -> user_regs_struct {
+        let mut new_regs: user_regs_struct =
+            old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
+
+        if cfg!(target_arch = "x86_64") {
+            new_regs.rax = ret_val as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        ptrace::setregs(self.pid, new_regs).unwrap();
+        new_regs
+    }
+
+    /// Skip the syscall by rewriting the current sysno to a nonexistent one.
+    pub fn skip_syscall(&self, old_regs: Option<user_regs_struct>) -> user_regs_struct {
+        let mut new_regs: user_regs_struct =
+            old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
+
+        if cfg!(target_arch = "x86_64") {
+            new_regs.orig_rax = 0xff77 as _;
+            new_regs.rax = 0xff77 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        ptrace::setregs(self.pid, new_regs).unwrap();
+        new_regs
     }
 
     pub fn compel_prepare<T: Send + Copy, R: Send + Copy>(&self) -> ParasiteCtl<T, R> {
@@ -78,22 +163,7 @@ impl Process {
         let (saved_regs, saved_sigmask) = Self::save_state(self.pid);
 
         // prepare the injected syscall number and arguments
-        let mut new_regs = saved_regs;
-
-        if cfg!(target_arch = "x86_64") {
-            new_regs.orig_rax = nr.id() as _;
-            new_regs.rax = nr.id() as _;
-            new_regs.rdi = args.arg0 as _;
-            new_regs.rsi = args.arg1 as _;
-            new_regs.rdx = args.arg2 as _;
-            new_regs.rcx = args.arg3 as _;
-            new_regs.r8 = args.arg4 as _;
-            new_regs.r9 = args.arg5 as _;
-        } else {
-            panic!("Unsupported architecture");
-        }
-
-        ptrace::setregs(self.pid, new_regs).unwrap();
+        self.set_syscall(nr, args, Some(saved_regs));
 
         // block signals during our injected syscall
         ptrace::setsigmask(self.pid, !0).unwrap();
@@ -367,6 +437,14 @@ impl Process {
         );
         child
     }
+
+    pub fn memory(&self) -> MutexGuard<RemoteMemory> {
+        self.memory.lock()
+    }
+
+    // pub fn memory_mut(&self) -> RefMut<RemoteMemory> {
+    //     self.memory.borrow_mut()
+    // }
 }
 
 impl Debug for Process {
@@ -389,3 +467,32 @@ impl Drop for Process {
         }
     }
 }
+
+// struct ProcessMap {
+//     inner: HashMap<Pid, Weak<Process>>,
+// }
+
+// impl ProcessMap {
+//     pub fn new() -> Self {
+//         Self {
+//             inner: HashMap::new(),
+//         }
+//     }
+
+//     pub fn add_process(&mut self, process: Rc<Process>) {
+//         self.inner.insert(process.pid, Rc::downgrade(&process));
+//     }
+
+//     pub fn find_process_by_pid(&mut self, pid: Pid) -> Option<Rc<Process>> {
+//         self.inner.get(&pid).and_then(|process| {
+//             process.upgrade().or_else(|| {
+//                 self.inner.remove(&pid);
+//                 None
+//             })
+//         })
+//     }
+
+//     pub fn cleanup(&mut self) {
+//         self.inner.retain(|pid, process| process.strong_count() > 0)
+//     }
+// }
