@@ -1021,6 +1021,30 @@ macro_rules! syscall_list {
             }
         }
 
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayRead<'a, M> for $name {
+            fn may_read(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSlice<'a, u8>]>, $crate::Errno> {
+                match self {
+                    $(
+                        $(#[$inner])*
+                        $name::$item(x) => x.may_read(memory),
+                    )*
+                    $name::Other(_num, _args) => $crate::syscalls::may_rw::RangesSyscallMayReadBuilder::new(memory).may_read_anything().build(),
+                }
+            }
+        }
+
+        impl<'a, M: MemoryAccess> $crate::syscalls::may_rw::SyscallMayWrite<'a, M> for $name {
+            fn may_write(&'a self, memory: &'a M) -> Result<Box<[::reverie_memory::AddrSliceMut<'a, u8>]>, $crate::Errno> {
+                match self {
+                    $(
+                        $(#[$inner])*
+                        $name::$item(x) => x.may_write(memory),
+                    )*
+                    $name::Other(_num, _args) => $crate::syscalls::may_rw::RangesSyscallMayWriteBuilder::new(memory).may_write_anything().build(),
+                }
+            }
+        }
+
         $(
             $(#[$inner])*
             impl From<$item> for $name {
