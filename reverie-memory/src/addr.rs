@@ -466,6 +466,11 @@ impl<'a, T> AddrSliceMut<'a, T> {
     pub unsafe fn as_mut_ptr(&mut self) -> *mut T {
         self.inner.as_mut_ptr()
     }
+
+    /// Returns the raw immutable pointer.
+    pub unsafe fn as_ptr(&self) -> *const T {
+        self.inner.as_ptr()
+    }
 }
 
 impl<'a> AddrSliceMut<'a, u8> {
