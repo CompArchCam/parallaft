@@ -212,6 +212,8 @@ bitflags! {
         const NO_MEM_CHECK = 0b00000010;
         const DONT_RUN_CHECKER = 0b00000100;
         const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
+
+        #[cfg(feature = "compel")]
         const USE_LIBCOMPEL = 0b00010000;
         const DONT_FORK = 0b00100000;
     }
@@ -273,7 +275,12 @@ impl<'c> CheckCoordinator<'c> {
 
             let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
             let clone_signal = None;
+
+            #[cfg(feature = "compel")]
             let use_libcompel = self.flags.contains(CheckCoordinatorFlags::USE_LIBCOMPEL);
+
+            #[cfg(not(feature = "compel"))]
+            let use_libcompel = false;
 
             if !is_finishing {
                 let reference = self

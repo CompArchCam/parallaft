@@ -911,6 +911,7 @@ dependencies = [
  "procfs",
  "reverie-syscalls",
  "serial_test",
+ "syscalls",
  "tempfile",
  "tokio",
 ]

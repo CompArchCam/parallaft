@@ -3,7 +3,9 @@
 
 mod checkpoint;
 mod client_control;
+#[cfg(feature = "compel")]
 mod compel_parasite;
+
 mod dirty_page_tracer;
 mod page_diff;
 mod process;
@@ -66,6 +68,7 @@ struct CliArgs {
     #[arg(long)]
     sync_mem_check: bool,
 
+    #[cfg(feature = "compel")]
     /// Use libcompel for syscall injection, instead of using ptrace directly.
     #[arg(long)]
     use_libcompel: bool,
@@ -340,6 +343,8 @@ fn run(
 #[tokio::main]
 async fn main() -> ExitCode {
     env_logger::init();
+
+    #[cfg(feature = "compel")]
     compel::log_init(log::Level::Error);
 
     let cli = CliArgs::parse();
@@ -360,6 +365,8 @@ async fn main() -> ExitCode {
         cli.dont_clear_soft_dirty,
     );
     check_coord_flags.set(CheckCoordinatorFlags::DONT_FORK, cli.dont_fork);
+
+    #[cfg(feature = "compel")]
     check_coord_flags.set(CheckCoordinatorFlags::USE_LIBCOMPEL, cli.use_libcompel);
 
     let exit_status = run(
@@ -380,7 +387,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    use std::{path::Path, process::ExitStatus};
+    use std::{path::Path};
 
     fn compile(filename: &'static str) -> (&'static str, TempDir) {
         let out_dir = tempfile::tempdir().unwrap();

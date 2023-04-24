@@ -1,11 +1,15 @@
 use std::fmt::Debug;
 
-use compel::{
-    syscalls::{syscall_args, SyscallArgs, Sysno},
-    ParasiteCtl,
-};
+#[cfg(feature = "compel")]
+use compel::ParasiteCtl;
 
-use log::{debug, info};
+#[cfg(feature = "compel")]
+use parasite::commands::{Request, Response};
+
+#[cfg(feature = "compel")]
+use log::debug;
+
+use log::info;
 use nix::libc::user_regs_struct;
 use nix::{
     errno::Errno,
@@ -17,7 +21,7 @@ use nix::{
     },
     unistd::{gettid, Pid},
 };
-use parasite::commands::{Request, Response};
+use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
@@ -130,11 +134,13 @@ impl Process {
         Registers::read_from(self.pid)
     }
 
+    #[cfg(feature = "compel")]
     pub fn compel_prepare<T: Send + Copy, R: Send + Copy>(&self) -> ParasiteCtl<T, R> {
         compel::ParasiteCtl::<T, R>::prepare(self.pid.as_raw())
             .expect("failed to prepare parasite ctl")
     }
 
+    #[cfg(feature = "compel")]
     pub fn syscall(&self, nr: Sysno, args: SyscallArgs) -> i64 {
         self.compel_prepare::<Request, Response>()
             .syscall(nr, args)
@@ -404,10 +410,11 @@ impl Process {
         &self,
         flags: CloneFlags,
         signal: Option<Signal>,
-        use_libcompel: bool,
+        use_libcompel: bool, // ignored if `compel` feature is disabled
     ) -> Process {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
+        #[cfg(feature = "compel")]
         let child_pid = if use_libcompel {
             debug!("Using libcompel for syscall injection");
             self.syscall(Sysno::clone, syscall_args!(clone_flags, 0, 0, 0, 0))
@@ -420,6 +427,14 @@ impl Process {
                 true,
             )
         };
+
+        #[cfg(not(feature = "compel"))]
+        let child_pid = self.syscall_direct(
+            Sysno::clone,
+            syscall_args!(clone_flags, 0, 0, 0, 0),
+            false,
+            true,
+        );
 
         let child = Process::new(
             Pid::from_raw(child_pid as _),
