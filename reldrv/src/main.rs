@@ -125,7 +125,8 @@ fn parent_work(
         child_pid,
         ptrace::Options::PTRACE_O_TRACESYSGOOD
             | ptrace::Options::PTRACE_O_TRACECLONE
-            | ptrace::Options::PTRACE_O_TRACEFORK,
+            | ptrace::Options::PTRACE_O_TRACEFORK
+            | ptrace::Options::PTRACE_O_EXITKILL,
     )
     .unwrap();
 
