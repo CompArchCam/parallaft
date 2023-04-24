@@ -1,6 +1,3 @@
-#![feature(trace_macros)]
-#![feature(linked_list_cursors)]
-
 mod checkpoint;
 mod client_control;
 #[cfg(feature = "compel")]
