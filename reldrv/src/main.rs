@@ -372,3 +372,98 @@ async fn main() -> ExitCode {
 
     ExitCode::from(exit_status as u8)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use std::{path::Path, process::ExitStatus};
+
+    fn compile(filename: &'static str) -> (&'static str, TempDir) {
+        let out_dir = tempfile::tempdir().unwrap();
+
+        let output = filename.strip_suffix(".c").unwrap();
+
+        let exit_code = Command::new("cc")
+            .arg("-O0")
+            .arg(Path::new("./tests").join(filename))
+            .arg("-o")
+            .arg(out_dir.path().join(output))
+            .status()
+            .unwrap();
+
+        assert!(exit_code.success());
+
+        (output, out_dir)
+    }
+
+    fn run_reldrv(cmd: &mut Command) -> i32 {
+        run(
+            cmd,
+            &vec![],
+            &vec![],
+            RunnerFlags::empty(),
+            CheckCoordinatorFlags::empty(),
+            0,
+        )
+    }
+
+    #[tokio::test]
+    #[serial] // we don't allow a single tracer to trace multiple processes
+    async fn test_syscall_replication_handling() {
+        let (output, out_dir) = compile("syscall_brk.c");
+        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+        assert_eq!(exit_code, 0)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_syscall_memrw_handling_read_write() {
+        let (output, out_dir) = compile("syscall_read_write.c");
+        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+        assert_eq!(exit_code, 0)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_syscall_memrw_handling_getpid() {
+        let (output, out_dir) = compile("syscall_getpid.c");
+        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+        assert_eq!(exit_code, 0)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_syscall_mmap_handling() {
+        let (output, out_dir) = compile("syscall_mmap.c");
+        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+        assert_eq!(exit_code, 0)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_syscall_mremap_handling() {
+        let (output, out_dir) = compile("syscall_mremap.c");
+        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+        assert_eq!(exit_code, 0)
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[should_panic]
+    async fn test_syscall_unknown_memrw_handling() {
+        let (output, out_dir) = compile("unknown_memrw.c");
+        run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[should_panic]
+    async fn test_vdso_handling() {
+        // we don't support vdso handling now
+        let (output, out_dir) = compile("syscall_clock_gettime.c");
+        run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    }
+}

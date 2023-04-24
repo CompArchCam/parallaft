@@ -22,6 +22,10 @@ reverie-syscalls = { path = "../reverie-syscalls" }
 [build-dependencies]
 cc = "1.0.78"
 
+[dev-dependencies]
+serial_test = "2.0.0"
+tempfile = "3"
+
 [profile.release]
 debug = true
 
