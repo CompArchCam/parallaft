@@ -17,6 +17,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo -C reldrv build --verbose
+      working-directory: reldrv
+      run: cargo build --verbose
     - name: Run tests
-      run: cargo -C reldrv test --verbose
+      working-directory: reldrv
+      run: cargo test --verbose
