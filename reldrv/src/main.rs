@@ -463,12 +463,13 @@ mod tests {
         run_reldrv(&mut Command::new(out_dir.path().join(output)));
     }
 
-    #[tokio::test]
-    #[serial]
-    #[should_panic]
-    async fn test_vdso_handling() {
-        // we don't support vdso handling now
-        let (output, out_dir) = compile("syscall_clock_gettime.c");
-        run_reldrv(&mut Command::new(out_dir.path().join(output)));
-    }
+    // // below is unreliable as some systems do not have vdso
+    // #[tokio::test]
+    // #[serial]
+    // #[should_panic]
+    // async fn test_vdso_handling() {
+    //     // we don't support vdso handling now
+    //     let (output, out_dir) = compile("syscall_clock_gettime.c");
+    //     run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    // }
 }
