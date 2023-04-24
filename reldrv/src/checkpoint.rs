@@ -14,7 +14,9 @@ use nix::{sched::CloneFlags, unistd::Pid};
 
 use parking_lot::{Mutex, RwLock};
 
-use reverie_syscalls::{Addr, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno};
+use reverie_syscalls::{
+    Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
+};
 use tokio::task;
 
 use crate::client_control;
@@ -643,12 +645,38 @@ impl<'c> CheckCoordinator<'c> {
                                 .write();
                         }
                     }
-
-                    // TODO: handle mmap
                 }
                 Syscall::Mremap(mremap) => {
-                    // TODO: handle mremap
-                    todo!("handle mremap");
+                    if is_main {
+                        active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
+                            syscall,
+                            kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                            exit_action: SyscallExitAction::Custom,
+                        });
+                    } else {
+                        let saved_syscall = active_segment
+                            .syscall_log
+                            .front()
+                            .expect("spurious syscall made by checker");
+
+                        assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
+
+                        if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
+                            // rewrite only if mmap has succeeded
+                            let mremap = mremap
+                                .with_new_addr(AddrMut::from_ptr(saved_syscall.ret_val as _))
+                                .with_flags(mremap.flags() | nix::libc::MREMAP_FIXED as usize);
+
+                            let (new_sysno, new_args) = mremap.into_parts();
+                            active_segment
+                                .checker()
+                                .unwrap()
+                                .registers()
+                                .with_sysno(new_sysno)
+                                .with_syscall_args(new_args)
+                                .write();
+                        }
+                    }
                 }
                 _ => {
                     // replicate memory written by the syscall in the checker
