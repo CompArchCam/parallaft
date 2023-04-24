@@ -606,7 +606,11 @@ impl<'c> CheckCoordinator<'c> {
                         );
 
                         let (new_sysno, new_args) = mmap.into_parts();
-                        self.main.set_syscall(new_sysno, new_args, None);
+                        self.main
+                            .registers()
+                            .with_sysno(new_sysno)
+                            .with_syscall_args(new_args)
+                            .write();
 
                         active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                             syscall,
@@ -633,7 +637,10 @@ impl<'c> CheckCoordinator<'c> {
                             active_segment
                                 .checker()
                                 .unwrap()
-                                .set_syscall(new_sysno, new_args, None);
+                                .registers()
+                                .with_sysno(new_sysno)
+                                .with_syscall_args(new_args)
+                                .write();
                         }
                     }
 
@@ -718,7 +725,12 @@ impl<'c> CheckCoordinator<'c> {
                             panic!("spurious syscall made by checker {:}", pid);
                         }
 
-                        active_segment.checker().unwrap().skip_syscall(None);
+                        active_segment
+                            .checker()
+                            .unwrap()
+                            .registers()
+                            .with_syscall_skipped()
+                            .write();
                     }
                 }
             }
@@ -759,7 +771,9 @@ impl<'c> CheckCoordinator<'c> {
                                 active_segment
                                     .checker()
                                     .unwrap()
-                                    .set_syscall_args(args, None);
+                                    .registers()
+                                    .with_syscall_args(args)
+                                    .write();
                             }
                             _ => panic!("unhandled custom syscall during syscall exit"),
                         }
@@ -786,7 +800,9 @@ impl<'c> CheckCoordinator<'c> {
                             active_segment
                                 .checker()
                                 .unwrap()
-                                .set_syscall_ret_val(saved_syscall.ret_val, None);
+                                .registers()
+                                .with_syscall_ret_val(saved_syscall.ret_val)
+                                .write();
                             mem_written.dump(&mut memory).unwrap();
                         }
                         _ => panic!(),
@@ -804,7 +820,9 @@ impl<'c> CheckCoordinator<'c> {
                                 active_segment
                                     .checker()
                                     .unwrap()
-                                    .set_syscall_args(args, None);
+                                    .registers()
+                                    .with_syscall_args(args)
+                                    .write();
                             }
                             _ => panic!("unhandled custom syscall during syscall exit"),
                         }

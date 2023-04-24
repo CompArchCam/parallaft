@@ -39,6 +39,77 @@ pub struct Process {
     memory: Mutex<RemoteMemory>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Registers {
+    pid: Pid,
+    inner: user_regs_struct,
+}
+
+impl Registers {
+    pub fn read_from(pid: Pid) -> Self {
+        Self {
+            pid,
+            inner: ptrace::getregs(pid).unwrap(),
+        }
+    }
+
+    pub fn with_sysno(mut self, nr: Sysno) -> Self {
+        if cfg!(target_arch = "x86_64") {
+            self.inner.orig_rax = nr.id() as _;
+            self.inner.rax = nr.id() as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        self
+    }
+
+    pub fn with_syscall_args(mut self, args: SyscallArgs) -> Self {
+        if cfg!(target_arch = "x86_64") {
+            self.inner.rdi = args.arg0 as _;
+            self.inner.rsi = args.arg1 as _;
+            self.inner.rdx = args.arg2 as _;
+            self.inner.rcx = args.arg3 as _;
+            self.inner.r8 = args.arg4 as _;
+            self.inner.r9 = args.arg5 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        self
+    }
+
+    pub fn with_syscall_ret_val(mut self, ret_val: isize) -> Self {
+        if cfg!(target_arch = "x86_64") {
+            self.inner.rax = ret_val as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        self
+    }
+
+    /// Skip the syscall by rewriting the current sysno to a nonexistent one.
+    pub fn with_syscall_skipped(mut self) -> Self {
+        if cfg!(target_arch = "x86_64") {
+            self.inner.orig_rax = 0xff77 as _;
+            self.inner.rax = 0xff77 as _;
+        } else {
+            panic!("Unsupported architecture");
+        }
+
+        self
+    }
+
+    pub fn write(self) {
+        ptrace::setregs(self.pid, self.inner).unwrap()
+    }
+
+    pub fn write_to(self, pid: Pid) {
+        ptrace::setregs(pid, self.inner).unwrap()
+    }
+}
+
 #[allow(unused)]
 impl Process {
     pub fn new(
@@ -55,85 +126,8 @@ impl Process {
         }
     }
 
-    pub fn set_syscall_args(
-        &self,
-        args: SyscallArgs,
-        old_regs: Option<user_regs_struct>,
-    ) -> user_regs_struct {
-        let mut new_regs = old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
-
-        if cfg!(target_arch = "x86_64") {
-            new_regs.rdi = args.arg0 as _;
-            new_regs.rsi = args.arg1 as _;
-            new_regs.rdx = args.arg2 as _;
-            new_regs.rcx = args.arg3 as _;
-            new_regs.r8 = args.arg4 as _;
-            new_regs.r9 = args.arg5 as _;
-        } else {
-            panic!("Unsupported architecture");
-        }
-
-        ptrace::setregs(self.pid, new_regs).unwrap();
-        new_regs
-    }
-
-    pub fn set_syscall(
-        &self,
-        nr: Sysno,
-        args: SyscallArgs,
-        old_regs: Option<user_regs_struct>,
-    ) -> user_regs_struct {
-        let mut new_regs = old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
-
-        if cfg!(target_arch = "x86_64") {
-            new_regs.orig_rax = nr.id() as _;
-            new_regs.rax = nr.id() as _;
-            new_regs.rdi = args.arg0 as _;
-            new_regs.rsi = args.arg1 as _;
-            new_regs.rdx = args.arg2 as _;
-            new_regs.rcx = args.arg3 as _;
-            new_regs.r8 = args.arg4 as _;
-            new_regs.r9 = args.arg5 as _;
-        } else {
-            panic!("Unsupported architecture");
-        }
-
-        ptrace::setregs(self.pid, new_regs).unwrap();
-        new_regs
-    }
-
-    pub fn set_syscall_ret_val(
-        &self,
-        ret_val: isize,
-        old_regs: Option<user_regs_struct>,
-    ) -> user_regs_struct {
-        let mut new_regs: user_regs_struct =
-            old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
-
-        if cfg!(target_arch = "x86_64") {
-            new_regs.rax = ret_val as _;
-        } else {
-            panic!("Unsupported architecture");
-        }
-
-        ptrace::setregs(self.pid, new_regs).unwrap();
-        new_regs
-    }
-
-    /// Skip the syscall by rewriting the current sysno to a nonexistent one.
-    pub fn skip_syscall(&self, old_regs: Option<user_regs_struct>) -> user_regs_struct {
-        let mut new_regs: user_regs_struct =
-            old_regs.unwrap_or_else(|| ptrace::getregs(self.pid).unwrap());
-
-        if cfg!(target_arch = "x86_64") {
-            new_regs.orig_rax = 0xff77 as _;
-            new_regs.rax = 0xff77 as _;
-        } else {
-            panic!("Unsupported architecture");
-        }
-
-        ptrace::setregs(self.pid, new_regs).unwrap();
-        new_regs
+    pub fn registers(&self) -> Registers {
+        Registers::read_from(self.pid)
     }
 
     pub fn compel_prepare<T: Send + Copy, R: Send + Copy>(&self) -> ParasiteCtl<T, R> {
@@ -163,7 +157,7 @@ impl Process {
         let (saved_regs, saved_sigmask) = Self::save_state(self.pid);
 
         // prepare the injected syscall number and arguments
-        self.set_syscall(nr, args, Some(saved_regs));
+        saved_regs.with_sysno(nr).with_syscall_args(args).write();
 
         // block signals during our injected syscall
         ptrace::setsigmask(self.pid, !0).unwrap();
@@ -224,16 +218,13 @@ impl Process {
         syscall_ret
     }
 
-    fn save_state(pid: Pid) -> (user_regs_struct, u64) {
-        (
-            ptrace::getregs(pid).unwrap(),
-            ptrace::getsigmask(pid).unwrap(),
-        )
+    fn save_state(pid: Pid) -> (Registers, u64) {
+        (Registers::read_from(pid), ptrace::getsigmask(pid).unwrap())
     }
 
     fn restore_state(
         pid: Pid,
-        saved_regs: user_regs_struct,
+        saved_regs: Registers,
         saved_sigmask: u64,
         restart_old_syscall: bool,
     ) {
@@ -243,17 +234,17 @@ impl Process {
             // jump back to the previous instruction
             if cfg!(target_arch = "x86_64") {
                 let last_instr =
-                    (ptrace::read(pid, (saved_regs.rip - 2) as _).unwrap() as u64) & 0xffff;
+                    (ptrace::read(pid, (saved_regs.inner.rip - 2) as _).unwrap() as u64) & 0xffff;
                 assert_eq!(last_instr, 0x050f);
-                saved_regs.rip -= 2;
-                saved_regs.rax = saved_regs.orig_rax;
+                saved_regs.inner.rip -= 2;
+                saved_regs.inner.rax = saved_regs.inner.orig_rax;
             } else {
                 panic!("Unsupported architecture");
             }
         }
 
         // restore the registers
-        ptrace::setregs(pid, saved_regs).unwrap();
+        saved_regs.write_to(pid);
 
         if restart_old_syscall {
             // execute the original syscall
@@ -268,7 +259,7 @@ impl Process {
             let syscall_info = ptrace::getsyscallinfo(pid).unwrap();
 
             let orig_nr = if cfg!(target_arch = "x86_64") {
-                saved_regs.orig_rax as usize
+                saved_regs.inner.orig_rax as usize
             } else {
                 panic!("Unsupported architecture");
             };
