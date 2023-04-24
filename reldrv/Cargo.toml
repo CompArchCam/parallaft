@@ -5,6 +5,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[patch."https://github.com/rust-lang/libc"]
+libc = { git = "https://github.com/mbyzhang/libc.git" }
+
 [dependencies]
 clap = { version = "4.1.1", features = ["derive"] }
 env_logger = "0.10.0"
