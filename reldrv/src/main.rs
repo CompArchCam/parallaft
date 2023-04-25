@@ -10,7 +10,9 @@ mod remote_memory;
 mod saved_syscall;
 
 use std::collections::HashMap;
+use std::fs;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -74,6 +76,10 @@ struct CliArgs {
     #[arg(long)]
     dump_stats: bool,
 
+    /// File to dump stats to.
+    #[arg(long)]
+    stats_output: Option<PathBuf>,
+
     /// Checkpoint frequency to pass to the main process.
     #[arg(long, default_value_t = 1)]
     checkpoint_freq: u32,
@@ -105,6 +111,7 @@ fn parent_work(
     main_cpu_set: &Vec<usize>,
     flags: RunnerFlags,
     check_coord_flags: CheckCoordinatorFlags,
+    stats_output: Option<PathBuf>,
 ) -> i32 {
     info!("Starting");
 
@@ -290,17 +297,29 @@ fn parent_work(
 
     let all_exec_time = exec_start_time.elapsed();
 
-    if flags.contains(RunnerFlags::DUMP_STATS) {
+    if flags.contains(RunnerFlags::DUMP_STATS) || stats_output.is_some() {
         let nr_checkpoints = check_coord.epoch();
-        println!("main_exec_time={}", main_exec_time.as_secs_f64());
-        println!("all_exec_time={}", all_exec_time.as_secs_f64());
-        println!("nr_checkpoints={}", nr_checkpoints);
-        println!(
-            "avg_checkpoint_freq={}",
-            (nr_checkpoints as f64) / main_exec_time.as_secs_f64()
-        );
-        println!("avg_nr_dirty_pages={}", check_coord.avg_nr_dirty_pages());
-        println!("syscall_cnt={}", syscall_cnt);
+
+        let mut s = [
+            format!("main_exec_time={}", main_exec_time.as_secs_f64()),
+            format!("all_exec_time={}", all_exec_time.as_secs_f64()),
+            format!("nr_checkpoints={}", nr_checkpoints),
+            format!(
+                "avg_checkpoint_freq={}",
+                (nr_checkpoints as f64) / main_exec_time.as_secs_f64()
+            ),
+            format!("avg_nr_dirty_pages={}", check_coord.avg_nr_dirty_pages()),
+            format!("syscall_cnt={}", syscall_cnt),
+        ]
+        .join("\n");
+
+        s.push_str("\n");
+
+        if let Some(output_path) = stats_output {
+            fs::write(output_path, s).unwrap();
+        } else {
+            print!("{}", s);
+        }
     }
 
     exit_status.unwrap()
@@ -313,6 +332,7 @@ fn run(
     runner_flags: RunnerFlags,
     check_coord_flags: CheckCoordinatorFlags,
     checkpoint_freq: u32,
+    stats_output: Option<PathBuf>,
 ) -> i32 {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => parent_work(
@@ -321,6 +341,7 @@ fn run(
             main_cpu_set,
             runner_flags,
             check_coord_flags,
+            stats_output,
         ),
         Ok(ForkResult::Child) => {
             let err = unsafe {
@@ -373,6 +394,7 @@ async fn main() -> ExitCode {
         runner_flags,
         check_coord_flags,
         cli.checkpoint_freq,
+        cli.stats_output,
     );
 
     ExitCode::from(exit_status as u8)
@@ -384,7 +406,7 @@ mod tests {
     use serial_test::serial;
     use tempfile::TempDir;
 
-    use std::{path::Path};
+    use std::path::Path;
 
     fn compile(filename: &'static str) -> (&'static str, TempDir) {
         let out_dir = tempfile::tempdir().unwrap();
@@ -412,6 +434,7 @@ mod tests {
             RunnerFlags::empty(),
             CheckCoordinatorFlags::empty(),
             0,
+            None,
         )
     }
 
