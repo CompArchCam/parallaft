@@ -10,7 +10,7 @@ mod remote_memory;
 mod saved_syscall;
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -79,6 +79,10 @@ struct CliArgs {
     /// File to dump stats to.
     #[arg(long)]
     stats_output: Option<PathBuf>,
+
+    /// File to write logs to.
+    #[arg(long)]
+    log_output: Option<PathBuf>,
 
     /// Checkpoint frequency to pass to the main process.
     #[arg(long, default_value_t = 1)]
@@ -360,12 +364,29 @@ fn run(
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    env_logger::init();
-
     #[cfg(feature = "compel")]
     compel::log_init(log::Level::Error);
 
     let cli = CliArgs::parse();
+
+    if let Some(log_output) = cli.log_output {
+        let log_file = Box::new(
+            OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(log_output)
+                .expect("Can't create file"),
+        );
+
+        env_logger::Builder::new()
+            .parse_default_env()
+            .target(env_logger::Target::Pipe(log_file))
+            .init();
+
+        log_panics::init();
+    } else {
+        env_logger::init();
+    }
 
     let mut runner_flags = RunnerFlags::empty();
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
