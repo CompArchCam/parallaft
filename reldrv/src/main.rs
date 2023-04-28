@@ -8,6 +8,7 @@ mod page_diff;
 mod process;
 mod remote_memory;
 mod saved_syscall;
+mod segments;
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
