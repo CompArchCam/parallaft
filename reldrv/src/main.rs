@@ -515,6 +515,14 @@ mod tests {
         run_reldrv(&mut Command::new(out_dir.path().join(output)));
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_no_checkpoint_fini() {
+        // if checkpoint_fini is not called explicitly by the user program, reldrv should make a finalizing checkpoint automatically on main exit.
+        let (output, out_dir) = compile("ckpt_no_fini.c");
+        run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    }
+
     // // below is unreliable as some systems do not have vdso
     // #[tokio::test]
     // #[serial]

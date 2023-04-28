@@ -177,6 +177,7 @@ impl Segment {
 
 type SegmentList = RwLock<LinkedList<Arc<Mutex<Segment>>>>;
 
+#[derive(Debug)]
 pub struct SegmentChain {
     main_pid: Pid,
     inner: SegmentList,
