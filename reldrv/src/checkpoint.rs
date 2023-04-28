@@ -130,6 +130,9 @@ impl<'c> CheckCoordinator<'c> {
 
                     info!("New checkpoint: {:?}", checkpoint);
                     self.add_checkpoint(checkpoint, None);
+                } else {
+                    info!("No-op checkpoint_fini");
+                    self.main.resume();
                 }
             }
         } else if let Some(segment) = self.segments.get_segment_by_checker_pid(pid) {

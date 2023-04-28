@@ -508,6 +508,13 @@ mod tests {
         run_reldrv(&mut Command::new(out_dir.path().join(output)));
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_duplicated_checkpoint_fini() {
+        let (output, out_dir) = compile("ckpt_duplicated_fini.c");
+        run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    }
+
     // // below is unreliable as some systems do not have vdso
     // #[tokio::test]
     // #[serial]
