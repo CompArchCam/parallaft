@@ -696,6 +696,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[no_impl_may_read]
+    #[no_impl_may_write]
     pub struct Ioctl {
         fd: i32,
         request: {
@@ -710,6 +712,30 @@ typed_syscall! {
                 self
             }
         },
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Ioctl {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayWriteBuilder::new(memory);
+        match self.request() {
+            ioctl::Request::TCSETS(_) => builder,
+            ioctl::Request::TCGETS(t) => builder.may_write_object(t),
+            _ => builder.may_write_anything(),
+        }
+        .build()
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for Ioctl {
+    fn may_read(&'a self, memory: &'a M) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
+        let builder = RangesSyscallMayReadBuilder::new(memory);
+        match self.request() {
+            ioctl::Request::TCSETS(t) => builder.may_read_object(t),
+            ioctl::Request::TCGETS(_) => builder,
+            _ => builder.may_read_anything(),
+        }
+        .build()
     }
 }
 
@@ -1496,7 +1522,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Sysinfo {
+        #[object_may_written]
         info: Option<AddrMut<libc::sysinfo>>,
     }
 }
