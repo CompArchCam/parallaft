@@ -68,6 +68,10 @@ struct CliArgs {
     #[arg(long)]
     sync_mem_check: bool,
 
+    /// Ignore check errors.
+    #[arg(long)]
+    ignore_check_errors: bool,
+
     #[cfg(feature = "compel")]
     /// Use libcompel for syscall injection, instead of using ptrace directly.
     #[arg(long)]
@@ -405,6 +409,10 @@ async fn main() -> ExitCode {
         cli.dont_clear_soft_dirty,
     );
     check_coord_flags.set(CheckCoordinatorFlags::DONT_FORK, cli.dont_fork);
+    check_coord_flags.set(
+        CheckCoordinatorFlags::IGNORE_CHECK_ERRORS,
+        cli.ignore_check_errors,
+    );
 
     #[cfg(feature = "compel")]
     check_coord_flags.set(CheckCoordinatorFlags::USE_LIBCOMPEL, cli.use_libcompel);

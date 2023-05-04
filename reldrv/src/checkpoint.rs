@@ -47,6 +47,7 @@ bitflags! {
         #[cfg(feature = "compel")]
         const USE_LIBCOMPEL = 0b00010000;
         const DONT_FORK = 0b00100000;
+        const IGNORE_CHECK_ERRORS = 0b01000000;
     }
 }
 
@@ -177,6 +178,7 @@ impl<'c> CheckCoordinator<'c> {
                 let client_control_addr = self.client_control_addr.clone();
 
                 let main = self.main.clone();
+                let flags = self.flags;
 
                 task::spawn_blocking(move || {
                     let mut segment = segment.lock();
@@ -197,7 +199,11 @@ impl<'c> CheckCoordinator<'c> {
                     drop(segment);
 
                     if !result {
-                        warn!("Check fails");
+                        if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
+                            warn!("Check fails");
+                        } else {
+                            panic!("Check fails");
+                        }
                     } else {
                         info!("Check passed");
                     }
