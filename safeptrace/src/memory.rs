@@ -206,7 +206,7 @@ mod test {
     use nix::unistd::ForkResult;
     use quickcheck::QuickCheck;
     use quickcheck_macros::quickcheck;
-    use reverie_process::Pid;
+    use nix::unistd::Pid;
 
     use super::*;
 

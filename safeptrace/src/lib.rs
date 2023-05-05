@@ -28,8 +28,7 @@ pub use nix::sys::ptrace::Options;
 pub use nix::sys::signal::Signal;
 use nix::sys::wait::WaitPidFlag;
 use nix::sys::wait::WaitStatus;
-pub use reverie_process::ExitStatus;
-pub use reverie_process::Pid;
+pub use nix::unistd::Pid;
 pub use syscalls::Errno;
 use syscalls::Sysno;
 use thiserror::Error;
@@ -37,6 +36,19 @@ use thiserror::Error;
 pub use crate::regs::*;
 use crate::waitid::waitid;
 use crate::waitid::IdType;
+
+/// Describes the result of a process after it has exited.
+///
+/// This is similar to `std::process::ExitStatus`, but is easier to match
+/// against and provides additional functionality like `raise_or_exit` that
+/// helps with propagating an exit status.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ExitStatus {
+    /// Program exited with an exit code.
+    Exited(i32),
+    /// Program killed by signal, with or without a coredump.
+    Signaled(Signal, bool),
+}
 
 /// An error that occurred during tracing.
 #[derive(Error, Debug, Eq, PartialEq)]
