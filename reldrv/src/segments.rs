@@ -303,4 +303,8 @@ impl SegmentChain {
     pub fn is_empty(&self) -> bool {
         self.inner.read().is_empty()
     }
+
+    pub fn len(&self) -> usize {
+        self.inner.read().len()
+    }
 }

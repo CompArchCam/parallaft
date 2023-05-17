@@ -93,6 +93,10 @@ struct CliArgs {
     #[arg(long, default_value_t = 1)]
     checkpoint_freq: u32,
 
+    /// Maximum number of live segments (0 = unlimited).
+    #[arg(long, default_value_t = 8)]
+    max_nr_live_segments: usize,
+
     command: String,
     args: Vec<String>,
 }
@@ -121,6 +125,7 @@ fn parent_work(
     flags: RunnerFlags,
     check_coord_flags: CheckCoordinatorFlags,
     stats_output: Option<PathBuf>,
+    max_nr_live_segments: usize,
 ) -> i32 {
     info!("Starting");
 
@@ -154,6 +159,7 @@ fn parent_work(
         Process::new(child_pid, gettid(), Some(tracer_op_tx)),
         checker_cpu_set,
         check_coord_flags,
+        max_nr_live_segments,
     );
 
     check_coord.main.set_cpu_affinity(main_cpu_set);
@@ -342,6 +348,7 @@ fn run(
     check_coord_flags: CheckCoordinatorFlags,
     checkpoint_freq: u32,
     stats_output: Option<PathBuf>,
+    max_nr_live_segments: usize,
 ) -> i32 {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => parent_work(
@@ -351,6 +358,7 @@ fn run(
             runner_flags,
             check_coord_flags,
             stats_output,
+            max_nr_live_segments,
         ),
         Ok(ForkResult::Child) => {
             let err = unsafe {
@@ -425,6 +433,7 @@ async fn main() -> ExitCode {
         check_coord_flags,
         cli.checkpoint_freq,
         cli.stats_output,
+        cli.max_nr_live_segments,
     );
 
     ExitCode::from(exit_status as u8)
@@ -465,6 +474,7 @@ mod tests {
             CheckCoordinatorFlags::empty(),
             0,
             None,
+            8,
         )
     }
 

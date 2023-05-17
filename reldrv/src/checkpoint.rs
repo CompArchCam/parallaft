@@ -35,6 +35,7 @@ pub struct CheckCoordinator<'c> {
     pending_sync: Arc<Mutex<Option<u32>>>,
     avg_nr_dirty_pages: Arc<Mutex<f64>>,
     client_control_addr: Arc<RwLock<Option<usize>>>,
+    max_nr_live_segments: usize,
 }
 
 bitflags! {
@@ -57,6 +58,7 @@ impl<'c> CheckCoordinator<'c> {
         main: Process,
         checker_cpu_affinity: &'c Vec<usize>,
         flags: CheckCoordinatorFlags,
+        max_nr_live_segments: usize,
     ) -> Self {
         let main_pid = main.pid;
         Self {
@@ -68,6 +70,7 @@ impl<'c> CheckCoordinator<'c> {
             pending_sync: Arc::new(Mutex::new(None)),
             avg_nr_dirty_pages: Arc::new(Mutex::new(0.0)),
             client_control_addr: Arc::new(RwLock::new(None)),
+            max_nr_live_segments,
         }
     }
 
@@ -101,7 +104,14 @@ impl<'c> CheckCoordinator<'c> {
                 {
                     self.main.clear_dirty_page_bits();
                 }
-                self.main.resume();
+
+                if self.max_nr_live_segments == 0 || self.segments.len() < self.max_nr_live_segments
+                {
+                    self.main.resume();
+                }
+                else {
+                    info!("Too many live segments. Pausing the main process");
+                }
 
                 let (checker, checkpoint) = match self.segments.is_last_checkpoint_finalizing() {
                     true => (reference, Checkpoint::new_initial(epoch_local)),
@@ -145,6 +155,7 @@ impl<'c> CheckCoordinator<'c> {
                     &self.main,
                     &mut self.pending_sync.lock(),
                     &self.segments,
+                    self.max_nr_live_segments,
                 );
             } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
                 todo!();
@@ -179,6 +190,7 @@ impl<'c> CheckCoordinator<'c> {
 
                 let main = self.main.clone();
                 let flags = self.flags;
+                let max_nr_live_segments = self.max_nr_live_segments;
 
                 task::spawn_blocking(move || {
                     let mut segment = segment.lock();
@@ -207,7 +219,12 @@ impl<'c> CheckCoordinator<'c> {
                     } else {
                         info!("Check passed");
                     }
-                    Self::cleanup_committed_segments(&main, &mut pending_sync.lock(), &segments);
+                    Self::cleanup_committed_segments(
+                        &main,
+                        &mut pending_sync.lock(),
+                        &segments,
+                        max_nr_live_segments,
+                    );
                 });
             }
         } else {
@@ -237,7 +254,10 @@ impl<'c> CheckCoordinator<'c> {
         main: &Process,
         pending_sync: &mut Option<u32>,
         segments: &SegmentChain,
+        max_nr_live_segments: usize,
     ) {
+        let old_len = segments.len();
+
         segments.cleanup_committed_segments();
 
         if let Some(epoch) = pending_sync.as_ref() {
@@ -250,6 +270,14 @@ impl<'c> CheckCoordinator<'c> {
                 pending_sync.take().map(drop);
                 main.resume();
             }
+        }
+
+        if max_nr_live_segments != 0
+            && old_len == max_nr_live_segments
+            && segments.len() < max_nr_live_segments
+        {
+            info!("Resuming main");
+            main.resume();
         }
     }
 
@@ -283,6 +311,7 @@ impl<'c> CheckCoordinator<'c> {
                     &self.main,
                     &mut self.pending_sync.lock(),
                     &self.segments,
+                    self.max_nr_live_segments,
                 );
             },
         );
