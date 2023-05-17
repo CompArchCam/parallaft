@@ -1258,6 +1258,18 @@ mod test {
     }
 
     #[test]
+    fn trace_from_another_thread_with_custom_flag() -> Result<(), Box<dyn std::error::Error + 'static>> {
+        let (pid, tracee) = trace(|| 42, Options::PTRACE_O_ALLOW_TRACER_THREAD_GROUP).unwrap();
+
+        assert_eq!(
+            thread::spawn(move || tracee.resume(None)?.wait()).join().unwrap()?,
+            Wait::Exited(pid, ExitStatus::Exited(42))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn trace_killed_by_signal() -> Result<(), Box<dyn std::error::Error + 'static>> {
         let (pid, tracee) = trace(
             || {

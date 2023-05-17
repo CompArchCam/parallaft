@@ -6,13 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [patch."https://github.com/rust-lang/libc"]
-libc = { git = "https://github.com/mbyzhang/libc.git" }
+libc = { git = "https://github.com/mbyzhang/libc.git", branch = "ptrace-o-allow-tracer-thread-group" }
 
 [dependencies]
 clap = { version = "4.1.1", features = ["derive"] }
 env_logger = "0.10.0"
 log = "0.4.17"
-nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-sigmask" }
+nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-o-allow-tracer-thread-group" }
 compel = { git = "https://github.com/mbyzhang/compel-rs.git", optional = true }
 parasite = { path = "parasite", optional = true }
 procfs = { git = "https://github.com/mbyzhang/procfs.git" }
