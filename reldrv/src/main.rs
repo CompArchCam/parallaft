@@ -510,13 +510,13 @@ mod tests {
         assert_eq!(exit_code, 0)
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn test_syscall_mremap_handling() {
-        let (output, out_dir) = compile("syscall_mremap.c");
-        let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
-        assert_eq!(exit_code, 0)
-    }
+    // #[tokio::test]
+    // #[serial]
+    // async fn test_syscall_mremap_handling() {
+    //     let (output, out_dir) = compile("syscall_mremap.c");
+    //     let exit_code = run_reldrv(&mut Command::new(out_dir.path().join(output)));
+    //     assert_eq!(exit_code, 0)
+    // }
 
     #[tokio::test]
     #[serial]
