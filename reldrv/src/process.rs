@@ -19,7 +19,7 @@ use nix::{
         signal::{kill, Signal},
         wait::{waitpid, WaitStatus},
     },
-    unistd::{gettid, Pid},
+    unistd::Pid,
 };
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
@@ -29,16 +29,9 @@ use crate::{
     dirty_page_tracer::DirtyPageTracer, page_diff::page_diff, remote_memory::RemoteMemory,
 };
 
-use std::sync::mpsc;
-
-pub enum TracerOp {
-    PtraceSyscall(Pid),
-}
-
 pub struct Process {
     pub pid: Pid,
     tracer_pid: Pid,
-    tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
     dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
     memory: Mutex<RemoteMemory>,
 }
@@ -116,15 +109,10 @@ impl Registers {
 
 #[allow(unused)]
 impl Process {
-    pub fn new(
-        pid: Pid,
-        tracer_pid: Pid,
-        tracer_op_tx: Option<mpsc::SyncSender<TracerOp>>,
-    ) -> Self {
+    pub fn new(pid: Pid, tracer_pid: Pid) -> Self {
         Self {
             pid,
             tracer_pid,
-            tracer_op_tx,
             dirty_page_tracer: Mutex::new(None),
             memory: Mutex::new(RemoteMemory::new(pid)),
         }
@@ -371,25 +359,7 @@ impl Process {
     }
 
     pub fn resume(&self) {
-        if gettid() == self.tracer_pid {
-            ptrace::syscall(self.pid, None).unwrap();
-        } else {
-            self.tracer_op_tx
-                .clone()
-                .unwrap()
-                .send(TracerOp::PtraceSyscall(self.pid))
-                .unwrap();
-
-            unsafe {
-                nix::libc::syscall(
-                    nix::libc::SYS_tgkill,
-                    -1,
-                    self.tracer_pid,
-                    nix::libc::SIGUSR1,
-                )
-            };
-            // TODO: check syscall
-        }
+        ptrace::syscall(self.pid, None).unwrap();
     }
 
     pub fn interrupt(&self) {
@@ -436,11 +406,7 @@ impl Process {
             true,
         );
 
-        let child = Process::new(
-            Pid::from_raw(child_pid as _),
-            self.tracer_pid,
-            self.tracer_op_tx.clone(),
-        );
+        let child = Process::new(Pid::from_raw(child_pid as _), self.tracer_pid);
         child
     }
 

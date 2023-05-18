@@ -13,6 +13,7 @@ mod segments;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::os::unix::process::CommandExt;
+use std::panic;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::sync::mpsc;
@@ -108,16 +109,6 @@ bitflags! {
     }
 }
 
-static mut WATIPID_FLAGS: WaitPidFlag = WaitPidFlag::empty();
-
-extern "C" fn sigusr1_handler(
-    _sig: nix::libc::c_int,
-    _info: *mut nix::libc::siginfo_t,
-    _uctx: *mut nix::libc::c_void,
-) {
-    unsafe { WATIPID_FLAGS = WaitPidFlag::WNOHANG };
-}
-
 fn parent_work(
     child_pid: Pid,
     checker_cpu_set: &Vec<usize>,
@@ -129,17 +120,6 @@ fn parent_work(
 ) -> i32 {
     info!("Starting");
 
-    let mut sigset = SigSet::empty();
-    sigset.add(Signal::SIGUSR1);
-    sigset.thread_block().unwrap();
-
-    let sa = SigAction::new(
-        SigHandler::SigAction(sigusr1_handler),
-        SaFlags::empty(),
-        SigSet::empty(),
-    );
-    unsafe { sigaction(Signal::SIGUSR1, &sa).unwrap() };
-
     let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
     assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
     ptrace::seize(
@@ -147,16 +127,15 @@ fn parent_work(
         ptrace::Options::PTRACE_O_TRACESYSGOOD
             | ptrace::Options::PTRACE_O_TRACECLONE
             | ptrace::Options::PTRACE_O_TRACEFORK
-            | ptrace::Options::PTRACE_O_EXITKILL,
+            | ptrace::Options::PTRACE_O_EXITKILL
+            | ptrace::Options::PTRACE_O_ALLOW_TRACER_THREAD_GROUP,
     )
     .unwrap();
 
     info!("Child process tracing started");
 
-    let (tracer_op_tx, tracer_op_rx) = mpsc::sync_channel(1024);
-
     let check_coord = CheckCoordinator::new(
-        Process::new(child_pid, gettid(), Some(tracer_op_tx)),
+        Process::new(child_pid, gettid()),
         checker_cpu_set,
         check_coord_flags,
         max_nr_live_segments,
@@ -176,34 +155,15 @@ fn parent_work(
     let mut exit_status = None;
 
     loop {
-        loop {
-            match tracer_op_rx.try_recv() {
-                Ok(op) => match op {
-                    process::TracerOp::PtraceSyscall(pid) => {
-                        ptrace::syscall(pid, None).unwrap();
-                    }
-                },
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(e) => panic!("failed to receive tracer op: {:?}", e),
-            }
-        }
-
-        unsafe { WATIPID_FLAGS = WaitPidFlag::empty() };
-        sigset.thread_unblock().unwrap();
-
-        let status = if flags.contains(RunnerFlags::POLL_WAITPID) {
-            waitpid(None, Some(WaitPidFlag::WNOHANG))
-        } else {
-            waitpid(None, Some(unsafe { WATIPID_FLAGS }))
-        };
-
-        sigset.thread_block().unwrap();
-
-        let status = if let Err(Errno::EINTR) = status {
-            continue;
-        } else {
-            status.unwrap()
-        };
+        let status = waitpid(
+            None,
+            if flags.contains(RunnerFlags::POLL_WAITPID) {
+                Some(WaitPidFlag::WNOHANG)
+            } else {
+                None
+            },
+        )
+        .unwrap();
 
         match status {
             WaitStatus::Stopped(pid, sig) => ptrace::syscall(pid, sig).unwrap(),
@@ -379,6 +339,12 @@ fn run(
 async fn main() -> ExitCode {
     #[cfg(feature = "compel")]
     compel::log_init(log::Level::Error);
+
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
 
     let cli = CliArgs::parse();
 
