@@ -66,7 +66,7 @@ impl Registers {
             self.inner.rdi = args.arg0 as _;
             self.inner.rsi = args.arg1 as _;
             self.inner.rdx = args.arg2 as _;
-            self.inner.rcx = args.arg3 as _;
+            self.inner.r10 = args.arg3 as _;
             self.inner.r8 = args.arg4 as _;
             self.inner.r9 = args.arg5 as _;
         } else {
