@@ -354,10 +354,7 @@ impl<'c> CheckCoordinator<'c> {
 
         info!("[PID {: >8}] Syscall: {:}", pid, syscall.display(&memory));
 
-        if matches!(
-            syscall,
-            Syscall::Rseq(_) | Syscall::SetRobustList(_)
-        ) {
+        if matches!(syscall, Syscall::Rseq(_) | Syscall::SetRobustList(_)) {
             // rewrite unsupported syscalls
             info!("[PID {: >8}] Unsupported syscall", pid);
             let mut regs = ptrace::getregs(pid).unwrap();

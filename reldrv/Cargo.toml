@@ -12,7 +12,7 @@ libc = { git = "https://github.com/mbyzhang/libc.git", branch = "ptrace-o-allow-
 clap = { version = "4.1.1", features = ["derive"] }
 env_logger = "0.10.0"
 log = "0.4.17"
-nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-o-allow-tracer-thread-group" }
+nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-get-rseq-configuration" }
 compel = { git = "https://github.com/mbyzhang/compel-rs.git", optional = true }
 parasite = { path = "parasite", optional = true }
 procfs = { git = "https://github.com/mbyzhang/procfs.git" }
