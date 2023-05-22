@@ -2266,11 +2266,18 @@ typed_syscall! {
 
 typed_syscall! {
     // TODO: Wrap each futex operation in a type, similar to fcntl and ioctl.
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Futex {
+        // TODO: #[object_may_read]
+        #[object_may_written]
         uaddr: Option<AddrMut<libc::c_int>>,
         futex_op: libc::c_int,
         val: libc::c_int,
+        #[object_may_read]
         timeout: Option<Addr<Timespec>>,
+        // TODO: #[object_may_read]
+        #[object_may_written]
         uaddr2: Option<AddrMut<libc::c_int>>,
         val3: libc::c_int,
     }

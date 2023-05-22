@@ -344,7 +344,7 @@ impl<'c> CheckCoordinator<'c> {
 
         if matches!(
             syscall,
-            Syscall::Futex(_) | Syscall::Rseq(_) | Syscall::SetRobustList(_)
+            Syscall::Rseq(_) | Syscall::SetRobustList(_)
         ) {
             // rewrite unsupported syscalls
             info!("[PID {: >8}] Unsupported syscall", pid);
