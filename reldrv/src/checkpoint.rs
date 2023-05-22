@@ -14,7 +14,6 @@ use parking_lot::{Mutex, RwLock};
 use reverie_syscalls::{
     Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
-use tokio::task;
 
 use crate::client_control;
 use crate::process::Process;
@@ -192,40 +191,43 @@ impl<'c> CheckCoordinator<'c> {
                 let flags = self.flags;
                 let max_nr_live_segments = self.max_nr_live_segments;
 
-                task::spawn_blocking(move || {
-                    let mut segment = segment.lock();
-                    let client_control_addr = client_control_addr.read();
-                    let ignored_pages = client_control_addr
-                        .as_ref()
-                        .map_or(vec![], |a| vec![*a as u64]);
+                std::thread::Builder::new()
+                    .name(format!("checker-memcmp-{}", pid))
+                    .spawn(move || {
+                        let mut segment = segment.lock();
+                        let client_control_addr = client_control_addr.read();
+                        let ignored_pages = client_control_addr
+                            .as_ref()
+                            .map_or(vec![], |a| vec![*a as u64]);
 
-                    let (result, nr_dirty_pages) = segment.check(ignored_pages.as_slice()).unwrap();
-                    let mut avg_nr_dirty_pages = avg_nr_dirty_pages.lock();
+                        let (result, nr_dirty_pages) =
+                            segment.check(ignored_pages.as_slice()).unwrap();
+                        let mut avg_nr_dirty_pages = avg_nr_dirty_pages.lock();
 
-                    let alpha = 1.0 / (segment.nr + 1) as f64; // TODO: segments may finish out-of-order
+                        let alpha = 1.0 / (segment.nr + 1) as f64; // TODO: segments may finish out-of-order
 
-                    *avg_nr_dirty_pages =
-                        *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
+                        *avg_nr_dirty_pages =
+                            *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
 
-                    drop(avg_nr_dirty_pages);
-                    drop(segment);
+                        drop(avg_nr_dirty_pages);
+                        drop(segment);
 
-                    if !result {
-                        if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
-                            warn!("Check fails");
+                        if !result {
+                            if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
+                                warn!("Check fails");
+                            } else {
+                                panic!("Check fails");
+                            }
                         } else {
-                            panic!("Check fails");
+                            info!("Check passed");
                         }
-                    } else {
-                        info!("Check passed");
-                    }
-                    Self::cleanup_committed_segments(
-                        &main,
-                        &mut pending_sync.lock(),
-                        &segments,
-                        max_nr_live_segments,
-                    );
-                });
+                        Self::cleanup_committed_segments(
+                            &main,
+                            &mut pending_sync.lock(),
+                            &segments,
+                            max_nr_live_segments,
+                        );
+                    });
             }
         } else {
             panic!("invalid pid");

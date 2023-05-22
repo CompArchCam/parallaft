@@ -335,8 +335,7 @@ fn run(
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() {
     #[cfg(feature = "compel")]
     compel::log_init(log::Level::Error);
 
@@ -402,7 +401,7 @@ async fn main() -> ExitCode {
         cli.max_nr_live_segments,
     );
 
-    ExitCode::from(exit_status as u8)
+    std::process::exit(exit_status as _);
 }
 
 #[cfg(test)]
