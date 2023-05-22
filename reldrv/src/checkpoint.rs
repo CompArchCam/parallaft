@@ -373,6 +373,13 @@ impl<'c> CheckCoordinator<'c> {
             return;
         }
 
+        if matches!(
+            syscall,
+            Syscall::Fork(_) | Syscall::Vfork(_) | Syscall::Clone(_) | Syscall::Clone3(_)
+        ) {
+            panic!("fork/vfork/clone/clone3 is disallowed");
+        }
+
         if let Some((active_segment, is_main)) = self.segments.get_active_segment_by_pid(pid) {
             match syscall {
                 Syscall::Execve(_) | Syscall::Execveat(_) => {
