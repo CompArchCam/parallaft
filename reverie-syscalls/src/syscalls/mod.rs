@@ -1691,8 +1691,12 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Sigaltstack {
+        #[object_may_read]
         ss: Option<Addr<libc::stack_t>>,
+        #[object_may_written]
         old_ss: Option<AddrMut<libc::stack_t>>,
     }
 }
