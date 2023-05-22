@@ -208,11 +208,11 @@ fn parent_work(
                             match (raw_nr, raw_args) {
                                 (0xff77, ..) => {
                                     info!("Checkpoint requested by {}", pid);
-                                    check_coord.handle_checkpoint(pid, false);
+                                    check_coord.handle_checkpoint(pid, false, false);
                                 }
                                 (0xff78, ..) => {
                                     info!("Checkpoint finish requested by {}", pid);
-                                    check_coord.handle_checkpoint(pid, true);
+                                    check_coord.handle_checkpoint(pid, true, false);
                                 }
                                 (0xff79, [base_address, ..]) => {
                                     assert!(pid == check_coord.main.pid);

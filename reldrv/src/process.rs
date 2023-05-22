@@ -380,7 +380,8 @@ impl Process {
         &self,
         flags: CloneFlags,
         signal: Option<Signal>,
-        use_libcompel: bool, // ignored if `compel` feature is disabled
+        use_libcompel: bool,       // ignored if `compel` feature is disabled
+        restart_old_syscall: bool, // restart parent's old syscall
     ) -> Process {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
@@ -393,7 +394,7 @@ impl Process {
             self.syscall_direct(
                 Sysno::clone,
                 syscall_args!(clone_flags, 0, 0, 0, 0),
-                false,
+                restart_old_syscall,
                 true,
             )
         };
@@ -402,7 +403,7 @@ impl Process {
         let child_pid = self.syscall_direct(
             Sysno::clone,
             syscall_args!(clone_flags, 0, 0, 0, 0),
-            false,
+            restart_old_syscall,
             true,
         );
 

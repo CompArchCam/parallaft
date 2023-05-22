@@ -74,7 +74,7 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     /// Handle checkpoint request from the target
-    pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool) {
+    pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool, restart_old_syscall: bool) {
         if pid == self.main.pid {
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
@@ -93,9 +93,12 @@ impl<'c> CheckCoordinator<'c> {
             let use_libcompel = false;
 
             if !is_finishing {
-                let reference = self
-                    .main
-                    .clone_process(clone_flags, clone_signal, use_libcompel);
+                let reference = self.main.clone_process(
+                    clone_flags,
+                    clone_signal,
+                    use_libcompel,
+                    restart_old_syscall,
+                );
 
                 if !self
                     .flags
@@ -107,15 +110,19 @@ impl<'c> CheckCoordinator<'c> {
                 if self.max_nr_live_segments == 0 || self.segments.len() < self.max_nr_live_segments
                 {
                     self.main.resume();
-                }
-                else {
+                } else {
                     info!("Too many live segments. Pausing the main process");
                 }
 
                 let (checker, checkpoint) = match self.segments.is_last_checkpoint_finalizing() {
                     true => (reference, Checkpoint::new_initial(epoch_local)),
                     false => (
-                        reference.clone_process(clone_flags, clone_signal, use_libcompel),
+                        reference.clone_process(
+                            clone_flags,
+                            clone_signal,
+                            use_libcompel,
+                            restart_old_syscall,
+                        ),
                         Checkpoint::new(epoch_local, reference),
                     ),
                 };
@@ -132,9 +139,12 @@ impl<'c> CheckCoordinator<'c> {
                 self.add_checkpoint(checkpoint, Some(checker));
             } else {
                 if !self.segments.is_last_checkpoint_finalizing() {
-                    let reference =
-                        self.main
-                            .clone_process(clone_flags, clone_signal, use_libcompel);
+                    let reference = self.main.clone_process(
+                        clone_flags,
+                        clone_signal,
+                        use_libcompel,
+                        restart_old_syscall,
+                    );
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference);
 
@@ -369,7 +379,7 @@ impl<'c> CheckCoordinator<'c> {
                     panic!("Execve(at) is disallowed in protected regions");
                 }
                 Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                    self.handle_checkpoint(pid, true);
+                    self.handle_checkpoint(pid, true, true);
                     return; // skip ptrace::syscall
                 }
                 Syscall::ArchPrctl(_)
