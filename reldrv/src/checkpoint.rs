@@ -20,7 +20,6 @@ use reverie_syscalls::{
 
 use crate::client_control;
 use crate::process::{OwnedProcess, Process};
-use crate::remote_memory::RemoteMemory;
 use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
@@ -376,9 +375,9 @@ impl<'c> CheckCoordinator<'c> {
 
     pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) {
         let syscall = reverie_syscalls::Syscall::from_raw(sysno, args);
-        let memory = RemoteMemory::new(pid);
+        let process = Process::new(pid);
 
-        info!("[PID {: >8}] Syscall: {:}", pid, syscall.display(&memory));
+        info!("[PID {: >8}] Syscall: {:}", pid, syscall.display(&process));
 
         if matches!(syscall, Syscall::Rseq(_) | Syscall::SetRobustList(_)) {
             // rewrite unsupported syscalls
@@ -530,7 +529,7 @@ impl<'c> CheckCoordinator<'c> {
                         // we are the main process
                         assert!(active_segment.ongoing_syscall.is_none());
 
-                        let may_read = syscall.may_read(&memory).ok().map(|slices| {
+                        let may_read = syscall.may_read(&process).ok().map(|slices| {
                             slices
                                 .iter()
                                 .map(|slice| RemoteIoVec {
@@ -541,7 +540,7 @@ impl<'c> CheckCoordinator<'c> {
                                 .into_boxed_slice()
                         });
 
-                        let may_write = syscall.may_write(&memory).ok().map(|slices| {
+                        let may_write = syscall.may_write(&process).ok().map(|slices| {
                             slices
                                 .iter()
                                 .map(|slice| RemoteIoVec {
@@ -558,7 +557,7 @@ impl<'c> CheckCoordinator<'c> {
                                 active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                                     syscall,
                                     kind: SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
-                                        mem_read: SavedMemory::save(&memory, &may_read).unwrap(),
+                                        mem_read: SavedMemory::save(&process, &may_read).unwrap(),
                                         mem_written_ranges: may_write,
                                     },
                                     exit_action: SyscallExitAction::ReplicateMemoryWrites,
@@ -591,7 +590,7 @@ impl<'c> CheckCoordinator<'c> {
                                 }
                                 SavedSyscallKind::KnownMemoryRw { mem_read, .. } => {
                                     // compare memory read by the syscall
-                                    assert!(mem_read.compare(&memory).unwrap());
+                                    assert!(mem_read.compare(&process).unwrap());
                                 }
                             }
                         } else {
@@ -613,7 +612,7 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) {
-        let mut memory = RemoteMemory::new(pid);
+        let mut process = Process::new(pid);
 
         self.segments
             .get_active_segment_with(pid, |active_segment, is_main| {
@@ -629,7 +628,7 @@ impl<'c> CheckCoordinator<'c> {
                                 SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
                                     mem_read,
                                     mem_written_ranges,
-                                } => SavedMemory::save(&memory, &mem_written_ranges).unwrap(),
+                                } => SavedMemory::save(&process, &mem_written_ranges).unwrap(),
                                 _ => panic!(),
                             };
 
@@ -677,7 +676,7 @@ impl<'c> CheckCoordinator<'c> {
                                     .registers()
                                     .with_syscall_ret_val(saved_syscall.ret_val)
                                     .write();
-                                mem_written.dump(&mut memory).unwrap();
+                                mem_written.dump(&mut process).unwrap();
                             }
                             _ => panic!(),
                         },

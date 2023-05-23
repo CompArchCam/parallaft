@@ -6,7 +6,6 @@ mod compel_parasite;
 mod dirty_page_tracer;
 mod page_diff;
 mod process;
-mod remote_memory;
 mod saved_syscall;
 mod segments;
 
