@@ -79,14 +79,14 @@ impl<'a, M: MemoryAccess> RangesSyscallMayReadBuilder<'a, M> {
     }
 
     /// Add address ranges of an object that a syscall may read.
-    pub fn may_read_object<T>(mut self, obj: Option<Addr<'a, T>>) -> Self {
+    pub fn may_read_object<T: 'a, A: Into<Addr<'a, T>>>(mut self, obj: Option<A>) -> Self {
         if self.error.is_some() {
             return self;
         }
 
         if let Some(obj) = obj {
             self.ranges
-                .push(unsafe { obj.into_addr_slice().as_addr_slice_u8() })
+                .push(unsafe { obj.into().into_addr_slice().as_addr_slice_u8() })
         }
         self
     }
@@ -149,14 +149,14 @@ impl<'a, M: MemoryAccess> RangesSyscallMayWriteBuilder<'a, M> {
     }
 
     /// Add address ranges of an object that a syscall may write.
-    pub fn may_write_object<T>(mut self, obj: Option<AddrMut<'a, T>>) -> Self {
+    pub fn may_write_object<T: 'a, A: Into<AddrMut<'a, T>>>(mut self, obj: Option<A>) -> Self {
         if self.error.is_some() {
             return self;
         }
 
         if let Some(obj) = obj {
             self.ranges
-                .push(unsafe { obj.into_addr_slice_mut().as_addr_slice_mut_u8() })
+                .push(unsafe { obj.into().into_addr_slice_mut().as_addr_slice_mut_u8() })
         }
         self
     }
