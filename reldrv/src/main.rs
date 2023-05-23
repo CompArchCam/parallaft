@@ -33,7 +33,7 @@ use clap::Parser;
 use log::info;
 
 use crate::checkpoint::{CheckCoordinator, CheckCoordinatorFlags};
-use crate::process::{OwnedProcess};
+use crate::process::OwnedProcess;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -460,8 +460,13 @@ mod tests {
     };
     use serial_test::serial;
     use std::{
-        arch::x86_64::_rdtsc, fs::File, io::IoSliceMut, mem::MaybeUninit, num::NonZeroUsize,
-        os::fd::OwnedFd, sync::Once,
+        arch::x86_64::{__rdtscp, _rdtsc},
+        fs::File,
+        io::IoSliceMut,
+        mem::MaybeUninit,
+        num::NonZeroUsize,
+        os::fd::OwnedFd,
+        sync::Once,
     };
 
     static INIT: Once = Once::new();
@@ -828,6 +833,46 @@ mod tests {
 
                 for _ in 0..1000 {
                     let tsc = unsafe { _rdtsc() };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
+
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_rdtscp() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                checkpoint_take();
+                let mut aux = MaybeUninit::uninit();
+                let _tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                let _aux = unsafe { aux.assume_init() };
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_rdtscp_loop() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
+
+                for _ in 0..1000 {
+                    let mut aux = MaybeUninit::uninit();
+                    let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
                     assert!(tsc > prev_tsc);
                     prev_tsc = tsc;
                 }

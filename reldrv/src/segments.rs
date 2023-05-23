@@ -119,6 +119,7 @@ impl SegmentStatus {
 #[derive(Debug)]
 pub enum SavedTrapEvent {
     Rdtsc(u64),
+    Rdtscp(u64, u32), // tsc, aux
 }
 
 #[derive(Debug)]

@@ -1,4 +1,5 @@
-use std::arch::x86_64::_rdtsc;
+use std::arch::x86_64::{__rdtscp, _rdtsc};
+use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -747,6 +748,40 @@ impl<'c> CheckCoordinator<'c> {
                             .write();
                     });
 
+                suppress_signal = true;
+            } else if instr & 0xffffff == 0xf9010f {
+                info!("[PID {: >8}] Trap: Rdtscp", pid);
+
+                // rdtscp
+                self.segments
+                    .get_active_segment_with(pid, |segment, is_main| {
+                        let (tsc, aux) = if is_main {
+                            let mut aux = MaybeUninit::uninit();
+                            // add to the log
+                            let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                            let aux = unsafe { aux.assume_init() };
+
+                            segment
+                                .trap_event_log
+                                .push_back(SavedTrapEvent::Rdtscp(tsc, aux));
+
+                            (tsc, aux)
+                        } else {
+                            // replay from the log
+                            let event = segment.trap_event_log.pop_front().unwrap();
+                            if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
+                                (tsc, aux)
+                            } else {
+                                panic!("Unexpected trap event");
+                            }
+                        };
+
+                        process
+                            .registers()
+                            .with_tscp(tsc, aux)
+                            .with_offsetted_rip(3)
+                            .write();
+                    });
                 suppress_signal = true;
             }
         }

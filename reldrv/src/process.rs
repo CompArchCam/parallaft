@@ -105,6 +105,15 @@ impl Registers {
         self
     }
 
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_tscp(mut self, tsc: u64, aux: u32) -> Self {
+        self.inner.rax = tsc & 0xffff_ffffu64;
+        self.inner.rdx = tsc >> 32;
+        self.inner.rcx = aux as _;
+
+        self
+    }
+
     pub fn with_offsetted_rip(mut self, offset: isize) -> Self {
         self.inner.rip += offset as u64;
 
