@@ -33,7 +33,7 @@ use clap::Parser;
 use log::info;
 
 use crate::checkpoint::{CheckCoordinator, CheckCoordinatorFlags};
-use crate::process::OwnedProcess;
+use crate::process::{OwnedProcess};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -296,6 +296,11 @@ fn parent_work(
             }
             WaitStatus::Signaled(pid, sig, _) => {
                 info!("PID {} signaled by {}", pid, sig);
+
+                if check_coord.has_errors() {
+                    panic!("Memory check has errors");
+                }
+
                 if main_finished && check_coord.is_all_finished() {
                     break;
                 }

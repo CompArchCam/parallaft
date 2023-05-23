@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bitflags::bitflags;
 
-use log::{info, warn};
+use log::{error, info, warn};
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::uio::RemoteIoVec;
@@ -170,12 +170,14 @@ impl<'c> CheckCoordinator<'c> {
             info!("Checker called checkpoint");
 
             if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
-                segment.lock().mark_as_checked().unwrap();
+                segment.lock().mark_as_checked(false).unwrap();
                 Self::cleanup_committed_segments(
                     &self.main,
                     &mut self.pending_sync.lock(),
                     &self.segments,
                     self.max_nr_live_segments,
+                    self.flags
+                        .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                 );
             } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
                 todo!();
@@ -237,7 +239,7 @@ impl<'c> CheckCoordinator<'c> {
                             if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
                                 warn!("Check fails");
                             } else {
-                                panic!("Check fails");
+                                error!("Check fails");
                             }
                         } else {
                             info!("Check passed");
@@ -247,6 +249,7 @@ impl<'c> CheckCoordinator<'c> {
                             &mut pending_sync.lock(),
                             &segments,
                             max_nr_live_segments,
+                            flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                         );
                     });
             }
@@ -278,10 +281,11 @@ impl<'c> CheckCoordinator<'c> {
         pending_sync: &mut Option<u32>,
         segments: &SegmentChain,
         max_nr_live_segments: usize,
+        ignore_errors: bool,
     ) {
         let old_len = segments.len();
 
-        segments.cleanup_committed_segments();
+        segments.cleanup_committed_segments(ignore_errors);
 
         if let Some(epoch) = pending_sync.as_ref() {
             if let Some(front) = segments.get_first_segment() {
@@ -311,7 +315,7 @@ impl<'c> CheckCoordinator<'c> {
             checker,
             |last_segment, checkpoint| {
                 if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
-                    last_segment.mark_as_checked();
+                    last_segment.mark_as_checked(false);
                     true
                 } else {
                     let last_checker = last_segment.checker().unwrap();
@@ -335,6 +339,8 @@ impl<'c> CheckCoordinator<'c> {
                     &mut self.pending_sync.lock(),
                     &self.segments,
                     self.max_nr_live_segments,
+                    self.flags
+                        .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                 );
             },
         );
@@ -353,6 +359,14 @@ impl<'c> CheckCoordinator<'c> {
     /// Check if all checkers has finished.
     pub fn is_all_finished(&self) -> bool {
         self.segments.is_empty()
+    }
+
+    /// Check if any checker has errors unless IGNORE_CHECK_ERRORS is set.
+    pub fn has_errors(&self) -> bool {
+        !self
+            .flags
+            .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
+            && self.segments.has_errors()
     }
 
     pub fn set_client_control_addr(&self, base_address: usize) {

@@ -64,6 +64,7 @@ pub enum SegmentStatus {
     },
     Checked {
         checkpoint_end: Arc<Checkpoint>,
+        has_errors: bool,
     },
 }
 
@@ -87,12 +88,15 @@ impl SegmentStatus {
         }
     }
 
-    pub fn mark_as_checked(&mut self) -> Result<()> {
+    pub fn mark_as_checked(&mut self, has_errors: bool) -> Result<()> {
         let status = unsafe { ptr::read(self) };
 
         match status {
             SegmentStatus::ReadyToCheck { checkpoint_end, .. } => {
-                let new_status = SegmentStatus::Checked { checkpoint_end };
+                let new_status = SegmentStatus::Checked {
+                    checkpoint_end,
+                    has_errors,
+                };
                 unsafe { ptr::write(self, new_status) };
                 Ok(())
             }
@@ -106,7 +110,7 @@ impl SegmentStatus {
     pub fn checkpoint_end<'a>(&'a self) -> Option<&'a Arc<Checkpoint>> {
         match self {
             SegmentStatus::ReadyToCheck { checkpoint_end, .. } => Some(checkpoint_end),
-            SegmentStatus::Checked { checkpoint_end } => Some(checkpoint_end),
+            SegmentStatus::Checked { checkpoint_end, .. } => Some(checkpoint_end),
             _ => None,
         }
     }
@@ -159,7 +163,7 @@ impl Segment {
         {
             let (result, nr_dirty_pages) = checker
                 .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages);
-            self.mark_as_checked()?;
+            self.mark_as_checked(!result)?;
 
             Ok((result, nr_dirty_pages))
         } else {
@@ -168,8 +172,8 @@ impl Segment {
     }
 
     /// Mark this segment as "checked" without comparing dirty memory.
-    pub fn mark_as_checked(&mut self) -> Result<()> {
-        self.status.mark_as_checked()
+    pub fn mark_as_checked(&mut self, has_errors: bool) -> Result<()> {
+        self.status.mark_as_checked(has_errors)
     }
 
     /// Get the checker process, if it exists.
@@ -178,6 +182,13 @@ impl Segment {
             SegmentStatus::New { checker } => Some(checker),
             SegmentStatus::ReadyToCheck { checker, .. } => Some(checker),
             _ => None,
+        }
+    }
+
+    pub fn has_errors(&self) -> bool {
+        match self.status {
+            SegmentStatus::Checked { has_errors, .. } => has_errors,
+            _ => false,
         }
     }
 }
@@ -245,14 +256,19 @@ impl SegmentChain {
         }
     }
 
-    pub fn cleanup_committed_segments(&self) {
+    /// Clean up committed segments. Returns if any segment has errors unless `ignore_errors` is set.
+    /// Erroneous segments will not be cleaned up unless `ignore_errors` is set.
+    pub fn cleanup_committed_segments(&self, ignore_errors: bool) -> bool {
         let mut segments = self.inner.write();
         loop {
             let mut should_break = true;
             let front = segments.front();
             if let Some(front) = front {
                 let front = front.lock();
-                if let SegmentStatus::Checked { .. } = front.status {
+                if let SegmentStatus::Checked { has_errors, .. } = front.status {
+                    if !ignore_errors && has_errors {
+                        return true;
+                    }
                     mem::drop(front);
                     segments.pop_front();
                     should_break = false;
@@ -262,6 +278,8 @@ impl SegmentChain {
                 break;
             }
         }
+
+        false
     }
 
     pub fn get_active_segment_with<R>(
@@ -309,6 +327,13 @@ impl SegmentChain {
 
     pub fn is_empty(&self) -> bool {
         self.inner.read().is_empty()
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.inner
+            .read()
+            .iter()
+            .any(|segment| segment.lock().has_errors())
     }
 
     pub fn len(&self) -> usize {
