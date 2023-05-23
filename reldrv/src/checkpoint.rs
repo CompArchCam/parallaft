@@ -1,3 +1,4 @@
+use std::arch::x86_64::_rdtsc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -5,6 +6,7 @@ use bitflags::bitflags;
 
 use log::{info, warn};
 use nix::sys::ptrace;
+use nix::sys::signal::Signal;
 use nix::sys::uio::RemoteIoVec;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::{sched::CloneFlags, unistd::Pid};
@@ -12,22 +14,22 @@ use nix::{sched::CloneFlags, unistd::Pid};
 use parking_lot::{Mutex, RwLock};
 
 use reverie_syscalls::{
-    Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
+    Addr, AddrMut, Displayable, MapFlags, MemoryAccess, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
 use crate::client_control;
-use crate::process::Process;
+use crate::process::{OwnedProcess, Process};
 use crate::remote_memory::RemoteMemory;
 use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
 };
-use crate::segments::{Checkpoint, SegmentChain};
+use crate::segments::{Checkpoint, SavedTrapEvent, SegmentChain};
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
 pub struct CheckCoordinator<'c> {
     pub segments: Arc<SegmentChain>,
-    pub main: Arc<Process>,
+    pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
     flags: CheckCoordinatorFlags,
     checker_cpu_affinity: &'c Vec<usize>,
@@ -54,11 +56,12 @@ bitflags! {
 #[allow(unused)]
 impl<'c> CheckCoordinator<'c> {
     pub fn new(
-        main: Process,
+        main: OwnedProcess,
         checker_cpu_affinity: &'c Vec<usize>,
         flags: CheckCoordinatorFlags,
         max_nr_live_segments: usize,
     ) -> Self {
+        // main.pid
         let main_pid = main.pid;
         Self {
             main: Arc::new(main),
@@ -93,12 +96,15 @@ impl<'c> CheckCoordinator<'c> {
             let use_libcompel = false;
 
             if !is_finishing {
-                let reference = self.main.clone_process(
-                    clone_flags,
-                    clone_signal,
-                    use_libcompel,
-                    restart_old_syscall,
-                );
+                let reference = self
+                    .main
+                    .clone_process(
+                        clone_flags,
+                        clone_signal,
+                        use_libcompel,
+                        restart_old_syscall,
+                    )
+                    .as_owned();
 
                 if !self
                     .flags
@@ -117,12 +123,14 @@ impl<'c> CheckCoordinator<'c> {
                 let (checker, checkpoint) = match self.segments.is_last_checkpoint_finalizing() {
                     true => (reference, Checkpoint::new_initial(epoch_local)),
                     false => (
-                        reference.clone_process(
-                            clone_flags,
-                            clone_signal,
-                            use_libcompel,
-                            restart_old_syscall,
-                        ),
+                        reference
+                            .clone_process(
+                                clone_flags,
+                                clone_signal,
+                                use_libcompel,
+                                restart_old_syscall,
+                            )
+                            .as_owned(),
                         Checkpoint::new(epoch_local, reference),
                     ),
                 };
@@ -139,12 +147,15 @@ impl<'c> CheckCoordinator<'c> {
                 self.add_checkpoint(checkpoint, Some(checker));
             } else {
                 if !self.segments.is_last_checkpoint_finalizing() {
-                    let reference = self.main.clone_process(
-                        clone_flags,
-                        clone_signal,
-                        use_libcompel,
-                        restart_old_syscall,
-                    );
+                    let reference = self
+                        .main
+                        .clone_process(
+                            clone_flags,
+                            clone_signal,
+                            use_libcompel,
+                            restart_old_syscall,
+                        )
+                        .as_owned();
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference);
 
@@ -294,7 +305,7 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
-    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<Process>) {
+    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<OwnedProcess>) {
         self.segments.add_checkpoint(
             checkpoint,
             checker,
@@ -680,5 +691,51 @@ impl<'c> CheckCoordinator<'c> {
             });
 
         ptrace::syscall(pid, None).unwrap();
+    }
+
+    pub fn handle_signal(&self, pid: Pid, sig: Signal) {
+        info!("[PID {: >8}] Signal: {:}", pid, sig);
+
+        let mut suppress_signal = false;
+
+        if sig == Signal::SIGSEGV {
+            let process = Process::new(pid);
+            let regs = process.registers();
+            let instr: u64 = process
+                .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
+                .unwrap();
+
+            if instr & 0xffff == 0x310f {
+                info!("[PID {: >8}] Trap: Rdtsc", pid);
+
+                // rdtsc
+                self.segments
+                    .get_active_segment_with(pid, |segment, is_main| {
+                        let tsc = if is_main {
+                            // add to the log
+                            let tsc = unsafe { _rdtsc() };
+                            segment.trap_event_log.push_back(SavedTrapEvent::Rdtsc(tsc));
+                            tsc
+                        } else {
+                            // replay from the log
+                            let event = segment.trap_event_log.pop_front().unwrap();
+                            if let SavedTrapEvent::Rdtsc(tsc) = event {
+                                tsc
+                            } else {
+                                panic!("Unexpected trap event");
+                            }
+                        };
+
+                        process
+                            .registers()
+                            .with_tsc(tsc)
+                            .with_offsetted_rip(2)
+                            .write();
+                    });
+
+                suppress_signal = true;
+            }
+        }
+        ptrace::syscall(pid, if suppress_signal { None } else { Some(sig) }).unwrap();
     }
 }

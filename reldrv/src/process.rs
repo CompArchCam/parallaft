@@ -1,8 +1,10 @@
 use std::fmt::Debug;
+use std::ops::Deref;
 
 #[cfg(feature = "compel")]
 use compel::ParasiteCtl;
 
+use nix::sys::uio::{process_vm_readv, process_vm_writev, RemoteIoVec};
 #[cfg(feature = "compel")]
 use parasite::commands::{Request, Response};
 
@@ -21,25 +23,22 @@ use nix::{
     },
     unistd::Pid,
 };
+use reverie_syscalls::MemoryAccess;
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
-use crate::{
-    dirty_page_tracer::DirtyPageTracer, page_diff::page_diff, remote_memory::RemoteMemory,
-};
+use crate::{dirty_page_tracer::DirtyPageTracer, page_diff::page_diff};
 
 pub struct Process {
     pub pid: Pid,
-    tracer_pid: Pid,
     dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
-    memory: Mutex<RemoteMemory>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Registers {
     pid: Pid,
-    inner: user_regs_struct,
+    pub inner: user_regs_struct,
 }
 
 impl Registers {
@@ -98,6 +97,20 @@ impl Registers {
         self
     }
 
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_tsc(mut self, tsc: u64) -> Self {
+        self.inner.rax = tsc & 0xffff_ffffu64;
+        self.inner.rdx = tsc >> 32;
+
+        self
+    }
+
+    pub fn with_offsetted_rip(mut self, offset: isize) -> Self {
+        self.inner.rip += offset as u64;
+
+        self
+    }
+
     pub fn write(self) {
         ptrace::setregs(self.pid, self.inner).unwrap()
     }
@@ -109,12 +122,10 @@ impl Registers {
 
 #[allow(unused)]
 impl Process {
-    pub fn new(pid: Pid, tracer_pid: Pid) -> Self {
+    pub fn new(pid: Pid) -> Self {
         Self {
             pid,
-            tracer_pid,
             dirty_page_tracer: Mutex::new(None),
-            memory: Mutex::new(RemoteMemory::new(pid)),
         }
     }
 
@@ -229,7 +240,7 @@ impl Process {
             if cfg!(target_arch = "x86_64") {
                 let last_instr =
                     (ptrace::read(pid, (saved_regs.inner.rip - 2) as _).unwrap() as u64) & 0xffff;
-                assert_eq!(last_instr, 0x050f);
+                assert_eq!(last_instr, 0x050f); // syscall
                 saved_regs.inner.rip -= 2;
                 saved_regs.inner.rax = saved_regs.inner.orig_rax;
             } else {
@@ -266,56 +277,6 @@ impl Process {
         // restore the signal mask
         ptrace::setsigmask(pid, saved_sigmask).unwrap();
     }
-
-    // pub fn syscall_replace(&self, nr: Sysno, args: SyscallArgs) -> i64 {
-    //     // save the old states
-    //     let mut saved_regs = ptrace::getregs(self.pid).unwrap();
-    //     let saved_sigmask = ptrace::getsigmask(self.pid).unwrap();
-
-    //     // prepare the injected syscall number and arguments
-    //     let mut new_regs = saved_regs;
-
-    //     if cfg!(target_arch = "x86_64") {
-    //         new_regs.orig_rax = nr.id() as _;
-    //         new_regs.rax = nr.id() as _;
-    //         new_regs.rdi = args.arg0 as _;
-    //         new_regs.rsi = args.arg1 as _;
-    //         new_regs.rdx = args.arg2 as _;
-    //         new_regs.rcx = args.arg3 as _;
-    //         new_regs.r8 = args.arg4 as _;
-    //         new_regs.r9 = args.arg5 as _;
-    //     } else {
-    //         panic!("Unsupported architecture");
-    //     }
-
-    //     ptrace::setregs(self.pid, new_regs).unwrap();
-
-    //     // block signals during our injected syscall
-    //     ptrace::setsigmask(self.pid, !0).unwrap();
-
-    //     // execute our injected syscall
-    //     ptrace::syscall(self.pid, None).unwrap();
-
-    //     // expect the syscall event
-    //     let wait_status = waitpid(self.pid, None).unwrap();
-    //     assert_eq!(wait_status, WaitStatus::PtraceSyscall(self.pid));
-
-    //     // get the syscall return value
-    //     let syscall_info = ptrace::getsyscallinfo(self.pid).unwrap();
-    //     let syscall_ret = if let SyscallInfoOp::Exit { ret_val, .. } = syscall_info.op {
-    //         ret_val
-    //     } else {
-    //         panic!("Unexpected syscall info: {:?}", syscall_info);
-    //     };
-
-    //     // restore the registers
-    //     ptrace::setregs(self.pid, saved_regs).unwrap();
-
-    //     // restore the signal mask
-    //     ptrace::setsigmask(self.pid, saved_sigmask).unwrap();
-
-    //     syscall_ret
-    // }
 
     pub fn dirty_page_delta_against(
         &self,
@@ -407,17 +368,13 @@ impl Process {
             true,
         );
 
-        let child = Process::new(Pid::from_raw(child_pid as _), self.tracer_pid);
+        let child = Process::new(Pid::from_raw(child_pid as _));
         child
     }
 
-    pub fn memory(&self) -> MutexGuard<RemoteMemory> {
-        self.memory.lock()
+    pub fn as_owned(self) -> OwnedProcess {
+        OwnedProcess { inner: self }
     }
-
-    // pub fn memory_mut(&self) -> RefMut<RemoteMemory> {
-    //     self.memory.borrow_mut()
-    // }
 }
 
 impl Debug for Process {
@@ -426,16 +383,92 @@ impl Debug for Process {
     }
 }
 
-impl Drop for Process {
+impl MemoryAccess for Process {
+    fn read_vectored(
+        &self,
+        read_from: &[std::io::IoSlice],
+        write_to: &mut [std::io::IoSliceMut],
+    ) -> Result<usize, reverie_syscalls::Errno> {
+        let remote_iov: Vec<RemoteIoVec> = read_from
+            .iter()
+            .map(|io_slice| RemoteIoVec {
+                base: io_slice.as_ptr() as _,
+                len: io_slice.len(),
+            })
+            .collect();
+
+        process_vm_readv(self.pid, write_to, &remote_iov).map_err(|e| match e {
+            Errno::EFAULT => reverie_syscalls::Errno::EFAULT,
+            Errno::EINVAL => reverie_syscalls::Errno::EINVAL,
+            Errno::ENOMEM => reverie_syscalls::Errno::ENOMEM,
+            Errno::EPERM => reverie_syscalls::Errno::EPERM,
+            Errno::ESRCH => reverie_syscalls::Errno::ESRCH,
+            _ => reverie_syscalls::Errno::ENODATA,
+        })
+    }
+
+    fn write_vectored(
+        &mut self,
+        read_from: &[std::io::IoSlice],
+        write_to: &mut [std::io::IoSliceMut],
+    ) -> Result<usize, reverie_syscalls::Errno> {
+        let remote_iov: Vec<RemoteIoVec> = write_to
+            .iter()
+            .map(|io_slice| RemoteIoVec {
+                base: io_slice.as_ptr() as _,
+                len: io_slice.len(),
+            })
+            .collect();
+
+        process_vm_writev(self.pid, read_from, &remote_iov).map_err(|e| match e {
+            Errno::EFAULT => reverie_syscalls::Errno::EFAULT,
+            Errno::EINVAL => reverie_syscalls::Errno::EINVAL,
+            Errno::ENOMEM => reverie_syscalls::Errno::ENOMEM,
+            Errno::EPERM => reverie_syscalls::Errno::EPERM,
+            Errno::ESRCH => reverie_syscalls::Errno::ESRCH,
+            _ => reverie_syscalls::Errno::ENODATA,
+        })
+    }
+}
+
+pub struct OwnedProcess {
+    inner: Process,
+}
+
+impl OwnedProcess {
+    pub fn new(pid: Pid) -> Self {
+        Self {
+            inner: Process::new(pid),
+        }
+    }
+}
+
+impl Deref for OwnedProcess {
+    type Target = Process;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Debug for OwnedProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OwnedProcess")
+            .field(&self.pid.as_raw())
+            .finish()
+    }
+}
+
+impl Drop for OwnedProcess {
     fn drop(&mut self) {
-        let result = kill(self.pid, Signal::SIGKILL);
+        let result = kill(self.inner.pid, Signal::SIGKILL);
 
         // we don't need to reap zombie children here because they will be adpoted and reaped by PID 1 anyway after this process dies
 
         match result {
             Ok(_) | Err(Errno::ESRCH) => (),
             err => {
-                panic!("Failed to kill process {:?}: {:?}", self.pid, err);
+                panic!("Failed to kill process {:?}: {:?}", self.inner.pid, err);
             }
         }
     }

@@ -8,7 +8,7 @@ use log::info;
 use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock};
 
-use crate::process::Process;
+use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
 
 #[derive(Debug)]
@@ -20,7 +20,7 @@ type Result<T> = std::result::Result<T, CheckpointError>;
 
 #[derive(Debug)]
 pub enum CheckpointKind {
-    Subsequent { reference: Process },
+    Subsequent { reference: OwnedProcess },
     Initial,
 }
 
@@ -31,7 +31,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn new(epoch: u32, reference: Process) -> Self {
+    pub fn new(epoch: u32, reference: OwnedProcess) -> Self {
         Self {
             epoch,
             kind: CheckpointKind::Subsequent { reference },
@@ -45,7 +45,7 @@ impl Checkpoint {
         }
     }
 
-    pub fn reference<'a>(&'a self) -> Option<&'a Process> {
+    pub fn reference<'a>(&'a self) -> Option<&'a OwnedProcess> {
         match &self.kind {
             CheckpointKind::Subsequent { reference: ref_pid } => Some(ref_pid),
             CheckpointKind::Initial => None,
@@ -56,10 +56,10 @@ impl Checkpoint {
 #[derive(Debug)]
 pub enum SegmentStatus {
     New {
-        checker: Process,
+        checker: OwnedProcess,
     },
     ReadyToCheck {
-        checker: Process,
+        checker: OwnedProcess,
         checkpoint_end: Arc<Checkpoint>,
     },
     Checked {
@@ -113,22 +113,29 @@ impl SegmentStatus {
 }
 
 #[derive(Debug)]
+pub enum SavedTrapEvent {
+    Rdtsc(u64),
+}
+
+#[derive(Debug)]
 pub struct Segment {
     pub checkpoint_start: Arc<Checkpoint>,
     pub status: SegmentStatus,
     pub nr: u32,
     pub syscall_log: LinkedList<SavedSyscall>,
     pub ongoing_syscall: Option<SavedIncompleteSyscall>,
+    pub trap_event_log: LinkedList<SavedTrapEvent>,
 }
 
 impl Segment {
-    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: Process, nr: u32) -> Self {
+    pub fn new(checkpoint_start: Arc<Checkpoint>, checker: OwnedProcess, nr: u32) -> Self {
         Self {
             checkpoint_start,
             status: SegmentStatus::New { checker },
             nr,
             syscall_log: LinkedList::new(),
             ongoing_syscall: None,
+            trap_event_log: LinkedList::new(),
         }
     }
 
@@ -269,7 +276,7 @@ impl SegmentChain {
     pub fn add_checkpoint(
         &self,
         checkpoint: Checkpoint,
-        checker: Option<Process>,
+        checker: Option<OwnedProcess>,
         on_segment_ready: impl FnOnce(&mut Segment, &Checkpoint) -> bool,
         on_cleanup_needed: impl FnOnce() -> (),
     ) {

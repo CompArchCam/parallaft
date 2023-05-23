@@ -21,18 +21,19 @@ use std::time::{Duration, Instant};
 use bitflags::bitflags;
 use nix::errno::Errno;
 
+use nix::libc;
 use nix::sys::ptrace;
 use nix::sys::signal::{raise, Signal};
 
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{fork, gettid, ForkResult, Pid};
+use nix::unistd::{fork, ForkResult, Pid};
 
 use clap::Parser;
 
 use log::info;
 
 use crate::checkpoint::{CheckCoordinator, CheckCoordinatorFlags};
-use crate::process::Process;
+use crate::process::OwnedProcess;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -150,7 +151,7 @@ fn parent_work(
     info!("Child process tracing started");
 
     let check_coord = CheckCoordinator::new(
-        Process::new(child_pid, gettid()),
+        OwnedProcess::new(child_pid),
         checker_cpu_set,
         check_coord_flags,
         max_nr_live_segments,
@@ -181,7 +182,9 @@ fn parent_work(
         .unwrap();
 
         match status {
-            WaitStatus::Stopped(pid, sig) => ptrace::syscall(pid, sig).unwrap(),
+            WaitStatus::Stopped(pid, sig) => {
+                check_coord.handle_signal(pid, sig);
+            }
             WaitStatus::Exited(pid, status) => {
                 info!("Child {} exited", pid);
                 if pid == check_coord.main.pid {
@@ -358,6 +361,7 @@ fn run(
             let err = unsafe {
                 cmd.env("CHECKER_CHECKPOINT_FREQ", checkpoint_freq.to_string())
                     .pre_exec(|| {
+                        assert_eq!(libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV), 0);
                         raise(Signal::SIGSTOP).unwrap();
                         Ok(())
                     })
@@ -450,7 +454,10 @@ mod tests {
         unistd::{self},
     };
     use serial_test::serial;
-    use std::{fs::File, io::IoSliceMut, num::NonZeroUsize, os::fd::OwnedFd, sync::Once};
+    use std::{
+        arch::x86_64::_rdtsc, fs::File, io::IoSliceMut, mem::MaybeUninit, num::NonZeroUsize,
+        os::fd::OwnedFd, sync::Once,
+    };
 
     static INIT: Once = Once::new();
 
@@ -479,6 +486,10 @@ mod tests {
                 true,
             ),
             ForkResult::Child => {
+                assert_eq!(
+                    unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) },
+                    0
+                );
                 raise(Signal::SIGSTOP).unwrap();
                 let code = f();
                 std::process::exit(code);
@@ -786,13 +797,84 @@ mod tests {
         )
     }
 
-    // // // below is unreliable as some systems do not have vdso
-    // // #[tokio::test]
-    // // #[serial]
-    // // #[should_panic]
-    // // async fn test_vdso_handling() {
-    // //     // we don't support vdso handling now
-    // //     let (output, out_dir) = compile("syscall_clock_gettime.c");
-    // //     run_reldrv(&mut Command::new(out_dir.path().join(output)));
-    // // }
+    #[test]
+    #[serial]
+    fn test_rdtsc() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                checkpoint_take();
+                let _tsc = unsafe { _rdtsc() };
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_rdtsc_loop() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
+
+                for _ in 0..1000 {
+                    let tsc = unsafe { _rdtsc() };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
+
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_syscall_clock_gettime() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                checkpoint_take();
+                let mut t = MaybeUninit::<libc::timespec>::uninit();
+
+                unsafe {
+                    libc::syscall(
+                        libc::SYS_clock_gettime,
+                        libc::CLOCK_MONOTONIC,
+                        t.as_mut_ptr(),
+                    )
+                };
+
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    // #[test]
+    // #[serial]
+    // fn test_syscall_getcpu() {
+    //     setup();
+    //     assert_eq!(
+    //         trace(|| {
+    //             checkpoint_take();
+
+    //             for _ in 0..10000 {
+    //                 let _c = unsafe { libc::sched_getcpu() };
+    //                 unsafe { libc::sched_yield() }; // yield to another cpu
+    //             }
+
+    //             checkpoint_fini();
+    //             0
+    //         }),
+    //         0
+    //     )
+    // }
 }
