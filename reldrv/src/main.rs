@@ -82,6 +82,11 @@ struct CliArgs {
     #[arg(long)]
     dump_stats: bool,
 
+    #[cfg(target_arch = "x86_64")]
+    /// Don't trap rdtsc instructions.
+    #[arg(long)]
+    dont_trap_rdtsc: bool,
+
     /// File to dump stats to.
     #[arg(long)]
     stats_output: Option<PathBuf>,
@@ -106,6 +111,7 @@ bitflags! {
     struct RunnerFlags: u32 {
         const POLL_WAITPID = 0b00000001;
         const DUMP_STATS = 0b00000010;
+        const DONT_TRAP_RDTSC = 0b00000100;
     }
 }
 
@@ -364,8 +370,11 @@ fn run(
         Ok(ForkResult::Child) => {
             let err = unsafe {
                 cmd.env("CHECKER_CHECKPOINT_FREQ", checkpoint_freq.to_string())
-                    .pre_exec(|| {
-                        assert_eq!(libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV), 0);
+                    .pre_exec(move || {
+                        #[cfg(target_arch = "x86_64")]
+                        if !runner_flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
+                            assert_eq!(libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV), 0);
+                        }
                         raise(Signal::SIGSTOP).unwrap();
                         Ok(())
                     })
@@ -411,6 +420,7 @@ fn main() {
     let mut runner_flags = RunnerFlags::empty();
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
     runner_flags.set(RunnerFlags::DUMP_STATS, cli.dump_stats);
+    runner_flags.set(RunnerFlags::DONT_TRAP_RDTSC, cli.dont_trap_rdtsc);
 
     let mut check_coord_flags = CheckCoordinatorFlags::empty();
     check_coord_flags.set(CheckCoordinatorFlags::SYNC_MEM_CHECK, cli.sync_mem_check);
@@ -495,6 +505,7 @@ mod tests {
                 true,
             ),
             ForkResult::Child => {
+                #[cfg(target_arch = "x86_64")]
                 assert_eq!(
                     unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) },
                     0
