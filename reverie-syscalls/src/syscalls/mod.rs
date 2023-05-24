@@ -1374,7 +1374,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Chdir {
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
     }
 }
