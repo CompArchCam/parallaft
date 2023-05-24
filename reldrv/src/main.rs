@@ -856,6 +856,19 @@ mod tests {
 
     #[test]
     #[serial]
+    fn test_rdtsc_outside_protected_region() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                unsafe { _rdtsc() };
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
     fn test_rdtscp() {
         setup();
         assert_eq!(
@@ -888,6 +901,20 @@ mod tests {
                 }
 
                 checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_rdtscp_outside_protected_region() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                let mut aux = MaybeUninit::uninit();
+                unsafe { __rdtscp(aux.as_mut_ptr()) };
                 0
             }),
             0

@@ -723,11 +723,12 @@ impl<'c> CheckCoordinator<'c> {
                 info!("[PID {: >8}] Trap: Rdtsc", pid);
 
                 // rdtsc
-                self.segments
+                let tsc = self
+                    .segments
                     .get_active_segment_with(pid, |segment, is_main| {
-                        let tsc = if is_main {
-                            // add to the log
+                        if is_main {
                             let tsc = unsafe { _rdtsc() };
+                            // add to the log
                             segment.trap_event_log.push_back(SavedTrapEvent::Rdtsc(tsc));
                             tsc
                         } else {
@@ -738,23 +739,25 @@ impl<'c> CheckCoordinator<'c> {
                             } else {
                                 panic!("Unexpected trap event");
                             }
-                        };
+                        }
+                    })
+                    .unwrap_or_else(|| unsafe { _rdtsc() });
 
-                        process
-                            .registers()
-                            .with_tsc(tsc)
-                            .with_offsetted_rip(2)
-                            .write();
-                    });
+                process
+                    .registers()
+                    .with_tsc(tsc)
+                    .with_offsetted_rip(2)
+                    .write();
 
                 suppress_signal = true;
             } else if instr & 0xffffff == 0xf9010f {
                 info!("[PID {: >8}] Trap: Rdtscp", pid);
 
                 // rdtscp
-                self.segments
+                let (tsc, aux) = self
+                    .segments
                     .get_active_segment_with(pid, |segment, is_main| {
-                        let (tsc, aux) = if is_main {
+                        if is_main {
                             let mut aux = MaybeUninit::uninit();
                             // add to the log
                             let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
@@ -773,14 +776,20 @@ impl<'c> CheckCoordinator<'c> {
                             } else {
                                 panic!("Unexpected trap event");
                             }
-                        };
-
-                        process
-                            .registers()
-                            .with_tscp(tsc, aux)
-                            .with_offsetted_rip(3)
-                            .write();
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        let mut aux = MaybeUninit::uninit();
+                        let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                        let aux = unsafe { aux.assume_init() };
+                        (tsc, aux)
                     });
+
+                process
+                    .registers()
+                    .with_tscp(tsc, aux)
+                    .with_offsetted_rip(3)
+                    .write();
                 suppress_signal = true;
             }
         }
