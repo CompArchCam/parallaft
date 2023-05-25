@@ -24,7 +24,7 @@ use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
 };
-use crate::segments::{Checkpoint, SavedTrapEvent, SegmentChain};
+use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
 pub struct CheckCoordinator<'c> {
@@ -77,7 +77,13 @@ impl<'c> CheckCoordinator<'c> {
     }
 
     /// Handle checkpoint request from the target
-    pub fn handle_checkpoint(&self, pid: Pid, is_finishing: bool, restart_old_syscall: bool) {
+    pub fn handle_checkpoint(
+        &self,
+        pid: Pid,
+        is_finishing: bool,
+        restart_old_syscall: bool,
+        caller: CheckpointCaller,
+    ) {
         if pid == self.main.pid {
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
@@ -121,7 +127,7 @@ impl<'c> CheckCoordinator<'c> {
                 }
 
                 let (checker, checkpoint) = match self.segments.is_last_checkpoint_finalizing() {
-                    true => (reference, Checkpoint::new_initial(epoch_local)),
+                    true => (reference, Checkpoint::new_initial(epoch_local, caller)),
                     false => (
                         reference
                             .clone_process(
@@ -131,7 +137,7 @@ impl<'c> CheckCoordinator<'c> {
                                 restart_old_syscall,
                             )
                             .as_owned(),
-                        Checkpoint::new(epoch_local, reference),
+                        Checkpoint::new(epoch_local, reference, caller),
                     ),
                 };
 
@@ -157,7 +163,7 @@ impl<'c> CheckCoordinator<'c> {
                         )
                         .as_owned();
                     self.main.resume();
-                    let checkpoint = Checkpoint::new(epoch_local, reference);
+                    let checkpoint = Checkpoint::new(epoch_local, reference, caller);
 
                     info!("New checkpoint: {:?}", checkpoint);
                     self.add_checkpoint(checkpoint, None);
@@ -325,7 +331,12 @@ impl<'c> CheckCoordinator<'c> {
                         let this_reference = checkpoint.reference().unwrap();
                         let mut ctl =
                             client_control::read(this_reference.pid, *base_address).unwrap();
-                        ctl.mode = client_control::CliMode::Checker;
+                        ctl.role = if checkpoint.caller == CheckpointCaller::Child {
+                            client_control::CliRole::Checker
+                        } else {
+                            client_control::CliRole::Nop
+                        };
+
                         client_control::write(&ctl, last_checker.pid, *base_address).unwrap();
                     }
 
@@ -408,7 +419,7 @@ impl<'c> CheckCoordinator<'c> {
                     panic!("Execve(at) is disallowed in protected regions");
                 }
                 Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                    self.handle_checkpoint(pid, true, true);
+                    self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
                     return; // skip ptrace::syscall
                 }
                 Syscall::ArchPrctl(_)

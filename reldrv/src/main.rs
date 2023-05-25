@@ -33,6 +33,7 @@ use log::info;
 
 use crate::checkpoint::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::process::OwnedProcess;
+use crate::segments::CheckpointCaller;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -249,11 +250,21 @@ fn parent_work(
                             match (raw_nr, raw_args) {
                                 (0xff77, ..) => {
                                     info!("Checkpoint requested by {}", pid);
-                                    check_coord.handle_checkpoint(pid, false, false);
+                                    check_coord.handle_checkpoint(
+                                        pid,
+                                        false,
+                                        false,
+                                        CheckpointCaller::Child,
+                                    );
                                 }
                                 (0xff78, ..) => {
                                     info!("Checkpoint finish requested by {}", pid);
-                                    check_coord.handle_checkpoint(pid, true, false);
+                                    check_coord.handle_checkpoint(
+                                        pid,
+                                        true,
+                                        false,
+                                        CheckpointCaller::Child,
+                                    );
                                 }
                                 (0xff79, [base_address, ..]) => {
                                     assert!(pid == check_coord.main.pid);

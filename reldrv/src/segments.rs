@@ -24,23 +24,33 @@ pub enum CheckpointKind {
     Initial,
 }
 
+// Who made the checkpoint request
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckpointCaller {
+    Child,
+    Shell,
+}
+
 #[derive(Debug)]
 pub struct Checkpoint {
     pub kind: CheckpointKind,
+    pub caller: CheckpointCaller,
     pub epoch: u32,
 }
 
 impl Checkpoint {
-    pub fn new(epoch: u32, reference: OwnedProcess) -> Self {
+    pub fn new(epoch: u32, reference: OwnedProcess, caller: CheckpointCaller) -> Self {
         Self {
             epoch,
+            caller,
             kind: CheckpointKind::Subsequent { reference },
         }
     }
 
-    pub fn new_initial(epoch: u32) -> Self {
+    pub fn new_initial(epoch: u32, caller: CheckpointCaller) -> Self {
         Self {
             epoch,
+            caller,
             kind: CheckpointKind::Initial,
         }
     }

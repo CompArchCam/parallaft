@@ -10,10 +10,11 @@ use nix::Result;
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
-pub enum CliMode {
+pub enum CliRole {
     #[default]
     Main = 0,
     Checker = 1,
+    Nop = 2,
 }
 
 const MAGIC: u32 = 0xfbb59834;
@@ -22,7 +23,7 @@ const MAGIC: u32 = 0xfbb59834;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CliControl {
     magic: u32,
-    pub mode: CliMode,
+    pub role: CliRole,
     interval_tsc: u64,
     last_tsc: u64,
     pub counter: i32,
