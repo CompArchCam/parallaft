@@ -23,7 +23,7 @@ use nix::{
     },
     unistd::Pid,
 };
-use reverie_syscalls::MemoryAccess;
+use reverie_syscalls::{Addr, MemoryAccess};
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
@@ -187,20 +187,52 @@ impl Process {
             .expect("failed to make remote syscall")
     }
 
+    pub fn instr_at(&self, addr: usize, len: usize) -> usize {
+        let val: usize = self.read_value(Addr::from_raw(addr).unwrap()).unwrap();
+
+        val & ((1_usize << (len * 8)) - 1)
+    }
+
     pub fn syscall_direct(
         &self,
         nr: Sysno,
         args: SyscallArgs,
-        restart_parent_old_syscall: bool,
-        restart_child_old_syscall: bool,
+        mut restart_parent_old_syscall: bool,
+        mut restart_child_old_syscall: bool,
     ) -> i64 {
-        assert!(matches!(
-            ptrace::getsyscallinfo(self.pid).unwrap().op,
-            SyscallInfoOp::Entry { .. }
-        ));
+        let is_syscall_exit = match ptrace::getsyscallinfo(self.pid).unwrap().op {
+            SyscallInfoOp::Entry { .. } => false,
+            SyscallInfoOp::Exit { .. } => {
+                // never restart old syscalls on exit
+                restart_child_old_syscall = false;
+                restart_parent_old_syscall = false;
+                true
+            }
+            _ => panic!(),
+        };
 
         // save the old states
         let (saved_regs, saved_sigmask) = Self::save_state(self.pid);
+
+        // handle syscall exit
+        if is_syscall_exit {
+            assert_eq!(self.instr_at(saved_regs.inner.rip as usize - 2, 2), 0x050f); // syscall
+
+            dbg!(saved_regs.inner.rip);
+
+            saved_regs.with_offsetted_rip(-2).write(); // jump back to previous syscall
+            ptrace::syscall(self.pid, None).unwrap();
+
+            assert!(matches!(
+                waitpid(self.pid, None).unwrap(),
+                WaitStatus::PtraceSyscall(_)
+            ));
+
+            assert!(matches!(
+                ptrace::getsyscallinfo(self.pid).unwrap().op,
+                SyscallInfoOp::Entry { .. }
+            ));
+        }
 
         // prepare the injected syscall number and arguments
         saved_regs.with_sysno(nr).with_syscall_args(args).write();
@@ -416,6 +448,10 @@ impl Process {
     pub fn as_owned(self) -> OwnedProcess {
         OwnedProcess { inner: self }
     }
+
+    pub fn waitpid(&self) -> Result<WaitStatus, Errno> {
+        waitpid(self.pid, None)
+    }
 }
 
 impl Debug for Process {
@@ -543,3 +579,243 @@ impl Drop for OwnedProcess {
 //         self.inner.retain(|pid, process| process.strong_count() > 0)
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use nix::{
+        sys::{signal::raise, wait::WaitPidFlag},
+        unistd::{fork, getpid, gettid, getuid, ForkResult},
+    };
+    use serial_test::serial;
+
+    use super::*;
+
+    fn trace(f: impl FnOnce() -> i32) -> OwnedProcess {
+        match unsafe { fork().unwrap() } {
+            ForkResult::Parent { child } => {
+                let wait_status = waitpid(child, Some(WaitPidFlag::WSTOPPED)).unwrap();
+                assert_eq!(wait_status, WaitStatus::Stopped(child, Signal::SIGSTOP));
+                ptrace::seize(
+                    child,
+                    ptrace::Options::PTRACE_O_TRACESYSGOOD
+                        | ptrace::Options::PTRACE_O_TRACECLONE
+                        | ptrace::Options::PTRACE_O_TRACEFORK,
+                )
+                .unwrap();
+                // ptrace::setoptions(child, ptrace::Options::PTRACE_O_TRACESYSGOOD).unwrap();
+                OwnedProcess::new(child)
+            }
+            ForkResult::Child => {
+                raise(Signal::SIGSTOP).unwrap();
+                let code = f();
+                std::process::exit(code)
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_process_syscall_injection_on_entry() {
+        let process = trace(|| {
+            let pid1 = getpid();
+            raise(Signal::SIGSTOP).unwrap();
+
+            // syscall is injected here
+            let pid2 = getpid();
+
+            gettid();
+
+            if pid1 == pid2 {
+                0 // pass
+            } else {
+                1 // fail
+            }
+        });
+
+        let uid = getuid();
+
+        ptrace::cont(process.pid, None).unwrap();
+
+        assert_eq!(
+            process.waitpid().unwrap(),
+            WaitStatus::Stopped(process.pid, Signal::SIGSTOP)
+        );
+
+        // second getpid entry
+        ptrace::syscall(process.pid, None).unwrap();
+
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        assert_eq!(process.registers().sysno().unwrap(), Sysno::getpid);
+
+        // inject a getuid syscall
+        let uid2 = process.syscall_direct(Sysno::getuid, syscall_args!(), true, true);
+
+        assert_eq!(uid.as_raw(), uid2 as u32);
+
+        // second getpid exit
+        ptrace::syscall(process.pid, None).unwrap();
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        dbg!(ptrace::getsyscallinfo(process.pid).unwrap());
+
+        // gettid entry
+        ptrace::syscall(process.pid, None).unwrap();
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+        assert_eq!(process.registers().sysno().unwrap(), Sysno::gettid);
+
+        // program exit
+        ptrace::cont(process.pid, None).unwrap();
+
+        assert_eq!(
+            process.waitpid().unwrap(),
+            WaitStatus::Exited(process.pid, 0)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_process_syscall_injection_on_exit() {
+        let process = trace(|| {
+            let pid1 = getpid();
+            raise(Signal::SIGSTOP).unwrap();
+
+            // syscall is injected here
+            let pid2 = getpid();
+
+            gettid();
+
+            if pid1 == pid2 {
+                0 // pass
+            } else {
+                1 // fail
+            }
+        });
+
+        let uid = getuid();
+
+        ptrace::cont(process.pid, None).unwrap();
+
+        assert_eq!(
+            process.waitpid().unwrap(),
+            WaitStatus::Stopped(process.pid, Signal::SIGSTOP)
+        );
+
+        // second getpid entry
+        ptrace::syscall(process.pid, None).unwrap();
+
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        assert_eq!(process.registers().sysno().unwrap(), Sysno::getpid);
+
+        // second getpid exit
+        ptrace::syscall(process.pid, None).unwrap();
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        // inject a getuid syscall
+        let uid2 = process.syscall_direct(Sysno::getuid, syscall_args!(), true, true);
+        assert_eq!(uid.as_raw(), uid2 as u32);
+
+        // gettid entry
+        ptrace::syscall(process.pid, None).unwrap();
+        assert!(matches!(
+            process.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+        assert_eq!(process.registers().sysno().unwrap(), Sysno::gettid);
+
+        // program exit
+        ptrace::cont(process.pid, None).unwrap();
+
+        assert_eq!(
+            process.waitpid().unwrap(),
+            WaitStatus::Exited(process.pid, 0)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_process_syscall_injection_on_exit_with_clone() {
+        let parent = trace(|| {
+            let pid1 = getpid();
+            raise(Signal::SIGSTOP).unwrap();
+
+            // syscall is injected here
+            let pid2 = getpid();
+
+            gettid();
+
+            if pid1 == pid2 {
+                0 // pass
+            } else {
+                1 // fail
+            }
+        });
+
+        ptrace::cont(parent.pid, None).unwrap();
+
+        assert_eq!(
+            parent.waitpid().unwrap(),
+            WaitStatus::Stopped(parent.pid, Signal::SIGSTOP)
+        );
+
+        // second getpid entry
+        ptrace::syscall(parent.pid, None).unwrap();
+
+        assert!(matches!(
+            parent.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        assert_eq!(parent.registers().sysno().unwrap(), Sysno::getpid);
+
+        // second getpid exit
+        ptrace::syscall(parent.pid, None).unwrap();
+        assert!(matches!(
+            parent.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        // clone the process
+        let child = parent.clone_process(CloneFlags::CLONE_PARENT, None, false, false);
+
+        // parent gettid entry
+        ptrace::syscall(parent.pid, None).unwrap();
+        assert!(matches!(
+            parent.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+        assert_eq!(parent.registers().sysno().unwrap(), Sysno::gettid);
+
+        // parent exit
+        ptrace::cont(parent.pid, None).unwrap();
+        assert_eq!(parent.waitpid().unwrap(), WaitStatus::Exited(parent.pid, 0));
+
+        // child gettid entry
+        ptrace::syscall(child.pid, None).unwrap();
+        assert!(matches!(
+            child.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+        assert_eq!(child.registers().sysno().unwrap(), Sysno::gettid);
+
+        // child exit
+        ptrace::cont(child.pid, None).unwrap();
+        assert_eq!(child.waitpid().unwrap(), WaitStatus::Exited(child.pid, 0));
+    }
+}
