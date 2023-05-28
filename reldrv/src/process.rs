@@ -115,7 +115,7 @@ impl Registers {
     }
 
     pub fn with_offsetted_rip(mut self, offset: isize) -> Self {
-        self.inner.rip += offset as u64;
+        self.inner.rip = self.inner.rip.wrapping_add_signed(offset as _);
 
         self
     }
