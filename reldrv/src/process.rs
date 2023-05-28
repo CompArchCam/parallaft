@@ -41,6 +41,7 @@ pub struct Registers {
     pub inner: user_regs_struct,
 }
 
+#[allow(unused)]
 impl Registers {
     pub fn read_from(pid: Pid) -> Self {
         Self {
@@ -73,6 +74,37 @@ impl Registers {
         }
 
         self
+    }
+
+    pub fn sysno(&self) -> Option<Sysno> {
+        if cfg!(target_arch = "x86_64") {
+            Sysno::new(self.sysno_raw())
+        } else {
+            panic!("Unsupported architecture")
+        }
+    }
+
+    pub fn sysno_raw(&self) -> usize {
+        if cfg!(target_arch = "x86_64") {
+            self.inner.orig_rax as _
+        } else {
+            panic!("Unsupported architecture")
+        }
+    }
+
+    pub fn syscall_args(&self) -> SyscallArgs {
+        if cfg!(target_arch = "x86_64") {
+            SyscallArgs::new(
+                self.inner.rdi as _,
+                self.inner.rsi as _,
+                self.inner.rdx as _,
+                self.inner.r10 as _,
+                self.inner.r8 as _,
+                self.inner.r9 as _,
+            )
+        } else {
+            panic!("Unsupported architecture")
+        }
     }
 
     pub fn with_syscall_ret_val(mut self, ret_val: isize) -> Self {
