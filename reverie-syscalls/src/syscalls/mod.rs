@@ -1347,6 +1347,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_write_specified_only]
+    #[may_read_specified_only]
     pub struct Ftruncate {
         fd: i32,
         length: libc::off_t,
@@ -1390,8 +1392,12 @@ typed_syscall! {
 // Rename not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Rename {
+        #[path_ptr_may_read]
         oldpath: Option<PathPtr>,
+        #[path_ptr_may_read]
         newpath: Option<PathPtr>,
     }
 }
@@ -1509,8 +1515,12 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Gettimeofday {
+        #[object_may_written]
         tv: Option<TimevalMutPtr>,
+        #[object_may_written]
         tz: Option<AddrMut<Timezone>>,
     }
 }
@@ -2271,7 +2281,10 @@ typed_syscall! {
 // Time not available in aarch64
 #[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Time {
+        #[object_may_written]
         tloc: Option<AddrMut<libc::time_t>>,
     }
 }
@@ -2296,9 +2309,12 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct SchedSetaffinity {
         pid: libc::pid_t,
         len: u32,
+        #[object_may_read]
         mask: Option<Addr<libc::c_ulong>>,
     }
 }
