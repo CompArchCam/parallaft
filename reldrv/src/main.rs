@@ -1,4 +1,4 @@
-mod checkpoint;
+mod check_coord;
 mod client_control;
 #[cfg(feature = "compel")]
 mod compel_parasite;
@@ -31,7 +31,7 @@ use clap::Parser;
 
 use log::info;
 
-use crate::checkpoint::{
+use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags, CheckCoordinatorHooks, CheckCoordinatorOptions,
 };
 use crate::process::OwnedProcess;
