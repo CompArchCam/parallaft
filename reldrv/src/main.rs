@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_syscall_mremap() {
+    fn test_syscall_mremap_maymove() {
         setup();
         assert_eq!(
             trace(|| {
@@ -802,6 +802,53 @@ mod tests {
                 arr_new.iter().all(|&x| x == 84);
 
                 unsafe { mman::munmap(addr, LEN).unwrap() };
+
+                checkpoint_fini();
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_syscall_mremap_may_not_move() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                checkpoint_take();
+
+                const LEN: usize = 4096 * 4;
+                const NEW_LEN: usize = 4096 * 2;
+
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
+                        None,
+                        0,
+                    )
+                    .unwrap()
+                };
+
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+
+                // ensure we can write the mmap-ped memory
+                arr.fill(42);
+
+                let addr_new = unsafe {
+                    mman::mremap(addr, LEN, NEW_LEN, mman::MRemapFlags::empty(), None).unwrap()
+                };
+
+                let arr_new = unsafe { slice::from_raw_parts_mut(addr_new as *mut u8, NEW_LEN) };
+
+                // ensure we can read and write the mmap-ped memory
+                arr_new.fill(84);
+                arr_new.iter().all(|&x| x == 84);
+
+                unsafe { mman::munmap(addr, NEW_LEN).unwrap() };
 
                 checkpoint_fini();
                 0

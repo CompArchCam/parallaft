@@ -497,7 +497,7 @@ impl<'c> CheckCoordinator<'c> {
                         }
                     }
                 }
-                Syscall::Mremap(mremap) => {
+                Syscall::Mremap(mut mremap) => {
                     let mut active_segment = active_segment.lock();
 
                     if is_main {
@@ -514,11 +514,26 @@ impl<'c> CheckCoordinator<'c> {
 
                         assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
 
+                        // rewrite only if mmap has succeeded
                         if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
-                            // rewrite only if mmap has succeeded
-                            let mremap = mremap
-                                .with_new_addr(AddrMut::from_ptr(saved_syscall.ret_val as _))
-                                .with_flags(mremap.flags() | nix::libc::MREMAP_FIXED as usize);
+                            // rewrite only if the original call moves the address
+                            if mremap.flags() & nix::libc::MREMAP_MAYMOVE as usize != 0 {
+                                let addr_raw = mremap.addr().map(|a| a.as_raw()).unwrap_or(0);
+
+                                if addr_raw == saved_syscall.ret_val as _ {
+                                    mremap = mremap.with_flags(
+                                        mremap.flags() & !nix::libc::MREMAP_MAYMOVE as usize,
+                                    );
+                                } else {
+                                    mremap = mremap
+                                        .with_new_addr(AddrMut::from_ptr(
+                                            saved_syscall.ret_val as _,
+                                        ))
+                                        .with_flags(
+                                            mremap.flags() | nix::libc::MREMAP_FIXED as usize,
+                                        );
+                                }
+                            }
 
                             let (new_sysno, new_args) = mremap.into_parts();
                             active_segment
