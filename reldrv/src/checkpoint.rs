@@ -27,16 +27,15 @@ use crate::saved_syscall::{
 use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
-pub struct CheckCoordinator<'c> {
+pub struct CheckCoordinator {
     pub segments: Arc<SegmentChain>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
-    flags: CheckCoordinatorFlags,
-    checker_cpu_affinity: &'c Vec<usize>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     avg_nr_dirty_pages: Arc<Mutex<f64>>,
     client_control_addr: Arc<RwLock<Option<usize>>>,
-    max_nr_live_segments: usize,
+    options: CheckCoordinatorOptions,
+    hooks: CheckCoordinatorHooks,
 }
 
 bitflags! {
@@ -53,13 +52,58 @@ bitflags! {
     }
 }
 
+pub struct CheckCoordinatorOptions {
+    pub max_nr_live_segments: usize,
+    pub flags: CheckCoordinatorFlags,
+}
+
+impl Default for CheckCoordinatorOptions {
+    fn default() -> Self {
+        Self {
+            max_nr_live_segments: 0,
+            flags: CheckCoordinatorFlags::empty(),
+        }
+    }
+}
+
 #[allow(unused)]
-impl<'c> CheckCoordinator<'c> {
+impl CheckCoordinatorOptions {
+    pub fn with_max_nr_live_segments(mut self, max_nr_live_segments: usize) -> Self {
+        self.max_nr_live_segments = max_nr_live_segments;
+        self
+    }
+
+    pub fn with_flags(mut self, flags: CheckCoordinatorFlags) -> Self {
+        self.flags = flags;
+        self
+    }
+}
+
+pub struct CheckCoordinatorHooks {
+    pub on_checker_created: Box<dyn Fn(&OwnedProcess) -> ()>,
+}
+
+impl Default for CheckCoordinatorHooks {
+    fn default() -> Self {
+        Self {
+            on_checker_created: Box::new(|_| ()),
+        }
+    }
+}
+
+impl CheckCoordinatorHooks {
+    pub fn with_on_checker_created(mut self, f: impl Fn(&OwnedProcess) -> () + 'static) -> Self {
+        self.on_checker_created = Box::new(f);
+        self
+    }
+}
+
+#[allow(unused)]
+impl CheckCoordinator {
     pub fn new(
         main: OwnedProcess,
-        checker_cpu_affinity: &'c Vec<usize>,
-        flags: CheckCoordinatorFlags,
-        max_nr_live_segments: usize,
+        options: CheckCoordinatorOptions,
+        hooks: CheckCoordinatorHooks,
     ) -> Self {
         // main.pid
         let main_pid = main.pid;
@@ -67,12 +111,11 @@ impl<'c> CheckCoordinator<'c> {
             main: Arc::new(main),
             segments: Arc::new(SegmentChain::new(main_pid)),
             epoch: AtomicU32::new(0),
-            checker_cpu_affinity,
-            flags,
             pending_sync: Arc::new(Mutex::new(None)),
             avg_nr_dirty_pages: Arc::new(Mutex::new(0.0)),
             client_control_addr: Arc::new(RwLock::new(None)),
-            max_nr_live_segments,
+            options,
+            hooks,
         }
     }
 
@@ -87,7 +130,11 @@ impl<'c> CheckCoordinator<'c> {
         if pid == self.main.pid {
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
-            if self.flags.contains(CheckCoordinatorFlags::DONT_FORK) {
+            if self
+                .options
+                .flags
+                .contains(CheckCoordinatorFlags::DONT_FORK)
+            {
                 self.main.resume();
                 return;
             }
@@ -113,13 +160,15 @@ impl<'c> CheckCoordinator<'c> {
                     .as_owned();
 
                 if !self
+                    .options
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
                 {
                     self.main.clear_dirty_page_bits();
                 }
 
-                if self.max_nr_live_segments == 0 || self.segments.len() < self.max_nr_live_segments
+                if self.options.max_nr_live_segments == 0
+                    || self.segments.len() < self.options.max_nr_live_segments
                 {
                     self.main.resume();
                 } else {
@@ -141,8 +190,10 @@ impl<'c> CheckCoordinator<'c> {
                     ),
                 };
 
-                checker.set_cpu_affinity(&self.checker_cpu_affinity);
+                (self.hooks.on_checker_created)(&checker);
+
                 if !self
+                    .options
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
                 {
@@ -175,17 +226,26 @@ impl<'c> CheckCoordinator<'c> {
         } else if let Some(segment) = self.segments.get_segment_by_checker_pid(pid) {
             info!("Checker called checkpoint");
 
-            if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
+            if self
+                .options
+                .flags
+                .contains(CheckCoordinatorFlags::NO_MEM_CHECK)
+            {
                 segment.lock().mark_as_checked(false).unwrap();
                 Self::cleanup_committed_segments(
                     &self.main,
                     &mut self.pending_sync.lock(),
                     &self.segments,
-                    self.max_nr_live_segments,
-                    self.flags
+                    self.options.max_nr_live_segments,
+                    self.options
+                        .flags
                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                 );
-            } else if self.flags.contains(CheckCoordinatorFlags::SYNC_MEM_CHECK) {
+            } else if self
+                .options
+                .flags
+                .contains(CheckCoordinatorFlags::SYNC_MEM_CHECK)
+            {
                 todo!();
                 // let mut segment = segment.lock();
                 // let (result, nr_dirty_pages) = segment.check().unwrap();
@@ -217,8 +277,8 @@ impl<'c> CheckCoordinator<'c> {
                 let client_control_addr = self.client_control_addr.clone();
 
                 let main = self.main.clone();
-                let flags = self.flags;
-                let max_nr_live_segments = self.max_nr_live_segments;
+                let flags = self.options.flags;
+                let max_nr_live_segments = self.options.max_nr_live_segments;
 
                 std::thread::Builder::new()
                     .name(format!("checker-memcmp-{}", pid))
@@ -320,7 +380,11 @@ impl<'c> CheckCoordinator<'c> {
             checkpoint,
             checker,
             |last_segment, checkpoint| {
-                if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
+                if self
+                    .options
+                    .flags
+                    .contains(CheckCoordinatorFlags::DONT_RUN_CHECKER)
+                {
                     last_segment.mark_as_checked(false);
                     true
                 } else {
@@ -349,8 +413,9 @@ impl<'c> CheckCoordinator<'c> {
                     &self.main,
                     &mut self.pending_sync.lock(),
                     &self.segments,
-                    self.max_nr_live_segments,
-                    self.flags
+                    self.options.max_nr_live_segments,
+                    self.options
+                        .flags
                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                 );
             },
@@ -375,6 +440,7 @@ impl<'c> CheckCoordinator<'c> {
     /// Check if any checker has errors unless IGNORE_CHECK_ERRORS is set.
     pub fn has_errors(&self) -> bool {
         !self
+            .options
             .flags
             .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
             && self.segments.has_errors()
