@@ -4,6 +4,7 @@ use std::ops::Deref;
 #[cfg(feature = "compel")]
 use compel::ParasiteCtl;
 
+use lazy_init::Lazy;
 use nix::sys::uio::{process_vm_readv, process_vm_writev, RemoteIoVec};
 #[cfg(feature = "compel")]
 use parasite::commands::{Request, Response};
@@ -26,13 +27,11 @@ use nix::{
 use reverie_syscalls::{Addr, MemoryAccess};
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
-use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
-
 use crate::{dirty_page_tracer::DirtyPageTracer, page_diff::page_diff};
 
 pub struct Process {
     pub pid: Pid,
-    dirty_page_tracer: Mutex<Option<DirtyPageTracer>>,
+    dirty_page_tracer: Lazy<DirtyPageTracer>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,7 +165,7 @@ impl Process {
     pub fn new(pid: Pid) -> Self {
         Self {
             pid,
-            dirty_page_tracer: Mutex::new(None),
+            dirty_page_tracer: Lazy::new(),
         }
     }
 
@@ -378,10 +377,9 @@ impl Process {
         }
     }
 
-    fn dirty_page_tracer(&self) -> MappedMutexGuard<DirtyPageTracer> {
-        MutexGuard::map(self.dirty_page_tracer.lock(), |t| {
-            t.get_or_insert_with(|| DirtyPageTracer::new(self.pid.as_raw()))
-        })
+    fn dirty_page_tracer(&self) -> &DirtyPageTracer {
+        self.dirty_page_tracer
+            .get_or_create(|| DirtyPageTracer::new(self.pid.as_raw()))
     }
 
     pub fn clear_dirty_page_bits(&self) {
