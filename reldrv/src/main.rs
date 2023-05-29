@@ -475,17 +475,21 @@ mod tests {
     use core::slice;
     use nix::{
         libc,
-        sys::{mman, uio},
+        sys::{
+            memfd::{memfd_create, MemFdCreateFlag},
+            mman, uio,
+        },
         unistd::{self},
     };
     use serial_test::serial;
     use std::{
         arch::x86_64::{__rdtscp, _rdtsc},
+        ffi::CString,
         fs::File,
         io::IoSliceMut,
         mem::MaybeUninit,
         num::NonZeroUsize,
-        os::fd::OwnedFd,
+        os::fd::{AsRawFd, OwnedFd},
         sync::Once,
     };
 
@@ -725,7 +729,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_syscall_mmap() {
+    fn test_syscall_mmap_anon() {
         setup();
         assert_eq!(
             trace(|| {
@@ -749,7 +753,7 @@ mod tests {
 
                 // ensure we can read and write the mremap-ped memory
                 arr.fill(42);
-                arr.iter().all(|&x| x == 42);
+                assert!(arr.iter().all(|&x| x == 42));
 
                 unsafe { mman::munmap(addr, LEN).unwrap() };
 
@@ -760,6 +764,86 @@ mod tests {
         )
     }
 
+    #[test]
+    #[serial]
+    fn test_syscall_mmap_fd_read_dev_zero() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                let file = File::open("/dev/zero").unwrap();
+                const LEN: usize = 4096 * 4;
+
+                checkpoint_take();
+
+                let addr = unsafe {
+                    mman::mmap(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ,
+                        mman::MapFlags::MAP_PRIVATE,
+                        Some(&file),
+                        0,
+                    )
+                    .unwrap()
+                };
+
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                assert!(arr.iter().all(|&x| x == 0));
+
+                unsafe { mman::munmap(addr, LEN).unwrap() };
+
+                drop(file);
+
+                0
+            }),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_syscall_mmap_fd_read_memfd() {
+        setup();
+        assert_eq!(
+            trace(|| {
+                let fd = memfd_create(
+                    &CString::new("reldrv-test").unwrap(),
+                    MemFdCreateFlag::empty(),
+                )
+                .unwrap();
+
+                const LEN: usize = 4096 * 4;
+                unistd::write(fd.as_raw_fd(), &[42u8; LEN]).unwrap();
+
+                checkpoint_take();
+
+                let addr = unsafe {
+                    mman::mmap(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ,
+                        mman::MapFlags::MAP_PRIVATE,
+                        Some(&fd),
+                        0,
+                    )
+                    .unwrap()
+                };
+
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+
+                assert!(arr.iter().all(|&x| x == 42));
+
+                unsafe { mman::munmap(addr, LEN).unwrap() };
+
+                drop(fd);
+
+                0
+            }),
+            0
+        )
+    }
+
+    // TODO: test_syscall_mmap_fd_write
     // TODO: test MAP_SHARED-to-MAP_PRIVATE transformation
 
     #[test]

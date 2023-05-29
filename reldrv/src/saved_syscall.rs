@@ -55,7 +55,7 @@ impl SavedMemory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SyscallExitAction {
     ReplicateMemoryWrites,
     ReplicateSyscall,

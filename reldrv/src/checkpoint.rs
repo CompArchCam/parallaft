@@ -387,6 +387,7 @@ impl<'c> CheckCoordinator<'c> {
     pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) {
         let syscall = reverie_syscalls::Syscall::from_raw(sysno, args);
         let process = Process::new(pid);
+        let mut skip_ptrace_syscall = false;
 
         info!("[PID {: >8}] Syscall: {:}", pid, syscall.display(&process));
 
@@ -448,52 +449,92 @@ impl<'c> CheckCoordinator<'c> {
 
                     // TODO: handle execve aslr
                 }
-                Syscall::Mmap(mmap) => {
+                Syscall::Mmap(mut mmap) => {
                     let mut active_segment = active_segment.lock();
 
                     if is_main {
+                        // main process
                         assert!(active_segment.ongoing_syscall.is_none());
 
-                        let mmap = mmap.with_flags(
+                        // HACK
+                        mmap = mmap.with_flags(
                             (mmap.flags() & !MapFlags::MAP_SHARED) | MapFlags::MAP_PRIVATE, // TODO: MAP_SHARED_VALIDATE
                         );
 
-                        let (new_sysno, new_args) = mmap.into_parts();
-                        self.main
-                            .registers()
-                            .with_sysno(new_sysno)
-                            .with_syscall_args(new_args)
-                            .write();
+                        // if mmap.flags().contains(MapFlags::MAP_SHARED)
+                        //     && mmap.prot().contains(ProtFlags::PROT_WRITE)
+                        // {
+                        //     panic!("Unsupported MAP_SHARED and PROT_WRITE combination");
+                        // }
 
-                        active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                            syscall,
-                            kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                            exit_action: SyscallExitAction::Custom,
-                        });
+                        if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
+                            // File-backed mmap
+                            assert!(mmap.fd() >= 0);
+
+                            active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
+                                syscall,
+                                kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                                exit_action: SyscallExitAction::Checkpoint,
+                            });
+
+                            drop(active_segment);
+
+                            self.main
+                                .registers()
+                                .with_syscall_args(mmap.into_parts().1)
+                                .write();
+
+                            info!("Main mmap checkpoint fini");
+                            self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
+                            skip_ptrace_syscall = true;
+                        } else {
+                            self.main
+                                .registers()
+                                .with_syscall_args(mmap.into_parts().1)
+                                .write();
+
+                            active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
+                                syscall,
+                                kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                                exit_action: SyscallExitAction::Custom,
+                            });
+                        }
                     } else {
+                        // checker process
                         // use MAP_FIXED, mapping exactly the same address that the main process did
 
-                        let saved_syscall = active_segment
-                            .syscall_log
-                            .front()
-                            .expect("spurious syscall made by checker");
+                        if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
+                            info!("Checker mmap checkpoint fini");
+                            // File-backed mmap
+                            assert!(mmap.fd() >= 0);
 
-                        assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
+                            drop(active_segment);
 
-                        if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
-                            // rewrite only if mmap has succeeded
-                            let mmap = mmap
-                                .with_addr(Addr::from_raw(saved_syscall.ret_val as _))
-                                .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
+                            self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell);
+                            skip_ptrace_syscall = true;
+                        } else {
+                            let saved_syscall = active_segment
+                                .syscall_log
+                                .front()
+                                .expect("spurious syscall made by checker");
 
-                            let (new_sysno, new_args) = mmap.into_parts();
-                            active_segment
-                                .checker()
-                                .unwrap()
-                                .registers()
-                                .with_sysno(new_sysno)
-                                .with_syscall_args(new_args)
-                                .write();
+                            assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
+
+                            if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
+                                // rewrite only if mmap has succeeded
+                                let mmap = mmap
+                                    .with_addr(Addr::from_raw(saved_syscall.ret_val as _))
+                                    .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
+
+                                let (new_sysno, new_args) = mmap.into_parts();
+                                active_segment
+                                    .checker()
+                                    .unwrap()
+                                    .registers()
+                                    .with_sysno(new_sysno)
+                                    .with_syscall_args(new_args)
+                                    .write();
+                            }
                         }
                     }
                 }
@@ -634,11 +675,14 @@ impl<'c> CheckCoordinator<'c> {
             }
         };
 
-        ptrace::syscall(pid, None).unwrap();
+        if !skip_ptrace_syscall {
+            ptrace::syscall(pid, None).unwrap();
+        }
     }
 
     pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) {
         let mut process = Process::new(pid);
+        let mut skip_ptrace_syscall = false;
 
         self.segments
             .get_active_segment_with(pid, |active_segment, is_main| {
@@ -728,9 +772,32 @@ impl<'c> CheckCoordinator<'c> {
                         }
                     }
                 }
+            })
+            .unwrap_or_else(|| {
+                // outside protected region
+                if let Some(last_segment) = self.segments.get_last_segment() {
+                    let mut last_segment = last_segment.lock();
+
+                    if let Some(ongoing_syscall) = last_segment.ongoing_syscall.take() {
+                        assert_eq!(pid, self.main.pid);
+                        assert_eq!(ongoing_syscall.exit_action, SyscallExitAction::Checkpoint);
+                        drop(last_segment);
+
+                        // restore registers as if we haven't modified any flags
+                        self.main
+                            .registers()
+                            .with_syscall_args(ongoing_syscall.syscall.into_parts().1)
+                            .write();
+
+                        self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell);
+                        skip_ptrace_syscall = true;
+                    }
+                }
             });
 
-        ptrace::syscall(pid, None).unwrap();
+        if !skip_ptrace_syscall {
+            ptrace::syscall(pid, None).unwrap();
+        }
     }
 
     pub fn handle_signal(&self, pid: Pid, sig: Signal) {
