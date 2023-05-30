@@ -480,7 +480,7 @@ mod tests {
             memfd::{memfd_create, MemFdCreateFlag},
             mman, uio,
         },
-        unistd::{self},
+        unistd::{self, getpid},
     };
     use serial_test::serial;
     use std::{
@@ -556,6 +556,47 @@ mod tests {
             ),
             0
         )
+    }
+
+    #[test]
+    #[serial]
+    fn test_max_nr_live_segments_limit_1() {
+        setup();
+
+        assert_eq!(
+            trace(
+                || {
+                    for _ in 0..20 {
+                        checkpoint_take();
+                    }
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default().with_max_nr_live_segments(1)
+            ),
+            0
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_max_nr_live_segments_limit_8_getpid_loop() {
+        setup();
+
+        assert_eq!(
+            trace(
+                || {
+                    for _ in 0..2000 {
+                        checkpoint_take();
+                        getpid();
+                    }
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default().with_max_nr_live_segments(8)
+            ),
+            0
+        );
     }
 
     #[test]

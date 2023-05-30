@@ -1,6 +1,6 @@
 use std::arch::x86_64::{__rdtscp, _rdtsc};
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use bitflags::bitflags;
@@ -31,6 +31,7 @@ pub struct CheckCoordinator {
     pub segments: Arc<SegmentChain>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
+    throttling: Arc<AtomicBool>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     avg_nr_dirty_pages: Arc<Mutex<f64>>,
     client_control_addr: Arc<RwLock<Option<usize>>>,
@@ -116,6 +117,7 @@ impl CheckCoordinator {
             client_control_addr: Arc::new(RwLock::new(None)),
             options,
             hooks,
+            throttling: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -172,6 +174,9 @@ impl CheckCoordinator {
                 {
                     self.main.resume();
                 } else {
+                    self.throttling
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap();
                     info!("Too many live segments. Pausing the main process");
                 }
 
@@ -240,6 +245,7 @@ impl CheckCoordinator {
                     self.options
                         .flags
                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
+                    &self.throttling,
                 );
             } else if self
                 .options
@@ -279,6 +285,7 @@ impl CheckCoordinator {
                 let main = self.main.clone();
                 let flags = self.options.flags;
                 let max_nr_live_segments = self.options.max_nr_live_segments;
+                let throttling = self.throttling.clone();
 
                 std::thread::Builder::new()
                     .name(format!("checker-memcmp-{}", pid))
@@ -316,6 +323,7 @@ impl CheckCoordinator {
                             &segments,
                             max_nr_live_segments,
                             flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
+                            &throttling,
                         );
                     });
             }
@@ -348,6 +356,7 @@ impl CheckCoordinator {
         segments: &SegmentChain,
         max_nr_live_segments: usize,
         ignore_errors: bool,
+        throttling: &AtomicBool,
     ) {
         let old_len = segments.len();
 
@@ -365,9 +374,15 @@ impl CheckCoordinator {
             }
         }
 
+        // dbg!(old_len);
+        // dbg!(max_nr_live_segments);
+        // dbg!(segments.len());
+
         if max_nr_live_segments != 0
-            && old_len == max_nr_live_segments
-            && segments.len() < max_nr_live_segments
+            && segments.len() <= max_nr_live_segments
+            && throttling
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
         {
             info!("Resuming main");
             main.resume();
@@ -417,6 +432,7 @@ impl CheckCoordinator {
                     self.options
                         .flags
                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
+                    &self.throttling,
                 );
             },
         );
