@@ -25,6 +25,7 @@ use crate::saved_syscall::{
     SyscallExitAction,
 };
 use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
+use crate::stats::Statistics;
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
 pub struct CheckCoordinator {
@@ -33,7 +34,7 @@ pub struct CheckCoordinator {
     pub epoch: AtomicU32,
     throttling: Arc<AtomicBool>,
     pending_sync: Arc<Mutex<Option<u32>>>,
-    avg_nr_dirty_pages: Arc<Mutex<f64>>,
+    stats: Arc<Statistics>,
     client_control_addr: Arc<RwLock<Option<usize>>>,
     options: CheckCoordinatorOptions,
     hooks: CheckCoordinatorHooks,
@@ -113,7 +114,7 @@ impl CheckCoordinator {
             segments: Arc::new(SegmentChain::new(main_pid)),
             epoch: AtomicU32::new(0),
             pending_sync: Arc::new(Mutex::new(None)),
-            avg_nr_dirty_pages: Arc::new(Mutex::new(0.0)),
+            stats: Arc::new(Statistics::new()),
             client_control_addr: Arc::new(RwLock::new(None)),
             options,
             hooks,
@@ -279,7 +280,7 @@ impl CheckCoordinator {
                 let segments = self.segments.clone();
 
                 let pending_sync = self.pending_sync.clone();
-                let avg_nr_dirty_pages = self.avg_nr_dirty_pages.clone();
+                let stats = self.stats.clone();
                 let client_control_addr = self.client_control_addr.clone();
 
                 let main = self.main.clone();
@@ -298,14 +299,9 @@ impl CheckCoordinator {
 
                         let (result, nr_dirty_pages) =
                             segment.check(ignored_pages.as_slice()).unwrap();
-                        let mut avg_nr_dirty_pages = avg_nr_dirty_pages.lock();
 
-                        let alpha = 1.0 / (segment.nr + 1) as f64; // TODO: segments may finish out-of-order
+                        stats.update_nr_dirty_pages(nr_dirty_pages);
 
-                        *avg_nr_dirty_pages =
-                            *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
-
-                        drop(avg_nr_dirty_pages);
                         drop(segment);
 
                         if !result {
@@ -445,7 +441,7 @@ impl CheckCoordinator {
 
     /// Get the average number of dirty pages per iteration.
     pub fn avg_nr_dirty_pages(&self) -> f64 {
-        *self.avg_nr_dirty_pages.lock()
+        self.stats.avg_nr_dirty_pages()
     }
 
     /// Check if all checkers has finished.
