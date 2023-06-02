@@ -107,6 +107,10 @@ struct CliArgs {
     #[arg(long, default_value_t = 8)]
     max_nr_live_segments: usize,
 
+    /// Pause on panic (e.g. when errors are detected), instead of aborting.
+    #[arg(long)]
+    pause_on_panic: bool,
+
     command: String,
     args: Vec<String>,
 }
@@ -401,13 +405,17 @@ fn main() {
     #[cfg(feature = "compel")]
     compel::log_init(log::Level::Error);
 
+    let cli = CliArgs::parse();
+    let pause_on_panic = cli.pause_on_panic;
+
     let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         orig_hook(panic_info);
+        if pause_on_panic {
+            raise(Signal::SIGSTOP).unwrap();
+        }
         std::process::exit(1);
     }));
-
-    let cli = CliArgs::parse();
 
     if let Some(log_output) = cli.log_output {
         let log_file = Box::new(
