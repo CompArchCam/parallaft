@@ -1,3 +1,4 @@
+use std::arch::x86_64::CpuidResult;
 use std::collections::LinkedList;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -129,7 +130,8 @@ impl SegmentStatus {
 #[derive(Debug)]
 pub enum SavedTrapEvent {
     Rdtsc(u64),
-    Rdtscp(u64, u32), // tsc, aux
+    Rdtscp(u64, u32),             // tsc, aux
+    Cpuid(u32, u32, CpuidResult), // leaf, subleaf, result
 }
 
 #[derive(Debug)]

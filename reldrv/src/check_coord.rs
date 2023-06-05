@@ -1,4 +1,4 @@
-use std::arch::x86_64::{__rdtscp, _rdtsc};
+use std::arch::x86_64::{__cpuid_count, __rdtscp, _rdtsc};
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -961,6 +961,45 @@ impl CheckCoordinator {
                     .with_tscp(tsc, aux)
                     .with_offsetted_rip(3)
                     .write();
+                suppress_signal = true;
+            } else if instr & 0xffff == 0xa20f {
+                info!("[PID {: >8}] Trap: Cpuid", pid);
+
+                // cpuid
+                let cpuid = self
+                    .segments
+                    .get_active_segment_with(pid, |segment, is_main| {
+                        if is_main {
+                            let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+                            let cpuid = unsafe { __cpuid_count(leaf, subleaf) };
+                            // add to the log
+                            segment
+                                .trap_event_log
+                                .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
+
+                            cpuid
+                        } else {
+                            // replay from the log
+                            let event = segment.trap_event_log.pop_front().unwrap();
+                            if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
+                                assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
+                                cpuid
+                            } else {
+                                panic!("Unexpected trap event");
+                            }
+                        }
+                    })
+                    .unwrap_or_else(|| unsafe {
+                        let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+                        __cpuid_count(leaf, subleaf)
+                    });
+
+                process
+                    .registers()
+                    .with_cpuid_result(cpuid)
+                    .with_offsetted_rip(2)
+                    .write();
+
                 suppress_signal = true;
             }
         }

@@ -91,6 +91,11 @@ struct CliArgs {
     #[arg(long)]
     dont_trap_rdtsc: bool,
 
+    #[cfg(target_arch = "x86_64")]
+    /// Don't trap cpuid instructions.
+    #[arg(long)]
+    dont_trap_cpuid: bool,
+
     /// File to dump stats to.
     #[arg(long)]
     stats_output: Option<PathBuf>,
@@ -120,6 +125,7 @@ bitflags! {
         const POLL_WAITPID = 0b00000001;
         const DUMP_STATS = 0b00000010;
         const DONT_TRAP_RDTSC = 0b00000100;
+        const DONT_TRAP_CPUID = 0b00001000;
     }
 }
 
@@ -159,6 +165,8 @@ fn parent_work(
     } else {
         None
     };
+
+    let mut cpuid_disabled = false;
 
     info!("Child process tracing started");
 
@@ -237,6 +245,25 @@ fn parent_work(
                                 );
                                 assert_eq!(ret, 0);
                             }
+                        }
+
+                        if pid == check_coord.main.pid
+                            && !flags.contains(RunnerFlags::DONT_TRAP_CPUID)
+                            && !cpuid_disabled
+                            && raw_nr != libc::SYS_execve // TODO: call arch_prctl right after execve/execveat
+                            && raw_nr != libc::SYS_execveat
+                        {
+                            let ret = check_coord.main.syscall_direct(
+                                syscalls::Sysno::arch_prctl,
+                                syscalls::syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
+                                true,
+                                false,
+                            );
+                            assert_eq!(ret, 0);
+
+                            cpuid_disabled = true;
+
+                            info!("CPUID disabled");
                         }
 
                         if let Some(sysno) = reverie_syscalls::Sysno::new(raw_nr as _) {
@@ -440,6 +467,7 @@ fn main() {
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
     runner_flags.set(RunnerFlags::DUMP_STATS, cli.dump_stats);
     runner_flags.set(RunnerFlags::DONT_TRAP_RDTSC, cli.dont_trap_rdtsc);
+    runner_flags.set(RunnerFlags::DONT_TRAP_CPUID, cli.dont_trap_cpuid);
 
     let mut check_coord_flags = CheckCoordinatorFlags::empty();
     check_coord_flags.set(CheckCoordinatorFlags::SYNC_MEM_CHECK, cli.sync_mem_check);
@@ -493,7 +521,7 @@ mod tests {
     };
     use serial_test::serial;
     use std::{
-        arch::x86_64::{__rdtscp, _rdtsc},
+        arch::x86_64::{__cpuid_count, __rdtscp, _rdtsc},
         ffi::CString,
         fs::File,
         io::IoSliceMut,
@@ -530,10 +558,19 @@ mod tests {
             ),
             ForkResult::Child => {
                 #[cfg(target_arch = "x86_64")]
-                assert_eq!(
-                    unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) },
-                    0
-                );
+                {
+                    assert_eq!(
+                        unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) },
+                        0
+                    );
+                    assert_eq!(
+                        unsafe {
+                            libc::syscall(libc::SYS_arch_prctl, 0x1012 /* ARCH_SET_CPUID */, 0)
+                        },
+                        0
+                    );
+                }
+
                 raise(Signal::SIGSTOP).unwrap();
                 let code = f();
                 std::process::exit(code);
@@ -1176,6 +1213,33 @@ mod tests {
                     0
                 },
                 CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn test_cpuid() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    checkpoint_take();
+                    unsafe {
+                        __cpuid_count(0, 0);
+                        __cpuid_count(1, 0);
+                        __cpuid_count(2, 0);
+                        __cpuid_count(3, 0);
+                        __cpuid_count(6, 0);
+                        __cpuid_count(7, 0);
+                        __cpuid_count(7, 1);
+                        __cpuid_count(7, 2);
+                    }
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default(),
             ),
             0
         )

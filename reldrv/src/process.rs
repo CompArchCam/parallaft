@@ -1,3 +1,4 @@
+use std::arch::x86_64::CpuidResult;
 use std::fmt::Debug;
 use std::ops::Deref;
 
@@ -149,6 +150,20 @@ impl Registers {
         self.inner.rip = self.inner.rip.wrapping_add_signed(offset as _);
 
         self
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_cpuid_result(mut self, cpuid_result: CpuidResult) -> Self {
+        self.inner.rax = cpuid_result.eax as _;
+        self.inner.rbx = cpuid_result.ebx as _;
+        self.inner.rcx = cpuid_result.ecx as _;
+        self.inner.rdx = cpuid_result.edx as _;
+
+        self
+    }
+
+    pub fn cpuid_leaf_subleaf(&self) -> (u32, u32) {
+        (self.inner.rax as _, self.inner.rcx as _)
     }
 
     pub fn write(self) {
