@@ -535,6 +535,10 @@ impl CheckCoordinator {
                         assert!(active_segment.ongoing_syscall.is_none());
 
                         // HACK
+                        // if mmap.flags().contains(MapFlags::MAP_SHARED) {
+                        //     mmap = mmap.with_prot(mmap.prot() & !ProtFlags::PROT_WRITE);
+                        // }
+
                         mmap = mmap.with_flags(
                             (mmap.flags() & !MapFlags::MAP_SHARED) | MapFlags::MAP_PRIVATE, // TODO: MAP_SHARED_VALIDATE
                         );
