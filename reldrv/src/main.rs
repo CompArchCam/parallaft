@@ -521,7 +521,10 @@ mod tests {
     };
     use serial_test::serial;
     use std::{
-        arch::x86_64::{__cpuid_count, __rdtscp, _rdtsc},
+        arch::{
+            asm,
+            x86_64::{__cpuid_count, __rdtscp, _rdtsc},
+        },
         ffi::CString,
         fs::File,
         io::IoSliceMut,
@@ -1240,6 +1243,33 @@ mod tests {
                         let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
                         assert!(tsc > prev_tsc);
                         prev_tsc = tsc;
+                    }
+
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic] // trapping RDPID isn't supported at the moment
+    fn test_rdpid() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    checkpoint_take();
+
+                    let _processor_id: u64;
+                    unsafe {
+                        asm!(
+                            "rdpid rax",
+                            out("rax") _processor_id,
+                        );
                     }
 
                     checkpoint_fini();
