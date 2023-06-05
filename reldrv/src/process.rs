@@ -232,8 +232,6 @@ impl Process {
         if is_syscall_exit {
             assert_eq!(self.instr_at(saved_regs.inner.rip as usize - 2, 2), 0x050f); // syscall
 
-            dbg!(saved_regs.inner.rip);
-
             saved_regs.with_offsetted_rip(-2).write(); // jump back to previous syscall
             ptrace::syscall(self.pid, None).unwrap();
 
