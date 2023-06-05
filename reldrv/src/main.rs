@@ -1,10 +1,6 @@
 mod check_coord;
-mod client_control;
-#[cfg(feature = "compel")]
-mod compel_parasite;
+mod inferior_rtlib;
 
-mod dirty_page_tracer;
-mod page_diff;
 mod process;
 mod saved_syscall;
 mod segments;
@@ -19,10 +15,10 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use bitflags::bitflags;
-use nix::errno::Errno;
 
+use nix::errno::Errno;
 use nix::libc;
-use nix::sys::ptrace;
+use nix::sys::ptrace::{self, SyscallInfoOp};
 use nix::sys::signal::{raise, Signal};
 
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -35,7 +31,7 @@ use log::info;
 use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags, CheckCoordinatorHooks, CheckCoordinatorOptions,
 };
-use crate::process::OwnedProcess;
+use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 
 #[derive(Parser, Debug)]
@@ -76,11 +72,6 @@ struct CliArgs {
     /// Ignore check errors.
     #[arg(long)]
     ignore_check_errors: bool,
-
-    #[cfg(feature = "compel")]
-    /// Use libcompel for syscall injection, instead of using ptrace directly.
-    #[arg(long)]
-    use_libcompel: bool,
 
     /// Dump statistics.
     #[arg(long)]
@@ -166,6 +157,8 @@ fn parent_work(
         None
     };
 
+    dbg!(rseq_configuration);
+
     let mut cpuid_disabled = false;
 
     info!("Child process tracing started");
@@ -224,114 +217,105 @@ fn parent_work(
                     err => panic!("failed to get syscall info: {:?}", err),
                 };
 
-                match syscall_info.op {
-                    ptrace::SyscallInfoOp::Entry {
-                        nr: raw_nr,
-                        args: raw_args,
-                    } => {
-                        // unregister rseq
-                        if pid == check_coord.main.pid {
-                            if let Some(rseq_configuration) = rseq_configuration.take() {
-                                let ret = check_coord.main.syscall_direct(
-                                    syscalls::Sysno::rseq,
-                                    syscalls::syscall_args!(
-                                        rseq_configuration.rseq_abi_pointer as _,
-                                        rseq_configuration.rseq_abi_size as _,
-                                        1,
-                                        rseq_configuration.signature as _
-                                    ),
-                                    true,
-                                    false,
-                                );
-                                assert_eq!(ret, 0);
-                            }
-                        }
+                let process = Process::new(pid);
+                let regs = process.read_registers();
 
-                        if pid == check_coord.main.pid
-                            && !flags.contains(RunnerFlags::DONT_TRAP_CPUID)
-                            && !cpuid_disabled
-                            && raw_nr != libc::SYS_execve // TODO: call arch_prctl right after execve/execveat
-                            && raw_nr != libc::SYS_execveat
-                        {
+                if matches!(syscall_info.op, SyscallInfoOp::Entry { .. }) {
+                    // syscall entry
+                    // unregister rseq
+                    if pid == check_coord.main.pid {
+                        if let Some(rseq_configuration) = rseq_configuration.take() {
                             let ret = check_coord.main.syscall_direct(
-                                syscalls::Sysno::arch_prctl,
-                                syscalls::syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
+                                syscalls::Sysno::rseq,
+                                syscalls::syscall_args!(
+                                    rseq_configuration.rseq_abi_pointer as _,
+                                    rseq_configuration.rseq_abi_size as _,
+                                    1,
+                                    rseq_configuration.signature as _
+                                ),
                                 true,
                                 false,
                             );
                             assert_eq!(ret, 0);
-
-                            cpuid_disabled = true;
-
-                            info!("CPUID disabled");
+                            info!("rseq unregistered");
                         }
+                    }
 
-                        if let Some(sysno) = reverie_syscalls::Sysno::new(raw_nr as _) {
-                            let args = reverie_syscalls::SyscallArgs {
-                                arg0: raw_args[0] as _,
-                                arg1: raw_args[1] as _,
-                                arg2: raw_args[2] as _,
-                                arg3: raw_args[3] as _,
-                                arg4: raw_args[4] as _,
-                                arg5: raw_args[5] as _,
-                            };
+                    if pid == check_coord.main.pid
+                        && !flags.contains(RunnerFlags::DONT_TRAP_CPUID)
+                        && !cpuid_disabled
+                        && regs.sysno_raw() != libc::SYS_execve as _ // TODO: call arch_prctl right after execve/execveat
+                        && regs.sysno_raw() != libc::SYS_execveat as _
+                    {
+                        let ret = process.syscall_direct(
+                            syscalls::Sysno::arch_prctl,
+                            syscalls::syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
+                            true,
+                            false,
+                        );
+                        assert_eq!(ret, 0);
 
-                            check_coord.handle_syscall_entry(pid, sysno, args);
-                            last_syscall_entry_handled_by_check_coord.insert(pid, true);
-                        } else {
-                            // handle our custom syscalls
-                            match (raw_nr, raw_args) {
-                                (0xff77, ..) => {
-                                    info!("Checkpoint requested by {}", pid);
-                                    check_coord.handle_checkpoint(
-                                        pid,
-                                        false,
-                                        false,
-                                        CheckpointCaller::Child,
-                                    );
-                                }
-                                (0xff78, ..) => {
-                                    info!("Checkpoint finish requested by {}", pid);
-                                    check_coord.handle_checkpoint(
-                                        pid,
-                                        true,
-                                        false,
-                                        CheckpointCaller::Child,
-                                    );
-                                }
-                                (0xff79, [base_address, ..]) => {
-                                    assert!(pid == check_coord.main.pid);
-                                    info!(
-                                        "Set client control base address {:p} requested",
-                                        base_address as *const u8
-                                    );
-                                    check_coord.set_client_control_addr(base_address as _);
-                                    ptrace::syscall(pid, None).unwrap();
-                                }
-                                (0xff7a, ..) => {
-                                    if pid == check_coord.main.pid {
-                                        info!("Sync requested by main");
-                                        check_coord.handle_sync();
-                                    }
-                                }
-                                _ => {
-                                    ptrace::syscall(pid, None).unwrap();
+                        cpuid_disabled = true;
+
+                        info!("CPUID disabled");
+                    }
+
+                    if let Some(sysno) = regs.sysno() {
+                        let args = regs.syscall_args();
+                        check_coord.handle_syscall_entry(pid, sysno, args);
+                        last_syscall_entry_handled_by_check_coord.insert(pid, true);
+                    } else {
+                        // handle our custom syscalls
+                        match (regs.sysno_raw(), regs.syscall_args()) {
+                            (0xff77, ..) => {
+                                info!("Checkpoint requested by {}", pid);
+                                check_coord.handle_checkpoint(
+                                    pid,
+                                    false,
+                                    false,
+                                    CheckpointCaller::Child,
+                                );
+                            }
+                            (0xff78, ..) => {
+                                info!("Checkpoint finish requested by {}", pid);
+                                check_coord.handle_checkpoint(
+                                    pid,
+                                    true,
+                                    false,
+                                    CheckpointCaller::Child,
+                                );
+                            }
+                            (0xff79, args) => {
+                                assert!(pid == check_coord.main.pid);
+
+                                let base_address = args.arg0;
+                                info!(
+                                    "Set client control base address {:p} requested",
+                                    base_address as *const u8
+                                );
+                                check_coord.set_client_control_addr(base_address as _);
+                                ptrace::syscall(pid, None).unwrap();
+                            }
+                            (0xff7a, ..) => {
+                                if pid == check_coord.main.pid {
+                                    info!("Sync requested by main");
+                                    check_coord.handle_sync();
                                 }
                             }
-                            last_syscall_entry_handled_by_check_coord.insert(pid, false);
+                            _ => {
+                                ptrace::syscall(pid, None).unwrap();
+                            }
                         }
+                        last_syscall_entry_handled_by_check_coord.insert(pid, false);
                     }
-                    ptrace::SyscallInfoOp::Exit { ret_val, .. } => {
-                        if *last_syscall_entry_handled_by_check_coord
-                            .get(&pid)
-                            .unwrap_or(&false)
-                        {
-                            check_coord.handle_syscall_exit(pid, ret_val as _);
-                        } else {
-                            ptrace::syscall(pid, None).unwrap();
-                        }
-                    }
-                    _ => {
+                } else {
+                    // syscall exit
+                    if *last_syscall_entry_handled_by_check_coord
+                        .get(&pid)
+                        .unwrap_or(&false)
+                    {
+                        check_coord.handle_syscall_exit(pid, regs.syscall_ret_val());
+                    } else {
                         ptrace::syscall(pid, None).unwrap();
                     }
                 }
@@ -485,9 +469,6 @@ fn main() {
         CheckCoordinatorFlags::IGNORE_CHECK_ERRORS,
         cli.ignore_check_errors,
     );
-
-    #[cfg(feature = "compel")]
-    check_coord_flags.set(CheckCoordinatorFlags::USE_LIBCOMPEL, cli.use_libcompel);
 
     let exit_status = run(
         Command::new(cli.command).args(cli.args),

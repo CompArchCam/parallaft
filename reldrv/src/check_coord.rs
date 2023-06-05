@@ -18,7 +18,7 @@ use reverie_syscalls::{
     Addr, AddrMut, Displayable, MapFlags, MemoryAccess, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
-use crate::client_control;
+use crate::inferior_rtlib::client_control;
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
@@ -46,9 +46,6 @@ bitflags! {
         const NO_MEM_CHECK = 0b00000010;
         const DONT_RUN_CHECKER = 0b00000100;
         const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
-
-        #[cfg(feature = "compel")]
-        const USE_LIBCOMPEL = 0b00010000;
         const DONT_FORK = 0b00100000;
         const IGNORE_CHECK_ERRORS = 0b01000000;
     }
@@ -131,6 +128,7 @@ impl CheckCoordinator {
         caller: CheckpointCaller,
     ) {
         if pid == self.main.pid {
+            info!("Main called checkpoint");
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
             if self
@@ -145,21 +143,10 @@ impl CheckCoordinator {
             let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
             let clone_signal = None;
 
-            #[cfg(feature = "compel")]
-            let use_libcompel = self.flags.contains(CheckCoordinatorFlags::USE_LIBCOMPEL);
-
-            #[cfg(not(feature = "compel"))]
-            let use_libcompel = false;
-
             if !is_finishing {
                 let reference = self
                     .main
-                    .clone_process(
-                        clone_flags,
-                        clone_signal,
-                        use_libcompel,
-                        restart_old_syscall,
-                    )
+                    .clone_process(clone_flags, clone_signal, restart_old_syscall)
                     .as_owned();
 
                 if !self
@@ -185,12 +172,7 @@ impl CheckCoordinator {
                     true => (reference, Checkpoint::new_initial(epoch_local, caller)),
                     false => (
                         reference
-                            .clone_process(
-                                clone_flags,
-                                clone_signal,
-                                use_libcompel,
-                                restart_old_syscall,
-                            )
+                            .clone_process(clone_flags, clone_signal, restart_old_syscall)
                             .as_owned(),
                         Checkpoint::new(epoch_local, reference, caller),
                     ),
@@ -212,12 +194,7 @@ impl CheckCoordinator {
                 if !self.segments.is_last_checkpoint_finalizing() {
                     let reference = self
                         .main
-                        .clone_process(
-                            clone_flags,
-                            clone_signal,
-                            use_libcompel,
-                            restart_old_syscall,
-                        )
+                        .clone_process(clone_flags, clone_signal, restart_old_syscall)
                         .as_owned();
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference, caller);
@@ -295,7 +272,7 @@ impl CheckCoordinator {
                         let client_control_addr = client_control_addr.read();
                         let ignored_pages = client_control_addr
                             .as_ref()
-                            .map_or(vec![], |a| vec![*a as u64]);
+                            .map_or(vec![], |a| vec![*a as usize]);
 
                         let (result, nr_dirty_pages) =
                             segment.check(ignored_pages.as_slice()).unwrap();
@@ -561,19 +538,17 @@ impl CheckCoordinator {
 
                             drop(active_segment);
 
-                            self.main
-                                .registers()
-                                .with_syscall_args(mmap.into_parts().1)
-                                .write();
+                            self.main.modify_registers_with(|regs| {
+                                regs.with_syscall_args(mmap.into_parts().1)
+                            });
 
                             info!("Main mmap checkpoint fini");
                             self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
                             skip_ptrace_syscall = true;
                         } else {
-                            self.main
-                                .registers()
-                                .with_syscall_args(mmap.into_parts().1)
-                                .write();
+                            self.main.modify_registers_with(|regs| {
+                                regs.with_syscall_args(mmap.into_parts().1)
+                            });
 
                             active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                                 syscall,
@@ -612,10 +587,9 @@ impl CheckCoordinator {
                                 active_segment
                                     .checker()
                                     .unwrap()
-                                    .registers()
-                                    .with_sysno(new_sysno)
-                                    .with_syscall_args(new_args)
-                                    .write();
+                                    .modify_registers_with(|regs| {
+                                        regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                                    })
                             }
                         }
                     }
@@ -662,10 +636,9 @@ impl CheckCoordinator {
                             active_segment
                                 .checker()
                                 .unwrap()
-                                .registers()
-                                .with_sysno(new_sysno)
-                                .with_syscall_args(new_args)
-                                .write();
+                                .modify_registers_with(|regs| {
+                                    regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                                });
                         }
                     }
                 }
@@ -749,9 +722,7 @@ impl CheckCoordinator {
                         active_segment
                             .checker()
                             .unwrap()
-                            .registers()
-                            .with_syscall_skipped()
-                            .write();
+                            .modify_registers_with(|regs| regs.with_syscall_skipped());
                     }
                 }
             }
@@ -796,9 +767,7 @@ impl CheckCoordinator {
                                     active_segment
                                         .checker()
                                         .unwrap()
-                                        .registers()
-                                        .with_syscall_args(args)
-                                        .write();
+                                        .modify_registers_with(|regs| regs.with_syscall_args(args));
                                 }
                                 _ => panic!("unhandled custom syscall during syscall exit"),
                             }
@@ -820,18 +789,17 @@ impl CheckCoordinator {
                     let (sysno, args) = saved_syscall.syscall.into_parts();
 
                     match saved_syscall.exit_action {
-                        SyscallExitAction::ReplicateMemoryWrites => match saved_syscall.kind {
-                            SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
-                                active_segment
-                                    .checker()
-                                    .unwrap()
-                                    .registers()
-                                    .with_syscall_ret_val(saved_syscall.ret_val)
-                                    .write();
-                                mem_written.dump(&mut process).unwrap();
+                        SyscallExitAction::ReplicateMemoryWrites => {
+                            match saved_syscall.kind {
+                                SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
+                                    active_segment.checker().unwrap().modify_registers_with(
+                                        |regs| regs.with_syscall_ret_val(saved_syscall.ret_val),
+                                    );
+                                    mem_written.dump(&mut process).unwrap();
+                                }
+                                _ => panic!(),
                             }
-                            _ => panic!(),
-                        },
+                        }
                         SyscallExitAction::ReplicateSyscall => {
                             assert_eq!(ret_val, saved_syscall.ret_val);
                         }
@@ -845,9 +813,7 @@ impl CheckCoordinator {
                                     active_segment
                                         .checker()
                                         .unwrap()
-                                        .registers()
-                                        .with_syscall_args(args)
-                                        .write();
+                                        .modify_registers_with(|regs| regs.with_syscall_args(args));
                                 }
                                 _ => panic!("unhandled custom syscall during syscall exit"),
                             }
@@ -866,10 +832,9 @@ impl CheckCoordinator {
                         drop(last_segment);
 
                         // restore registers as if we haven't modified any flags
-                        self.main
-                            .registers()
-                            .with_syscall_args(ongoing_syscall.syscall.into_parts().1)
-                            .write();
+                        self.main.modify_registers_with(|regs| {
+                            regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
+                        });
 
                         self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell);
                         skip_ptrace_syscall = true;
@@ -889,7 +854,7 @@ impl CheckCoordinator {
 
         if sig == Signal::SIGSEGV {
             let process = Process::new(pid);
-            let regs = process.registers();
+            let regs = process.read_registers();
             let instr: u64 = process
                 .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
                 .unwrap();
@@ -918,11 +883,7 @@ impl CheckCoordinator {
                     })
                     .unwrap_or_else(|| unsafe { _rdtsc() });
 
-                process
-                    .registers()
-                    .with_tsc(tsc)
-                    .with_offsetted_rip(2)
-                    .write();
+                process.write_registers(regs.with_tsc(tsc).with_offsetted_rip(2));
 
                 suppress_signal = true;
             } else if instr & 0xffffff == 0xf9010f {
@@ -960,11 +921,8 @@ impl CheckCoordinator {
                         (tsc, aux)
                     });
 
-                process
-                    .registers()
-                    .with_tscp(tsc, aux)
-                    .with_offsetted_rip(3)
-                    .write();
+                process.write_registers(regs.with_tscp(tsc, aux).with_offsetted_rip(3));
+
                 suppress_signal = true;
             } else if instr & 0xffff == 0xa20f {
                 info!("[PID {: >8}] Trap: Cpuid", pid);
@@ -998,11 +956,7 @@ impl CheckCoordinator {
                         __cpuid_count(leaf, subleaf)
                     });
 
-                process
-                    .registers()
-                    .with_cpuid_result(cpuid)
-                    .with_offsetted_rip(2)
-                    .write();
+                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2));
 
                 suppress_signal = true;
             }

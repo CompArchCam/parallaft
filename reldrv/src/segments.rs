@@ -168,7 +168,7 @@ impl Segment {
 
     /// Compare dirty memory of the checker process and the reference process and mark the segment status as checked.
     /// This should be called after the checker process invokes the checkpoint syscall.
-    pub fn check(&mut self, ignored_pages: &[u64]) -> Result<(bool, usize)> {
+    pub fn check(&mut self, ignored_pages: &[usize]) -> Result<(bool, usize)> {
         if let SegmentStatus::ReadyToCheck {
             checker,
             checkpoint_end,
@@ -176,9 +176,9 @@ impl Segment {
         {
             let (result, nr_dirty_pages) = checker
                 .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages);
-            self.mark_as_checked(!result)?;
+            self.mark_as_checked(result.is_err())?;
 
-            Ok((result, nr_dirty_pages))
+            Ok((result.is_ok(), nr_dirty_pages))
         } else {
             Err(CheckpointError::InvalidState)
         }
