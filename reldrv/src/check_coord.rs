@@ -528,10 +528,6 @@ impl<'a> CheckCoordinator<'a> {
 
             if !is_handled {
                 match syscall {
-                    Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                        self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
-                        return; // skip ptrace::syscall
-                    }
                     Syscall::ArchPrctl(_)
                     | Syscall::Brk(_)
                     | Syscall::Mprotect(_)

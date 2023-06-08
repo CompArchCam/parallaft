@@ -38,6 +38,7 @@ use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
+use crate::syscall_handlers::exit::ExitHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, MainInitHandler, SyscallHandlerExitAction,
@@ -160,6 +161,9 @@ fn parent_work(
 
     let execve_handler = ExecveHandler::new();
     execve_handler.install(&mut disp);
+
+    let exit_handler = ExitHandler::new();
+    exit_handler.install(&mut disp);
 
     let mut cpuid_disabled = false;
 

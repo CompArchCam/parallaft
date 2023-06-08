@@ -1,5 +1,6 @@
 pub mod clone;
 pub mod execve;
+pub mod exit;
 pub mod rseq;
 
 use reverie_syscalls::Syscall;
