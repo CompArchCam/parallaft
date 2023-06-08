@@ -1,6 +1,7 @@
 pub mod clone;
 pub mod execve;
 pub mod exit;
+pub mod replicate;
 pub mod rseq;
 
 use reverie_syscalls::Syscall;
@@ -38,6 +39,9 @@ pub enum StandardSyscallEntryMainHandlerExitAction {
 pub enum StandardSyscallEntryCheckerHandlerExitAction {
     /// Try the next handler. The syscall is not handled by the current handler.
     NextHandler,
+
+    /// Continue the inferior on handler exit, without trying the next handler.
+    ContinueInferior,
 
     /// Take a finalizing checkpoint.
     Checkpoint,

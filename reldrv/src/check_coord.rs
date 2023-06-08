@@ -490,12 +490,16 @@ impl<'a> CheckCoordinator<'a> {
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                         saved_incomplete_syscall,
                     ) => {
+                        assert!(active_segment.ongoing_syscall.is_none());
+
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         true
                     }
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                         saved_incomplete_syscall,
                     ) => {
+                        assert!(active_segment.ongoing_syscall.is_none());
+
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         drop(active_segment);
 
@@ -516,6 +520,7 @@ impl<'a> CheckCoordinator<'a> {
 
                 match result {
                     StandardSyscallEntryCheckerHandlerExitAction::NextHandler => false,
+                    StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior => true,
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
                         drop(active_segment);
 
@@ -528,32 +533,6 @@ impl<'a> CheckCoordinator<'a> {
 
             if !is_handled {
                 match syscall {
-                    Syscall::ArchPrctl(_)
-                    | Syscall::Brk(_)
-                    | Syscall::Mprotect(_)
-                    | Syscall::Munmap(_) => {
-                        let mut active_segment = active_segment.lock();
-                        // replicate the syscall in the checker processes
-
-                        if is_main {
-                            assert!(active_segment.ongoing_syscall.is_none());
-
-                            active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                syscall,
-                                kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                exit_action: SyscallExitAction::ReplicateSyscall,
-                            });
-                        } else {
-                            let saved_syscall = active_segment
-                                .syscall_log
-                                .front()
-                                .expect("spurious syscall made by checker");
-
-                            assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
-                        }
-
-                        // TODO: handle execve aslr
-                    }
                     Syscall::Mmap(mut mmap) => {
                         let mut active_segment = active_segment.lock();
 
