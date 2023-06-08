@@ -1,3 +1,4 @@
+pub mod clone;
 pub mod rseq;
 
 use reverie_syscalls::Syscall;

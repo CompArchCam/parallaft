@@ -36,6 +36,7 @@ use crate::check_coord::{
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
+use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{HandlerContext, SyscallHandlerExitAction};
 
@@ -150,6 +151,9 @@ fn parent_work(
     let mut disp = Dispatcher::new();
     let rseq_handler = RseqHandler::new();
     rseq_handler.install(&mut disp);
+
+    let clone_handler = CloneHandler::new();
+    clone_handler.install(&mut disp);
 
     let mut cpuid_disabled = false;
 
@@ -1351,4 +1355,25 @@ mod tests {
     //         0
     //     )
     // }
+
+    #[test]
+    #[serial]
+    #[should_panic]
+    fn test_syscall_fork_in_protected_region() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    checkpoint_take();
+
+                    unsafe { fork().unwrap() };
+
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
 }
