@@ -141,3 +141,7 @@ impl Process {
             .expect("failed to clear dirty bits");
     }
 }
+
+pub trait IgnoredPagesProvider {
+    fn get_ignored_pages(&self) -> Box<[usize]>;
+}

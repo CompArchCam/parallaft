@@ -35,6 +35,7 @@ use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags, CheckCoordinatorHooks, CheckCoordinatorOptions,
 };
 use crate::dispatcher::{Dispatcher, Installable};
+use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
@@ -184,6 +185,9 @@ fn parent_work(
         cpuid_handler.install(&mut disp);
     }
 
+    let legacy_rtlib_handler = LegacyInferiorRtLib::new();
+    legacy_rtlib_handler.install(&mut disp);
+
     info!("Child process tracing started");
 
     let inferior = OwnedProcess::new(child_pid);
@@ -286,18 +290,7 @@ fn parent_work(
                                         CheckpointCaller::Child,
                                     );
                                 }
-                                (0xff79, args) => {
-                                    assert!(pid == check_coord.main.pid);
-
-                                    let base_address = args.arg0;
-                                    info!(
-                                        "Set client control base address {:p} requested",
-                                        base_address as *const u8
-                                    );
-                                    check_coord.set_client_control_addr(base_address as _);
-                                    ptrace::syscall(pid, None).unwrap();
-                                }
-                                (0xff7a, ..) => {
+                                (0xff79, ..) => {
                                     if pid == check_coord.main.pid {
                                         info!("Sync requested by main");
                                         check_coord.handle_sync();

@@ -14,6 +14,8 @@ use crate::{
     segments::Segment,
 };
 
+pub const CUSTOM_SYSNO_START: usize = 0xff7a;
+
 pub struct HandlerContext<'a, 'b, 'c> {
     pub process: &'a Process,
     // active_segment: Option<&'a mut Segment>,

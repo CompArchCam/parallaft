@@ -12,20 +12,20 @@ use nix::sys::uio::RemoteIoVec;
 
 use nix::{sched::CloneFlags, unistd::Pid};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use reverie_syscalls::{
     Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
 use crate::dispatcher::Dispatcher;
-use crate::inferior_rtlib::client_control;
+use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
 };
-use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain};
+use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain, SegmentEventHandler};
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::stats::Statistics;
 use crate::syscall_handlers::{
@@ -41,7 +41,6 @@ pub struct CheckCoordinator<'a> {
     throttling: Arc<AtomicBool>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     stats: Arc<Statistics>,
-    client_control_addr: Arc<RwLock<Option<usize>>>,
     options: CheckCoordinatorOptions,
     hooks: CheckCoordinatorHooks,
     dispatcher: &'a Dispatcher<'a>,
@@ -121,7 +120,6 @@ impl<'a> CheckCoordinator<'a> {
             epoch: AtomicU32::new(0),
             pending_sync: Arc::new(Mutex::new(None)),
             stats: Arc::new(Statistics::new()),
-            client_control_addr: Arc::new(RwLock::new(None)),
             options,
             hooks,
             throttling: Arc::new(AtomicBool::new(false)),
@@ -269,24 +267,19 @@ impl<'a> CheckCoordinator<'a> {
 
                 let pending_sync = self.pending_sync.clone();
                 let stats = self.stats.clone();
-                let client_control_addr = self.client_control_addr.clone();
 
                 let main = self.main.clone();
                 let flags = self.options.flags;
                 let max_nr_live_segments = self.options.max_nr_live_segments;
                 let throttling = self.throttling.clone();
+                let ignored_pages = self.dispatcher.get_ignored_pages();
 
                 std::thread::Builder::new()
                     .name(format!("checker-memcmp-{}", pid))
                     .spawn(move || {
                         let mut segment = segment.lock();
-                        let client_control_addr = client_control_addr.read();
-                        let ignored_pages = client_control_addr
-                            .as_ref()
-                            .map_or(vec![], |a| vec![*a as usize]);
 
-                        let (result, nr_dirty_pages) =
-                            segment.check(ignored_pages.as_slice()).unwrap();
+                        let (result, nr_dirty_pages) = segment.check(&ignored_pages).unwrap();
 
                         stats.update_nr_dirty_pages(nr_dirty_pages);
 
@@ -387,23 +380,10 @@ impl<'a> CheckCoordinator<'a> {
                     last_segment.mark_as_checked(false);
                     true
                 } else {
-                    let last_checker = last_segment.checker().unwrap();
+                    self.dispatcher
+                        .handle_segment_ready(last_segment, checkpoint.caller);
 
-                    // patch the checker's client_control struct
-                    if let Some(base_address) = self.client_control_addr.read().as_ref() {
-                        let this_reference = checkpoint.reference().unwrap();
-                        let mut ctl =
-                            client_control::read(this_reference.pid, *base_address).unwrap();
-                        ctl.role = if checkpoint.caller == CheckpointCaller::Child {
-                            client_control::CliRole::Checker
-                        } else {
-                            client_control::CliRole::Nop
-                        };
-
-                        client_control::write(&ctl, last_checker.pid, *base_address).unwrap();
-                    }
-
-                    last_checker.resume();
+                    last_segment.checker().unwrap().resume();
                     false
                 }
             },
@@ -444,10 +424,6 @@ impl<'a> CheckCoordinator<'a> {
             .flags
             .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
             && self.segments.has_errors()
-    }
-
-    pub fn set_client_control_addr(&self, base_address: usize) {
-        self.client_control_addr.write().insert(base_address);
     }
 
     pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) {

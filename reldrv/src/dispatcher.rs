@@ -3,9 +3,9 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
-    process::Process,
+    process::{dirty_pages::IgnoredPagesProvider, Process},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::Segment,
+    segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, MainInitHandler,
@@ -19,6 +19,8 @@ pub struct Dispatcher<'a> {
     standard_syscall_handlers: Vec<&'a dyn StandardSyscallHandler>,
     custom_syscall_handlers: Vec<&'a dyn CustomSyscallHandler>,
     signal_handlers: Vec<&'a dyn SignalHandler>,
+    segment_event_handlers: Vec<&'a dyn SegmentEventHandler>,
+    ignored_pages_providers: Vec<&'a dyn IgnoredPagesProvider>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -28,6 +30,8 @@ impl<'a> Dispatcher<'a> {
             standard_syscall_handlers: Vec::new(),
             custom_syscall_handlers: Vec::new(),
             signal_handlers: Vec::new(),
+            segment_event_handlers: Vec::new(),
+            ignored_pages_providers: Vec::new(),
         }
     }
 
@@ -45,6 +49,14 @@ impl<'a> Dispatcher<'a> {
 
     pub fn install_signal_handler(&mut self, handler: &'a dyn SignalHandler) {
         self.signal_handlers.push(handler)
+    }
+
+    pub fn install_segment_event_handler(&mut self, handler: &'a dyn SegmentEventHandler) {
+        self.segment_event_handlers.push(handler)
+    }
+
+    pub fn install_ignored_pages_provider(&mut self, provider: &'a dyn IgnoredPagesProvider) {
+        self.ignored_pages_providers.push(provider)
     }
 }
 
@@ -221,6 +233,26 @@ impl<'a> SignalHandler for Dispatcher<'a> {
         }
 
         SignalHandlerExitAction::NextHandler
+    }
+}
+
+impl<'a> SegmentEventHandler for Dispatcher<'a> {
+    fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller) {
+        for handler in &self.segment_event_handlers {
+            handler.handle_segment_ready(segment, checkpoint_end_caller);
+        }
+    }
+}
+
+impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
+    fn get_ignored_pages(&self) -> Box<[usize]> {
+        let mut pages = Vec::new();
+
+        for provider in &self.ignored_pages_providers {
+            pages.append(&mut provider.get_ignored_pages().into_vec());
+        }
+
+        pages.into_boxed_slice()
     }
 }
 

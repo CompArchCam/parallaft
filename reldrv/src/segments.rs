@@ -26,7 +26,7 @@ pub enum CheckpointKind {
 }
 
 // Who made the checkpoint request
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CheckpointCaller {
     Child,
     Shell,
@@ -352,4 +352,9 @@ impl SegmentChain {
     pub fn len(&self) -> usize {
         self.inner.read().len()
     }
+}
+
+#[allow(unused)]
+pub trait SegmentEventHandler {
+    fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller);
 }

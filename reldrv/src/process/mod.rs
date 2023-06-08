@@ -1,4 +1,4 @@
-mod dirty_pages;
+pub mod dirty_pages;
 mod memory;
 mod registers;
 mod syscall;
