@@ -37,8 +37,11 @@ use crate::dispatcher::{Dispatcher, Installable};
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::syscall_handlers::clone::CloneHandler;
+use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
-use crate::syscall_handlers::{HandlerContext, SyscallHandlerExitAction};
+use crate::syscall_handlers::{
+    CustomSyscallHandler, HandlerContext, MainInitHandler, SyscallHandlerExitAction,
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -154,6 +157,9 @@ fn parent_work(
 
     let clone_handler = CloneHandler::new();
     clone_handler.install(&mut disp);
+
+    let execve_handler = ExecveHandler::new();
+    execve_handler.install(&mut disp);
 
     let mut cpuid_disabled = false;
 
@@ -1367,6 +1373,27 @@ mod tests {
                     checkpoint_take();
 
                     unsafe { fork().unwrap() };
+
+                    checkpoint_fini();
+                    0
+                },
+                CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic]
+    fn test_syscall_execve() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    checkpoint_take();
+
+                    Command::new("/usr/bin/true").exec();
 
                     checkpoint_fini();
                     0

@@ -3,9 +3,12 @@ use syscalls::SyscallArgs;
 
 use crate::{
     process::Process,
+    saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
+    segments::Segment,
     syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, MainInitHandler, StandardSyscallHandler,
-        SyscallHandlerExitAction,
+        CustomSyscallHandler, HandlerContext, MainInitHandler,
+        StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
+        StandardSyscallHandler, SyscallHandlerExitAction,
     },
 };
 
@@ -28,17 +31,25 @@ impl<'a> Dispatcher<'a> {
         self.main_init_handlers.push(handler)
     }
 
-    pub fn handle_main_init(&self, process: &Process) {
-        for handler in &self.main_init_handlers {
-            handler.handle_main_init(process)
-        }
-    }
-
     pub fn install_standard_syscall_handler(&mut self, handler: &'a dyn StandardSyscallHandler) {
         self.standard_syscall_handlers.push(handler)
     }
 
-    pub fn handle_standard_syscall_entry(
+    pub fn install_custom_syscall_handler(&mut self, handler: &'a dyn CustomSyscallHandler) {
+        self.custom_syscall_handlers.push(handler)
+    }
+}
+
+impl<'a> MainInitHandler for Dispatcher<'a> {
+    fn handle_main_init(&self, process: &Process) {
+        for handler in &self.main_init_handlers {
+            handler.handle_main_init(process)
+        }
+    }
+}
+
+impl<'a> StandardSyscallHandler for Dispatcher<'a> {
+    fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
@@ -54,7 +65,7 @@ impl<'a> Dispatcher<'a> {
         SyscallHandlerExitAction::NextHandler
     }
 
-    pub fn handle_standard_syscall_exit(
+    fn handle_standard_syscall_exit(
         &self,
         ret_val: isize,
         syscall: &Syscall,
@@ -71,11 +82,93 @@ impl<'a> Dispatcher<'a> {
         SyscallHandlerExitAction::NextHandler
     }
 
-    pub fn install_custom_syscall_handler(&mut self, handler: &'a dyn CustomSyscallHandler) {
-        self.custom_syscall_handlers.push(handler)
+    fn handle_standard_syscall_entry_main(
+        &self,
+        syscall: &Syscall,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
+    ) -> StandardSyscallEntryMainHandlerExitAction {
+        for handler in &self.standard_syscall_handlers {
+            let ret = handler.handle_standard_syscall_entry_main(syscall, active_segment, context);
+
+            if !matches!(ret, StandardSyscallEntryMainHandlerExitAction::NextHandler) {
+                return ret;
+            }
+        }
+
+        StandardSyscallEntryMainHandlerExitAction::NextHandler
     }
 
-    pub fn handle_custom_syscall_entry(
+    fn handle_standard_syscall_exit_main(
+        &self,
+        ret_val: isize,
+        saved_incomplete_syscall: &SavedIncompleteSyscall,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
+    ) -> SyscallHandlerExitAction {
+        for handler in &self.standard_syscall_handlers {
+            let ret = handler.handle_standard_syscall_exit_main(
+                ret_val,
+                saved_incomplete_syscall,
+                active_segment,
+                context,
+            );
+
+            if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
+                return ret;
+            }
+        }
+
+        SyscallHandlerExitAction::NextHandler
+    }
+
+    fn handle_standard_syscall_entry_checker(
+        &self,
+        syscall: &Syscall,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
+    ) -> StandardSyscallEntryCheckerHandlerExitAction {
+        for handler in &self.standard_syscall_handlers {
+            let ret =
+                handler.handle_standard_syscall_entry_checker(syscall, active_segment, context);
+
+            if !matches!(
+                ret,
+                StandardSyscallEntryCheckerHandlerExitAction::NextHandler
+            ) {
+                return ret;
+            }
+        }
+
+        StandardSyscallEntryCheckerHandlerExitAction::NextHandler
+    }
+
+    fn handle_standard_syscall_exit_checker(
+        &self,
+        ret_val: isize,
+        saved_syscall: &SavedSyscall,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
+    ) -> SyscallHandlerExitAction {
+        for handler in &self.standard_syscall_handlers {
+            let ret = handler.handle_standard_syscall_exit_checker(
+                ret_val,
+                saved_syscall,
+                active_segment,
+                context,
+            );
+
+            if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
+                return ret;
+            }
+        }
+
+        SyscallHandlerExitAction::NextHandler
+    }
+}
+
+impl<'a> CustomSyscallHandler for Dispatcher<'a> {
+    fn handle_custom_syscall_entry(
         &self,
         sysno: usize,
         args: SyscallArgs,
@@ -92,7 +185,7 @@ impl<'a> Dispatcher<'a> {
         SyscallHandlerExitAction::NextHandler
     }
 
-    pub fn handle_custom_syscall_exit(
+    fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
         context: &HandlerContext,

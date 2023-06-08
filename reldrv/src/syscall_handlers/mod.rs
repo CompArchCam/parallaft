@@ -1,4 +1,5 @@
 pub mod clone;
+pub mod execve;
 pub mod rseq;
 
 use reverie_syscalls::Syscall;
@@ -8,6 +9,7 @@ use crate::{
     check_coord::CheckCoordinator,
     process::Process,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
+    segments::Segment,
 };
 
 pub struct HandlerContext<'a, 'b, 'c> {
@@ -44,8 +46,8 @@ pub enum SyscallHandlerExitAction {
     /// Try the next handler. The syscall is not handled by the current handler.
     NextHandler,
 
-    /// Do nothing on handler exit, but do not try the next handler.
-    Noop,
+    /// Continue the inferior on handler exit, without trying the next handler.
+    ContinueInferior,
 }
 
 #[allow(unused_variables)]
@@ -54,7 +56,8 @@ pub trait StandardSyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
     ) -> StandardSyscallEntryMainHandlerExitAction {
         StandardSyscallEntryMainHandlerExitAction::NextHandler
     }
@@ -65,7 +68,8 @@ pub trait StandardSyscallHandler {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        context: HandlerContext,
+        active_segment: &mut Segment,
+        context: &HandlerContext,
     ) -> SyscallHandlerExitAction {
         SyscallHandlerExitAction::NextHandler
     }
@@ -74,17 +78,19 @@ pub trait StandardSyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        saved_syscall: &SavedSyscall,
+        active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> StandardSyscallEntryCheckerHandlerExitAction {
         StandardSyscallEntryCheckerHandlerExitAction::NextHandler
     }
 
     /// Called when a checker process exits from a standard syscall.
+    /// Only called if the `saved_syscall.exit_action` is set to `Custom`.
     fn handle_standard_syscall_exit_checker(
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
+        active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> SyscallHandlerExitAction {
         SyscallHandlerExitAction::NextHandler

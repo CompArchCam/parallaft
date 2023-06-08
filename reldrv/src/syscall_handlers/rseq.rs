@@ -53,7 +53,7 @@ impl StandardSyscallHandler for RseqHandler {
             Syscall::Rseq(_) => {
                 process.modify_registers_with(|regs| regs.with_syscall_skipped());
 
-                super::SyscallHandlerExitAction::Noop
+                super::SyscallHandlerExitAction::ContinueInferior
             }
             _ => super::SyscallHandlerExitAction::NextHandler,
         }
@@ -66,7 +66,7 @@ impl StandardSyscallHandler for RseqHandler {
         _context: &HandlerContext,
     ) -> super::SyscallHandlerExitAction {
         match syscall {
-            Syscall::Rseq(_) => super::SyscallHandlerExitAction::Noop,
+            Syscall::Rseq(_) => super::SyscallHandlerExitAction::ContinueInferior,
             _ => super::SyscallHandlerExitAction::NextHandler,
         }
     }
