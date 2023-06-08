@@ -1,4 +1,5 @@
 use std::arch::x86_64::{__cpuid_count, __rdtscp, _rdtsc};
+use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use log::{error, info, warn};
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::uio::RemoteIoVec;
-use nix::sys::wait::{waitpid, WaitStatus};
+
 use nix::{sched::CloneFlags, unistd::Pid};
 
 use parking_lot::{Mutex, RwLock};
@@ -18,6 +19,7 @@ use reverie_syscalls::{
     Addr, AddrMut, Displayable, MapFlags, MemoryAccess, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
+use crate::dispatcher::Dispatcher;
 use crate::inferior_rtlib::client_control;
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{
@@ -26,9 +28,10 @@ use crate::saved_syscall::{
 };
 use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
 use crate::stats::Statistics;
+use crate::syscall_handlers::{HandlerContext, SyscallHandlerExitAction};
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
-pub struct CheckCoordinator {
+pub struct CheckCoordinator<'a> {
     pub segments: Arc<SegmentChain>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
@@ -38,6 +41,8 @@ pub struct CheckCoordinator {
     client_control_addr: Arc<RwLock<Option<usize>>>,
     options: CheckCoordinatorOptions,
     hooks: CheckCoordinatorHooks,
+    dispatcher: &'a Dispatcher<'a>,
+    last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
 
 bitflags! {
@@ -98,11 +103,12 @@ impl CheckCoordinatorHooks {
 }
 
 #[allow(unused)]
-impl CheckCoordinator {
+impl<'a> CheckCoordinator<'a> {
     pub fn new(
         main: OwnedProcess,
         options: CheckCoordinatorOptions,
         hooks: CheckCoordinatorHooks,
+        dispatcher: &'a Dispatcher,
     ) -> Self {
         // main.pid
         let main_pid = main.pid;
@@ -116,6 +122,8 @@ impl CheckCoordinator {
             options,
             hooks,
             throttling: Arc::new(AtomicBool::new(false)),
+            dispatcher,
+            last_syscall: Mutex::new(HashMap::new()),
         }
     }
 
@@ -446,19 +454,18 @@ impl CheckCoordinator {
 
         info!("[PID {: >8}] Syscall: {:}", pid, syscall.display(&process));
 
-        if matches!(syscall, Syscall::Rseq(_) | Syscall::SetRobustList(_)) {
-            // rewrite unsupported syscalls
-            info!("[PID {: >8}] Unsupported syscall", pid);
-            let mut regs = ptrace::getregs(pid).unwrap();
-            regs.orig_rax = 0xff77;
-            regs.rax = 0xff77; // invalid syscall
-            ptrace::setregs(pid, regs).unwrap();
-            ptrace::syscall(pid, None).unwrap();
-            assert!(matches!(
-                waitpid(pid, None).unwrap(),
-                WaitStatus::PtraceSyscall(pid)
-            )); // TODO: don't block here
-            ptrace::syscall(pid, None).unwrap();
+        self.last_syscall.lock().insert(pid, syscall);
+
+        if matches!(
+            self.dispatcher.handle_standard_syscall_entry(
+                &syscall,
+                &HandlerContext {
+                    process: &process,
+                    check_coord: self,
+                },
+            ),
+            SyscallHandlerExitAction::Noop
+        ) {
             return;
         }
 
@@ -736,6 +743,22 @@ impl CheckCoordinator {
     pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) {
         let mut process = Process::new(pid);
         let mut skip_ptrace_syscall = false;
+
+        let last_syscall = self.last_syscall.lock().remove(&pid).unwrap();
+
+        if matches!(
+            self.dispatcher.handle_standard_syscall_exit(
+                ret_val,
+                &last_syscall,
+                &HandlerContext {
+                    process: &process,
+                    check_coord: self,
+                },
+            ),
+            SyscallHandlerExitAction::Noop
+        ) {
+            return;
+        }
 
         self.segments
             .get_active_segment_with(pid, |active_segment, is_main| {
