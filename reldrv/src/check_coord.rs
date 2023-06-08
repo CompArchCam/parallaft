@@ -1,4 +1,3 @@
-use std::arch::x86_64::__cpuid_count;
 use std::collections::HashMap;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -16,7 +15,7 @@ use nix::{sched::CloneFlags, unistd::Pid};
 use parking_lot::{Mutex, RwLock};
 
 use reverie_syscalls::{
-    Addr, AddrMut, Displayable, MapFlags, MemoryAccess, Syscall, SyscallArgs, SyscallInfo, Sysno,
+    Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
 use crate::dispatcher::Dispatcher;
@@ -26,7 +25,7 @@ use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
 };
-use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
+use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain};
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::stats::Statistics;
 use crate::syscall_handlers::{
@@ -924,7 +923,6 @@ impl<'a> CheckCoordinator<'a> {
         info!("[PID {: >8}] Signal: {:}", pid, sig);
 
         let process = Process::new(pid);
-        let mut suppress_signal = false;
 
         let result = self.dispatcher.handle_signal(
             sig,
@@ -935,58 +933,12 @@ impl<'a> CheckCoordinator<'a> {
         );
 
         match result {
-            SignalHandlerExitAction::NextHandler => {
-                if sig == Signal::SIGSEGV {
-                    let regs = process.read_registers();
-                    let instr: u64 = process
-                        .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
-                        .unwrap();
-
-                    if instr & 0xffff == 0xa20f {
-                        info!("[PID {: >8}] Trap: Cpuid", pid);
-
-                        // cpuid
-                        let cpuid = self
-                            .segments
-                            .get_active_segment_with(pid, |segment, is_main| {
-                                if is_main {
-                                    let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                                    let cpuid = unsafe { __cpuid_count(leaf, subleaf) };
-                                    // add to the log
-                                    segment
-                                        .trap_event_log
-                                        .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
-
-                                    cpuid
-                                } else {
-                                    // replay from the log
-                                    let event = segment.trap_event_log.pop_front().unwrap();
-                                    if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
-                                        assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
-                                        cpuid
-                                    } else {
-                                        panic!("Unexpected trap event");
-                                    }
-                                }
-                            })
-                            .unwrap_or_else(|| unsafe {
-                                let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                                __cpuid_count(leaf, subleaf)
-                            });
-
-                        process
-                            .write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2));
-
-                        suppress_signal = true;
-                    }
-                }
-            }
-            SignalHandlerExitAction::ContinueInferior => (),
             SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
-                suppress_signal = true;
+                ptrace::syscall(pid, None).unwrap();
+            }
+            _ => {
+                ptrace::syscall(pid, sig).unwrap();
             }
         }
-
-        ptrace::syscall(pid, if suppress_signal { None } else { Some(sig) }).unwrap();
     }
 }

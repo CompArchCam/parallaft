@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use bitflags::bitflags;
 
 use nix::errno::Errno;
-use nix::libc;
+
 use nix::sys::ptrace::{self, SyscallInfoOp};
 use nix::sys::signal::{raise, Signal};
 
@@ -37,6 +37,7 @@ use crate::check_coord::{
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
+use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
@@ -177,7 +178,11 @@ fn parent_work(
         rdtsc_handler.install(&mut disp);
     }
 
-    let mut cpuid_disabled = false;
+    let cpuid_handler = CpuidHandler::new();
+
+    if !flags.contains(RunnerFlags::DONT_TRAP_CPUID) {
+        cpuid_handler.install(&mut disp);
+    }
 
     info!("Child process tracing started");
 
@@ -245,25 +250,6 @@ fn parent_work(
 
                 if matches!(syscall_info.op, SyscallInfoOp::Entry { .. }) {
                     // syscall entry
-
-                    if pid == check_coord.main.pid
-                        && !flags.contains(RunnerFlags::DONT_TRAP_CPUID)
-                        && !cpuid_disabled
-                        && regs.sysno_raw() != libc::SYS_execve as _ // TODO: call arch_prctl right after execve/execveat
-                        && regs.sysno_raw() != libc::SYS_execveat as _
-                    {
-                        let ret = process.syscall_direct(
-                            syscalls::Sysno::arch_prctl,
-                            syscalls::syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
-                            true,
-                            false,
-                        );
-                        assert_eq!(ret, 0);
-
-                        cpuid_disabled = true;
-
-                        info!("CPUID disabled");
-                    }
 
                     if let Some(sysno) = regs.sysno() {
                         let args = regs.syscall_args();
@@ -562,16 +548,6 @@ mod tests {
                 None,
             ),
             ForkResult::Child => {
-                #[cfg(target_arch = "x86_64")]
-                {
-                    assert_eq!(
-                        unsafe {
-                            libc::syscall(libc::SYS_arch_prctl, 0x1012 /* ARCH_SET_CPUID */, 0)
-                        },
-                        0
-                    );
-                }
-
                 raise(Signal::SIGSTOP).unwrap();
                 let code = f();
                 std::process::exit(code);

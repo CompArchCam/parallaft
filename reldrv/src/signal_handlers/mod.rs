@@ -1,3 +1,4 @@
+pub mod cpuid;
 pub mod rdtsc;
 
 use nix::sys::signal::Signal;
