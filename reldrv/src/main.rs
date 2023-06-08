@@ -5,6 +5,7 @@ mod dispatcher;
 mod process;
 mod saved_syscall;
 mod segments;
+mod signal_handlers;
 mod stats;
 mod syscall_handlers;
 
@@ -36,6 +37,7 @@ use crate::check_coord::{
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
+use crate::signal_handlers::rdtsc::RdtscHandler;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::exit::ExitHandler;
@@ -168,6 +170,12 @@ fn parent_work(
 
     let replicated_syscall_handler = ReplicatedSyscallHandler::new();
     replicated_syscall_handler.install(&mut disp);
+
+    let rdtsc_handler = RdtscHandler::new();
+
+    if !flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
+        rdtsc_handler.install(&mut disp);
+    }
 
     let mut cpuid_disabled = false;
 
@@ -415,10 +423,6 @@ fn run(
             let err = unsafe {
                 cmd.env("CHECKER_CHECKPOINT_FREQ", checkpoint_freq.to_string())
                     .pre_exec(move || {
-                        #[cfg(target_arch = "x86_64")]
-                        if !runner_flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
-                            assert_eq!(libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV), 0);
-                        }
                         raise(Signal::SIGSTOP).unwrap();
                         Ok(())
                     })
@@ -560,10 +564,6 @@ mod tests {
             ForkResult::Child => {
                 #[cfg(target_arch = "x86_64")]
                 {
-                    assert_eq!(
-                        unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) },
-                        0
-                    );
                     assert_eq!(
                         unsafe {
                             libc::syscall(libc::SYS_arch_prctl, 0x1012 /* ARCH_SET_CPUID */, 0)

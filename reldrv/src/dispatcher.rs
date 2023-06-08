@@ -1,3 +1,4 @@
+use nix::sys::signal::Signal;
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
@@ -5,6 +6,7 @@ use crate::{
     process::Process,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::Segment,
+    signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, MainInitHandler,
         StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
@@ -16,6 +18,7 @@ pub struct Dispatcher<'a> {
     main_init_handlers: Vec<&'a dyn MainInitHandler>,
     standard_syscall_handlers: Vec<&'a dyn StandardSyscallHandler>,
     custom_syscall_handlers: Vec<&'a dyn CustomSyscallHandler>,
+    signal_handlers: Vec<&'a dyn SignalHandler>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -24,6 +27,7 @@ impl<'a> Dispatcher<'a> {
             main_init_handlers: Vec::new(),
             standard_syscall_handlers: Vec::new(),
             custom_syscall_handlers: Vec::new(),
+            signal_handlers: Vec::new(),
         }
     }
 
@@ -37,6 +41,10 @@ impl<'a> Dispatcher<'a> {
 
     pub fn install_custom_syscall_handler(&mut self, handler: &'a dyn CustomSyscallHandler) {
         self.custom_syscall_handlers.push(handler)
+    }
+
+    pub fn install_signal_handler(&mut self, handler: &'a dyn SignalHandler) {
+        self.signal_handlers.push(handler)
     }
 }
 
@@ -199,6 +207,20 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
         }
 
         SyscallHandlerExitAction::NextHandler
+    }
+}
+
+impl<'a> SignalHandler for Dispatcher<'a> {
+    fn handle_signal(&self, signal: Signal, context: &HandlerContext) -> SignalHandlerExitAction {
+        for handler in &self.signal_handlers {
+            let ret = handler.handle_signal(signal, context);
+
+            if !matches!(ret, SignalHandlerExitAction::NextHandler) {
+                return ret;
+            }
+        }
+
+        SignalHandlerExitAction::NextHandler
     }
 }
 

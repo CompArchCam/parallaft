@@ -1,6 +1,6 @@
-use std::arch::x86_64::{__cpuid_count, __rdtscp, _rdtsc};
+use std::arch::x86_64::__cpuid_count;
 use std::collections::HashMap;
-use std::mem::MaybeUninit;
+
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -27,6 +27,7 @@ use crate::saved_syscall::{
     SyscallExitAction,
 };
 use crate::segments::{Checkpoint, CheckpointCaller, SavedTrapEvent, SegmentChain};
+use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::stats::Statistics;
 use crate::syscall_handlers::{
     HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
@@ -922,117 +923,70 @@ impl<'a> CheckCoordinator<'a> {
     pub fn handle_signal(&self, pid: Pid, sig: Signal) {
         info!("[PID {: >8}] Signal: {:}", pid, sig);
 
+        let process = Process::new(pid);
         let mut suppress_signal = false;
 
-        if sig == Signal::SIGSEGV {
-            let process = Process::new(pid);
-            let regs = process.read_registers();
-            let instr: u64 = process
-                .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
-                .unwrap();
+        let result = self.dispatcher.handle_signal(
+            sig,
+            &HandlerContext {
+                process: &process,
+                check_coord: self,
+            },
+        );
 
-            if instr & 0xffff == 0x310f {
-                info!("[PID {: >8}] Trap: Rdtsc", pid);
+        match result {
+            SignalHandlerExitAction::NextHandler => {
+                if sig == Signal::SIGSEGV {
+                    let regs = process.read_registers();
+                    let instr: u64 = process
+                        .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
+                        .unwrap();
 
-                // rdtsc
-                let tsc = self
-                    .segments
-                    .get_active_segment_with(pid, |segment, is_main| {
-                        if is_main {
-                            let tsc = unsafe { _rdtsc() };
-                            // add to the log
-                            segment.trap_event_log.push_back(SavedTrapEvent::Rdtsc(tsc));
-                            tsc
-                        } else {
-                            // replay from the log
-                            let event = segment.trap_event_log.pop_front().unwrap();
-                            if let SavedTrapEvent::Rdtsc(tsc) = event {
-                                tsc
-                            } else {
-                                panic!("Unexpected trap event");
-                            }
-                        }
-                    })
-                    .unwrap_or_else(|| unsafe { _rdtsc() });
+                    if instr & 0xffff == 0xa20f {
+                        info!("[PID {: >8}] Trap: Cpuid", pid);
 
-                process.write_registers(regs.with_tsc(tsc).with_offsetted_rip(2));
+                        // cpuid
+                        let cpuid = self
+                            .segments
+                            .get_active_segment_with(pid, |segment, is_main| {
+                                if is_main {
+                                    let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+                                    let cpuid = unsafe { __cpuid_count(leaf, subleaf) };
+                                    // add to the log
+                                    segment
+                                        .trap_event_log
+                                        .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
 
-                suppress_signal = true;
-            } else if instr & 0xffffff == 0xf9010f {
-                info!("[PID {: >8}] Trap: Rdtscp", pid);
+                                    cpuid
+                                } else {
+                                    // replay from the log
+                                    let event = segment.trap_event_log.pop_front().unwrap();
+                                    if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
+                                        assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
+                                        cpuid
+                                    } else {
+                                        panic!("Unexpected trap event");
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| unsafe {
+                                let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+                                __cpuid_count(leaf, subleaf)
+                            });
 
-                // rdtscp
-                let (tsc, aux) = self
-                    .segments
-                    .get_active_segment_with(pid, |segment, is_main| {
-                        if is_main {
-                            let mut aux = MaybeUninit::uninit();
-                            // add to the log
-                            let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-                            let aux = unsafe { aux.assume_init() };
+                        process
+                            .write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2));
 
-                            segment
-                                .trap_event_log
-                                .push_back(SavedTrapEvent::Rdtscp(tsc, aux));
-
-                            (tsc, aux)
-                        } else {
-                            // replay from the log
-                            let event = segment.trap_event_log.pop_front().unwrap();
-                            if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
-                                (tsc, aux)
-                            } else {
-                                panic!("Unexpected trap event");
-                            }
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        let mut aux = MaybeUninit::uninit();
-                        let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-                        let aux = unsafe { aux.assume_init() };
-                        (tsc, aux)
-                    });
-
-                process.write_registers(regs.with_tscp(tsc, aux).with_offsetted_rip(3));
-
-                suppress_signal = true;
-            } else if instr & 0xffff == 0xa20f {
-                info!("[PID {: >8}] Trap: Cpuid", pid);
-
-                // cpuid
-                let cpuid = self
-                    .segments
-                    .get_active_segment_with(pid, |segment, is_main| {
-                        if is_main {
-                            let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                            let cpuid = unsafe { __cpuid_count(leaf, subleaf) };
-                            // add to the log
-                            segment
-                                .trap_event_log
-                                .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
-
-                            cpuid
-                        } else {
-                            // replay from the log
-                            let event = segment.trap_event_log.pop_front().unwrap();
-                            if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
-                                assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
-                                cpuid
-                            } else {
-                                panic!("Unexpected trap event");
-                            }
-                        }
-                    })
-                    .unwrap_or_else(|| unsafe {
-                        let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                        __cpuid_count(leaf, subleaf)
-                    });
-
-                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2));
-
+                        suppress_signal = true;
+                    }
+                }
+            }
+            SignalHandlerExitAction::ContinueInferior => (),
+            SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
                 suppress_signal = true;
             }
         }
+
         ptrace::syscall(pid, if suppress_signal { None } else { Some(sig) }).unwrap();
     }
 }
