@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use log::info;
 use nix::{libc::ptrace_rseq_configuration, sys::ptrace};
 use parking_lot::Mutex;
@@ -13,12 +15,14 @@ use super::{CustomSyscallHandler, HandlerContext, MainInitHandler, StandardSysca
 
 pub struct RseqHandler {
     rseq_config: Mutex<Option<ptrace_rseq_configuration>>,
+    execve_done: AtomicBool,
 }
 
 impl RseqHandler {
     pub fn new() -> Self {
         Self {
             rseq_config: Mutex::new(None),
+            execve_done: AtomicBool::new(false),
         }
     }
 
@@ -55,6 +59,10 @@ impl StandardSyscallHandler for RseqHandler {
 
                 super::SyscallHandlerExitAction::ContinueInferior
             }
+            Syscall::Execve(_) | Syscall::Execveat(_) => {
+                self.execve_done.store(true, Ordering::SeqCst);
+                super::SyscallHandlerExitAction::NextHandler
+            }
             _ => super::SyscallHandlerExitAction::NextHandler,
         }
     }
@@ -79,7 +87,9 @@ impl CustomSyscallHandler for RseqHandler {
         _args: SyscallArgs,
         context: &HandlerContext,
     ) -> super::SyscallHandlerExitAction {
-        self.unregister_rseq(context.process);
+        if !self.execve_done.load(Ordering::SeqCst) {
+            self.unregister_rseq(context.process);
+        }
 
         super::SyscallHandlerExitAction::NextHandler
     }
