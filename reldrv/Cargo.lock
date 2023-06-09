@@ -86,9 +86,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.0.2"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "487f1e0fcbe47deb8b0574e646def1c903389d95241dd1bbcc6ce4a715dfc0c1"
+checksum = "6776fc96284a0bb647b615056fc496d1fe1644a7ab01829818a6d91cae888b84"
 
 [[package]]
 name = "bumpalo"
@@ -101,6 +101,12 @@ name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
+
+[[package]]
+name = "c-enum"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5fca268f63fbeb9819c5afb333888cd5a245017f6c47f530da2d3b4964055c3"
 
 [[package]]
 name = "cc"
@@ -152,7 +158,7 @@ version = "4.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76e21918af71fb4bcd813230cf549e33d14f73d0326b932b630ce2930332b131"
 dependencies = [
- "bitflags 2.0.2",
+ "bitflags 2.3.1",
  "clap_derive",
  "clap_lex",
  "is-terminal",
@@ -654,6 +660,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
+name = "memmap2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d28bba84adfe6646737845bc5ebbfa2c08424eb1c37e94a1fd2a82adb56a872"
+dependencies = [
+ "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -829,6 +844,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
+name = "perf-event-data"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "963b5dfa83fa6c28af556b19fc258be88823de8af982469747c6594f48a8b9ba"
+dependencies = [
+ "bitflags 2.3.1",
+ "perf-event-open-sys2",
+]
+
+[[package]]
+name = "perf-event-open-sys2"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83659418a76adf99b97b487d6e4e73ea33e5d5dffb006fdd4aec8033995aaad3"
+dependencies = [
+ "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "perf-event2"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfb1d234ee8adf05a183012eccfd02847151029e6151174346660c87a939f181"
+dependencies = [
+ "bitflags 2.3.1",
+ "c-enum",
+ "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "memmap2",
+ "perf-event-data",
+ "perf-event-open-sys2",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -928,6 +976,7 @@ dependencies = [
  "nix 0.26.1",
  "parasite",
  "parking_lot",
+ "perf-event2",
  "pretty-hex",
  "procfs",
  "reverie-syscalls",

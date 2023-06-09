@@ -23,6 +23,7 @@ reverie-syscalls = { path = "../reverie-syscalls" }
 syscalls = "*"
 log-panics = { version = "2", features = ["with-backtrace"]}
 lazy-init = "*"
+perf-event2 = "0.6.3"
 
 [build-dependencies]
 cc = "1.0.78"

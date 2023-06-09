@@ -29,13 +29,14 @@ use nix::unistd::{fork, ForkResult, Pid};
 
 use clap::Parser;
 
-use log::info;
+use log::{info, warn};
 
 use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags, CheckCoordinatorHooks, CheckCoordinatorOptions,
 };
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
+use crate::inferior_rtlib::relrtlib::RelRtLib;
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
@@ -122,6 +123,10 @@ struct CliArgs {
     #[arg(long)]
     pause_on_panic: bool,
 
+    /// librelrt Checkpoint period in number of instructions.
+    #[arg(long, default_value_t = 1000000000)]
+    librelrt_checkpoint_period: u64,
+
     command: String,
     args: Vec<String>,
 }
@@ -142,6 +147,7 @@ fn parent_work(
     flags: RunnerFlags,
     check_coord_options: CheckCoordinatorOptions,
     stats_output: Option<PathBuf>,
+    librelrt_checkpoint_period: u64,
 ) -> i32 {
     info!("Starting");
 
@@ -187,6 +193,9 @@ fn parent_work(
 
     let legacy_rtlib_handler = LegacyInferiorRtLib::new();
     legacy_rtlib_handler.install(&mut disp);
+
+    let relrtlib_handler = RelRtLib::new(librelrt_checkpoint_period);
+    relrtlib_handler.install(&mut disp);
 
     info!("Child process tracing started");
 
@@ -297,6 +306,7 @@ fn parent_work(
                                     }
                                 }
                                 _ => {
+                                    warn!("Unhandled syscall: {:x}", regs.sysno_raw());
                                     ptrace::syscall(pid, None).unwrap();
                                 }
                             }
@@ -388,6 +398,7 @@ fn run(
     check_coord_options: CheckCoordinatorOptions,
     checkpoint_freq: u32,
     stats_output: Option<PathBuf>,
+    librelrt_checkpoint_period: u64,
 ) -> i32 {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => parent_work(
@@ -397,6 +408,7 @@ fn run(
             runner_flags,
             check_coord_options,
             stats_output,
+            librelrt_checkpoint_period,
         ),
         Ok(ForkResult::Child) => {
             let err = unsafe {
@@ -482,6 +494,7 @@ fn main() {
         },
         cli.checkpoint_freq,
         cli.stats_output,
+        cli.librelrt_checkpoint_period,
     );
 
     std::process::exit(exit_status as _);
@@ -539,6 +552,7 @@ mod tests {
                 RunnerFlags::empty(),
                 options,
                 None,
+                0,
             ),
             ForkResult::Child => {
                 raise(Signal::SIGSTOP).unwrap();
