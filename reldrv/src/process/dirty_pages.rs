@@ -36,8 +36,8 @@ pub fn page_diff(
         let local_iov_p1 = IoSliceMut::new(&mut buf_p1[..remote_iov.len() * page_size]);
         let local_iov_p2 = IoSliceMut::new(&mut buf_p2[..remote_iov.len() * page_size]);
 
-        p1.read_vectored(&remote_iovs, &mut [local_iov_p1]).unwrap();
-        p2.read_vectored(&remote_iovs, &mut [local_iov_p2]).unwrap();
+        p1.read_vectored(remote_iov, &mut [local_iov_p1]).unwrap();
+        p2.read_vectored(remote_iov, &mut [local_iov_p2]).unwrap();
 
         trace!(
             "page data p1@{:p}:\n{:?}",
