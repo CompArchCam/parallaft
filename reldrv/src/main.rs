@@ -344,14 +344,16 @@ fn parent_work(
                 info!("Ptrace event = {:}", event);
             }
             WaitStatus::Signaled(pid, sig, _) => {
-                info!("PID {} signaled by {}", pid, sig);
+                if sig == Signal::SIGKILL {
+                    if check_coord.has_errors() {
+                        panic!("Memory check has errors");
+                    }
 
-                if check_coord.has_errors() {
-                    panic!("Memory check has errors");
-                }
-
-                if main_finished && check_coord.is_all_finished() {
-                    break;
+                    if main_finished && check_coord.is_all_finished() {
+                        break;
+                    }
+                } else {
+                    panic!("PID {} signaled by {}", pid, sig);
                 }
             }
             _ => (),
