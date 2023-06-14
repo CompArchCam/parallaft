@@ -14,6 +14,7 @@ use crate::{
     segments::Segment,
 };
 
+pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
 pub struct HandlerContext<'a, 'b, 'c> {

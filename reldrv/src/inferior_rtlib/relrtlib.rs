@@ -12,7 +12,7 @@ use crate::{
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, MainInitHandler, SyscallHandlerExitAction,
-        CUSTOM_SYSNO_START,
+        CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE,
     },
 };
 
@@ -106,6 +106,12 @@ impl CustomSyscallHandler for RelRtLib {
             self.perf_counter.lock().insert(counter).enable().unwrap();
 
             return SyscallHandlerExitAction::ContinueInferior;
+        } else if sysno == SYSNO_CHECKPOINT_TAKE {
+            if context.process.pid == context.check_coord.main.pid {
+                if let Some(c) = self.perf_counter.lock().as_mut() {
+                    c.enable().unwrap();
+                }
+            }
         }
 
         SyscallHandlerExitAction::NextHandler
@@ -127,6 +133,13 @@ impl SignalHandler for RelRtLib {
                 let c = self.get_counter(context.process).unwrap();
                 self.set_counter(context.process, -1_i64 as u64);
                 *self.saved_counter_value.lock() = c;
+
+                self.perf_counter
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .disable()
+                    .unwrap();
 
                 return SignalHandlerExitAction::SuppressSignalAndContinueInferior;
             }
