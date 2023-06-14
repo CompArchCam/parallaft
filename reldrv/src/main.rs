@@ -1396,4 +1396,108 @@ mod tests {
             0
         )
     }
+
+    #[test]
+    #[serial]
+    fn test_register_preservation_after_checkpoint() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    let result: u64;
+
+                    unsafe {
+                        asm!(
+                            "
+                            mov rdi, 12345
+                            push rbx
+                            push rdx
+                            push rsi
+                            push rdi
+                            push r8
+                            push r9
+                            push r10
+                            push r12
+                            push r13
+                            push r14
+                            push r15
+                            pushfq
+
+                            mov rax, 0xff77
+                            syscall
+
+                            pushfq
+                            pop rax
+                            pop r11
+                            cmp rax, r11
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r15
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r14
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r13
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r12
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r10
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r9
+                            jne 1f
+
+                            pop rax
+                            cmp rax, r8
+                            jne 1f
+
+                            pop rax
+                            cmp rax, rdi
+                            jne 1f
+
+                            pop rax
+                            cmp rax, rsi
+                            jne 1f
+
+                            pop rax
+                            cmp rax, rdx
+                            jne 1f
+
+                            pop rax
+                            cmp rax, rbx
+                            jne 1f
+
+                            mov rax, 0
+                            jmp 2f
+                            1:
+                            mov rax, 1
+                            2:
+                            ",
+                            out("rcx") _,
+                            out("r11") _,
+                            out("rdi") _,
+                            lateout("rax") result,
+                        )
+                    }
+
+                    if result == 1 {
+                        return 1;
+                    }
+
+                    0
+                },
+                CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
 }

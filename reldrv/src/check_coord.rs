@@ -153,9 +153,15 @@ impl<'a> CheckCoordinator<'a> {
             let clone_signal = None;
 
             if !is_finishing {
+                let is_last_checkpoint_finalizing = self.segments.is_last_checkpoint_finalizing();
                 let reference = self
                     .main
-                    .clone_process(clone_flags, clone_signal, restart_old_syscall)
+                    .clone_process(
+                        clone_flags,
+                        clone_signal,
+                        restart_old_syscall,
+                        restart_old_syscall || !is_last_checkpoint_finalizing,
+                    )
                     .as_owned();
 
                 if !self
@@ -177,14 +183,20 @@ impl<'a> CheckCoordinator<'a> {
                     info!("Too many live segments. Pausing the main process");
                 }
 
-                let (checker, checkpoint) = match self.segments.is_last_checkpoint_finalizing() {
-                    true => (reference, Checkpoint::new_initial(epoch_local, caller)),
-                    false => (
+                let (checker, checkpoint) = if is_last_checkpoint_finalizing {
+                    (reference, Checkpoint::new_initial(epoch_local, caller))
+                } else {
+                    (
                         reference
-                            .clone_process(clone_flags, clone_signal, restart_old_syscall)
+                            .clone_process(
+                                clone_flags,
+                                clone_signal,
+                                restart_old_syscall,
+                                restart_old_syscall,
+                            )
                             .as_owned(),
                         Checkpoint::new(epoch_local, reference, caller),
-                    ),
+                    )
                 };
 
                 (self.hooks.on_checker_created)(&checker);
@@ -203,7 +215,12 @@ impl<'a> CheckCoordinator<'a> {
                 if !self.segments.is_last_checkpoint_finalizing() {
                     let reference = self
                         .main
-                        .clone_process(clone_flags, clone_signal, restart_old_syscall)
+                        .clone_process(
+                            clone_flags,
+                            clone_signal,
+                            restart_old_syscall,
+                            restart_old_syscall,
+                        )
                         .as_owned();
                     self.main.resume();
                     let checkpoint = Checkpoint::new(epoch_local, reference, caller);

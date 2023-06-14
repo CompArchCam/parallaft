@@ -117,15 +117,16 @@ impl Process {
         &self,
         flags: CloneFlags,
         signal: Option<Signal>,
-        restart_old_syscall: bool, // restart parent's old syscall
+        restart_parent_old_syscall: bool,
+        restart_child_old_syscall: bool,
     ) -> Process {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
         let child_pid = self.syscall_direct(
             Sysno::clone,
             syscall_args!(clone_flags, 0, 0, 0, 0),
-            restart_old_syscall,
-            true,
+            restart_parent_old_syscall,
+            restart_child_old_syscall,
         );
 
         let child = Process::new(Pid::from_raw(child_pid as _));
@@ -404,7 +405,9 @@ mod tests {
         ));
 
         // clone the process
-        let child = parent.clone_process(CloneFlags::CLONE_PARENT, None, false);
+        let child = parent
+            .clone_process(CloneFlags::CLONE_PARENT, None, false, false)
+            .as_owned();
 
         // parent gettid entry
         ptrace::syscall(parent.pid, None).unwrap();
@@ -429,5 +432,67 @@ mod tests {
         // child exit
         ptrace::cont(child.pid, None).unwrap();
         assert_eq!(child.waitpid().unwrap(), WaitStatus::Exited(child.pid, 0));
+    }
+
+    #[test]
+    #[serial]
+    fn test_process_clone() {
+        let parent = trace(|| {
+            // syscall is injected here
+            getpid();
+
+            0
+        });
+
+        // getpid entry
+        ptrace::syscall(parent.pid, None).unwrap();
+
+        assert!(matches!(
+            parent.waitpid().unwrap(),
+            WaitStatus::PtraceSyscall(_)
+        ));
+
+        assert_eq!(parent.read_registers().sysno().unwrap(), Sysno::getpid);
+
+        let mut regs = parent.read_registers();
+
+        regs.inner.r8 = 0x8086;
+        regs.inner.r9 = 0x8087;
+        regs.inner.r10 = 0x8088;
+        regs.inner.r11 = 0x8089;
+        regs.inner.r12 = 0x808a;
+        regs.inner.r13 = 0x808b;
+        regs.inner.r14 = 0x808c;
+        regs.inner.r15 = 0x808d;
+        regs.inner.rax = 0x808e;
+        regs.inner.rbp = 0x808f;
+        regs.inner.rbx = 0x8090;
+        regs.inner.rcx = 0x8091;
+        regs.inner.rdi = 0x8092;
+        regs.inner.rdx = 0x8093;
+        regs.inner.rsi = 0x8094;
+        regs.inner.rsp = 0x8095;
+
+        parent.write_registers(regs);
+
+        // clone the process
+        let child = parent
+            .clone_process(CloneFlags::CLONE_PARENT, None, false, false)
+            .as_owned();
+
+        assert_eq!(parent.read_registers().inner, regs.inner);
+        assert_eq!(child.read_registers().inner, regs.inner);
+
+        ptrace::kill(parent.pid).unwrap();
+        assert!(matches!(
+            parent.waitpid().unwrap(),
+            WaitStatus::Signaled(_, _, _)
+        ));
+
+        ptrace::kill(child.pid).unwrap();
+        assert!(matches!(
+            child.waitpid().unwrap(),
+            WaitStatus::Signaled(_, _, _)
+        ));
     }
 }
