@@ -161,7 +161,7 @@ impl Process {
         }
 
         // restore the registers
-        ptrace::setregs(pid, saved_regs.inner).unwrap();
+        Process::new(pid).write_registers(saved_regs);
 
         if restart_old_syscall {
             // execute the original syscall
