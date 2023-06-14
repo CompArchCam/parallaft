@@ -803,9 +803,7 @@ impl<'a> CheckCoordinator<'a> {
                             match saved_incomplete_syscall.syscall {
                                 Syscall::Mmap(_) | Syscall::Mremap(_) => {
                                     // restore registers as if we haven't modified mmap/mremap flags
-                                    active_segment
-                                        .checker()
-                                        .unwrap()
+                                    self.main
                                         .modify_registers_with(|regs| regs.with_syscall_args(args));
                                 }
                                 _ => panic!("unhandled custom syscall during syscall exit"),
