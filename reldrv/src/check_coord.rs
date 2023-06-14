@@ -291,6 +291,8 @@ impl<'a> CheckCoordinator<'a> {
                             } else {
                                 error!("Check fails");
                             }
+
+                            main.dump_memory_maps();
                         } else {
                             info!("Check passed");
                         }

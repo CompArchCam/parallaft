@@ -7,6 +7,7 @@ use std::{
 use log::{debug, info, trace};
 use nix::errno::Errno;
 use pretty_hex::PrettyHex;
+use procfs::process::MMPermissions;
 use reverie_syscalls::MemoryAccess;
 
 use crate::process::Process;
@@ -104,8 +105,11 @@ impl Process {
             .filter(|m| m.perms.contains(procfs::process::MMPermissions::WRITE))
         {
             debug!(
-                "Writable map: {:?}-{:?}: {:?}",
-                map.address.0 as *const u8, map.address.1 as *const u8, map.pathname
+                "Writable map: {:?}-{:?}: {:?} @ {:p}",
+                map.address.0 as *const u8,
+                map.address.1 as *const u8,
+                map.pathname,
+                map.offset as *const u8
             );
             let range = (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
             let range_info = pagemap
@@ -139,6 +143,40 @@ impl Process {
         self.procfs()
             .clear_refs(4)
             .expect("failed to clear dirty bits");
+    }
+
+    pub fn dump_memory_maps(&self) {
+        fn perm_to_str<'a>(
+            perms: MMPermissions,
+            bit: MMPermissions,
+            yes: &'a str,
+            no: &'a str,
+        ) -> &'a str {
+            if perms.contains(bit) {
+                yes
+            } else {
+                no
+            }
+        }
+
+        for map in self.procfs().maps().unwrap() {
+            let mut perms_string = String::new();
+
+            perms_string += perm_to_str(map.perms, MMPermissions::READ, "r", "-");
+            perms_string += perm_to_str(map.perms, MMPermissions::WRITE, "w", "-");
+            perms_string += perm_to_str(map.perms, MMPermissions::EXECUTE, "x", "-");
+            perms_string += perm_to_str(map.perms, MMPermissions::PRIVATE, "p", "");
+            perms_string += perm_to_str(map.perms, MMPermissions::SHARED, "s", "");
+
+            info!(
+                "{:?}-{:?} {}: {:?} @ {:p}",
+                map.address.0 as *const u8,
+                map.address.1 as *const u8,
+                perms_string,
+                map.pathname,
+                map.offset as *const u8
+            );
+        }
     }
 }
 
