@@ -8,14 +8,14 @@ use crate::{
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, MainInitHandler,
+        CustomSyscallHandler, HandlerContext, ProcessLifetimeHook,
         StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
         StandardSyscallHandler, SyscallHandlerExitAction,
     },
 };
 
 pub struct Dispatcher<'a> {
-    main_init_handlers: Vec<&'a dyn MainInitHandler>,
+    process_lifetime_hooks: Vec<&'a dyn ProcessLifetimeHook>,
     standard_syscall_handlers: Vec<&'a dyn StandardSyscallHandler>,
     custom_syscall_handlers: Vec<&'a dyn CustomSyscallHandler>,
     signal_handlers: Vec<&'a dyn SignalHandler>,
@@ -26,7 +26,7 @@ pub struct Dispatcher<'a> {
 impl<'a> Dispatcher<'a> {
     pub fn new() -> Self {
         Self {
-            main_init_handlers: Vec::new(),
+            process_lifetime_hooks: Vec::new(),
             standard_syscall_handlers: Vec::new(),
             custom_syscall_handlers: Vec::new(),
             signal_handlers: Vec::new(),
@@ -35,8 +35,8 @@ impl<'a> Dispatcher<'a> {
         }
     }
 
-    pub fn install_main_init_handler(&mut self, handler: &'a dyn MainInitHandler) {
-        self.main_init_handlers.push(handler)
+    pub fn install_process_lifetime_hook(&mut self, handler: &'a dyn ProcessLifetimeHook) {
+        self.process_lifetime_hooks.push(handler)
     }
 
     pub fn install_standard_syscall_handler(&mut self, handler: &'a dyn StandardSyscallHandler) {
@@ -60,10 +60,28 @@ impl<'a> Dispatcher<'a> {
     }
 }
 
-impl<'a> MainInitHandler for Dispatcher<'a> {
+impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
     fn handle_main_init(&self, process: &Process) {
-        for handler in &self.main_init_handlers {
+        for handler in &self.process_lifetime_hooks {
             handler.handle_main_init(process)
+        }
+    }
+
+    fn handle_checker_init(&self, process: &Process) {
+        for handler in &self.process_lifetime_hooks {
+            handler.handle_checker_init(process)
+        }
+    }
+
+    fn handle_all_fini(&self) {
+        for handler in &self.process_lifetime_hooks {
+            handler.handle_all_fini()
+        }
+    }
+
+    fn handle_main_fini(&self, ret_val: i32) {
+        for handler in &self.process_lifetime_hooks {
+            handler.handle_main_fini(ret_val)
         }
     }
 }

@@ -1,6 +1,7 @@
 pub mod dirty_pages;
 mod memory;
 mod registers;
+mod stats;
 mod syscall;
 
 #[cfg(feature = "compel")]

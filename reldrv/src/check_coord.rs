@@ -29,7 +29,7 @@ use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain, SegmentEventHa
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::stats::Statistics;
 use crate::syscall_handlers::{
-    HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
+    HandlerContext, ProcessLifetimeHook, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
@@ -200,6 +200,7 @@ impl<'a> CheckCoordinator<'a> {
                 };
 
                 (self.hooks.on_checker_created)(&checker);
+                self.dispatcher.handle_checker_init(&checker);
 
                 if !self
                     .options

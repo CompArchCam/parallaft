@@ -6,6 +6,7 @@ mod process;
 mod saved_syscall;
 mod segments;
 mod signal_handlers;
+mod statistics;
 mod stats;
 mod syscall_handlers;
 
@@ -15,7 +16,6 @@ use std::os::unix::process::CommandExt;
 use std::panic;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 use bitflags::bitflags;
 
@@ -41,13 +41,16 @@ use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
+use crate::statistics::counter::CounterCollector;
+use crate::statistics::timing::TimingCollector;
+use crate::statistics::StatisticsSet;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::exit::ExitHandler;
 use crate::syscall_handlers::replicate::ReplicatedSyscallHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
-    CustomSyscallHandler, HandlerContext, MainInitHandler, SyscallHandlerExitAction,
+    CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
 };
 
 #[derive(Parser, Debug)]
@@ -197,6 +200,14 @@ fn parent_work(
     let relrtlib_handler = RelRtLib::new(librelrt_checkpoint_period);
     relrtlib_handler.install(&mut disp);
 
+    let time_stats = TimingCollector::new();
+    time_stats.install(&mut disp);
+
+    let counter_stats = CounterCollector::new(&time_stats);
+    counter_stats.install(&mut disp);
+
+    let all_stats = StatisticsSet::new(vec![&time_stats, &counter_stats]);
+
     info!("Child process tracing started");
 
     let inferior = OwnedProcess::new(child_pid);
@@ -215,13 +226,7 @@ fn parent_work(
     check_coord.main.resume();
 
     let mut main_finished = false;
-    let mut main_exec_time = Duration::ZERO;
-
-    let exec_start_time = Instant::now();
-    let mut syscall_cnt = 0;
-
     let mut last_syscall_entry_handled_by_check_coord: HashMap<Pid, bool> = HashMap::new();
-
     let mut exit_status = None;
 
     loop {
@@ -243,7 +248,9 @@ fn parent_work(
                 info!("Child {} exited", pid);
                 if pid == check_coord.main.pid {
                     main_finished = true;
-                    main_exec_time = exec_start_time.elapsed();
+
+                    disp.handle_main_fini(status);
+
                     exit_status = Some(status);
 
                     if check_coord.is_all_finished() {
@@ -335,10 +342,6 @@ fn parent_work(
                         ptrace::syscall(pid, None).unwrap();
                     }
                 }
-
-                if pid == check_coord.main.pid {
-                    syscall_cnt += 1;
-                }
             }
             WaitStatus::PtraceEvent(_pid, _sig, event) => {
                 info!("Ptrace event = {:}", event);
@@ -360,26 +363,12 @@ fn parent_work(
         }
     }
 
-    syscall_cnt /= 2;
-
-    let all_exec_time = exec_start_time.elapsed();
+    disp.handle_all_fini();
 
     if flags.contains(RunnerFlags::DUMP_STATS) || stats_output.is_some() {
-        let nr_checkpoints = check_coord.epoch();
+        let _nr_checkpoints = check_coord.epoch();
 
-        let mut s = [
-            format!("main_exec_time={}", main_exec_time.as_secs_f64()),
-            format!("all_exec_time={}", all_exec_time.as_secs_f64()),
-            format!("nr_checkpoints={}", nr_checkpoints),
-            format!(
-                "avg_checkpoint_freq={}",
-                (nr_checkpoints as f64) / main_exec_time.as_secs_f64()
-            ),
-            format!("avg_nr_dirty_pages={}", check_coord.avg_nr_dirty_pages()),
-            format!("syscall_cnt={}", syscall_cnt),
-        ]
-        .join("\n");
-
+        let mut s = all_stats.as_text();
         s.push_str("\n");
 
         if let Some(output_path) = stats_output {

@@ -11,7 +11,7 @@ use crate::{
     process::Process,
 };
 
-use super::{CustomSyscallHandler, HandlerContext, MainInitHandler, StandardSyscallHandler};
+use super::{CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, StandardSyscallHandler};
 
 pub struct RseqHandler {
     rseq_config: Mutex<Option<ptrace_rseq_configuration>>,
@@ -95,7 +95,7 @@ impl CustomSyscallHandler for RseqHandler {
     }
 }
 
-impl MainInitHandler for RseqHandler {
+impl ProcessLifetimeHook for RseqHandler {
     fn handle_main_init(&self, process: &Process) {
         let rseq_config = ptrace::get_rseq_configuration(process.pid)
             .ok()
@@ -113,7 +113,7 @@ impl MainInitHandler for RseqHandler {
 
 impl<'a> Installable<'a> for RseqHandler {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_main_init_handler(self);
+        dispatcher.install_process_lifetime_hook(self);
         dispatcher.install_standard_syscall_handler(self);
         dispatcher.install_custom_syscall_handler(self);
     }

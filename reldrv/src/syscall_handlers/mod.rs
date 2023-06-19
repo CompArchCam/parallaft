@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
+pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
 pub struct HandlerContext<'a, 'b, 'c> {
@@ -60,7 +61,7 @@ pub enum SyscallHandlerExitAction {
 
 #[allow(unused_variables)]
 pub trait StandardSyscallHandler {
-    /// Called when the main process enters a standard syscall.
+    /// Called when the main process enters a standard syscall AND is in a protected region.
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
@@ -70,7 +71,7 @@ pub trait StandardSyscallHandler {
         StandardSyscallEntryMainHandlerExitAction::NextHandler
     }
 
-    /// Called when the main process exits from a standard syscall.
+    /// Called when the main process exits from a standard syscall AND is in a protected region.
     /// Only called if the `saved_incomplete_syscall.exit_action` is set to `Custom`.
     fn handle_standard_syscall_exit_main(
         &self,
@@ -147,6 +148,19 @@ pub trait CustomSyscallHandler {
 }
 
 #[allow(unused_variables)]
-pub trait MainInitHandler {
+pub trait ProcessLifetimeHook {
+    /// Called after spawning the main process
     fn handle_main_init(&self, process: &Process) {}
+
+    /// Called after spawning a checker process
+    fn handle_checker_init(&self, process: &Process) {}
+
+    // /// Called before killing a checker process
+    // fn handle_checker_fini(&self, process: &Process) {}
+
+    /// Called after all subprocesses exit
+    fn handle_all_fini(&self) {}
+
+    /// Called after main exits
+    fn handle_main_fini(&self, ret_val: i32) {}
 }
