@@ -11,8 +11,8 @@ use crate::{
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, MainInitHandler, SyscallHandlerExitAction,
-        CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE,
+        CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction, CUSTOM_SYSNO_START,
+        SYSNO_CHECKPOINT_TAKE,
     },
 };
 
@@ -118,10 +118,6 @@ impl CustomSyscallHandler for RelRtLib {
     }
 }
 
-impl MainInitHandler for RelRtLib {
-    fn handle_main_init(&self, _process: &Process) {}
-}
-
 impl SignalHandler for RelRtLib {
     fn handle_signal(&self, signal: Signal, context: &HandlerContext) -> SignalHandlerExitAction {
         if signal == Signal::SIGTRAP {
@@ -153,7 +149,6 @@ impl<'a> Installable<'a> for RelRtLib {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_segment_event_handler(self);
         dispatcher.install_custom_syscall_handler(self);
-        dispatcher.install_main_init_handler(self);
         dispatcher.install_signal_handler(self);
     }
 }
