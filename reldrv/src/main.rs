@@ -1,5 +1,6 @@
 mod check_coord;
 mod inferior_rtlib;
+mod vdso;
 
 mod dispatcher;
 mod process;
@@ -52,6 +53,7 @@ use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
 };
+use crate::vdso::VdsoRemover;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -199,6 +201,9 @@ fn parent_work(
 
     let relrtlib_handler = RelRtLib::new(librelrt_checkpoint_period);
     relrtlib_handler.install(&mut disp);
+
+    let vdso_remover = VdsoRemover::new();
+    vdso_remover.install(&mut disp);
 
     let time_stats = TimingCollector::new();
     time_stats.install(&mut disp);
