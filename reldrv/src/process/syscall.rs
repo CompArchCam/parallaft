@@ -129,6 +129,10 @@ impl Process {
             restart_child_old_syscall,
         );
 
+        if child_pid <= 0 {
+            panic!("Unexpected pid returned from clone: {}", child_pid);
+        }
+
         let child = Process::new(Pid::from_raw(child_pid as _));
         child
     }
