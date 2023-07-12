@@ -8,6 +8,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     process::Process,
     syscall_handlers::{
         HandlerContext, ProcessLifetimeHook, StandardSyscallHandler, SyscallHandlerExitAction,
@@ -76,18 +77,18 @@ impl StandardSyscallHandler for TimingCollector {
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if context.process.pid == context.check_coord.main.pid {
             match syscall {
                 Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                    let stats = context.process.stats();
+                    let stats = context.process.stats()?;
                     self.utime.store(stats.utime, Ordering::SeqCst);
                     self.stime.store(stats.stime, Ordering::SeqCst);
                 }
                 _ => (),
             }
         }
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

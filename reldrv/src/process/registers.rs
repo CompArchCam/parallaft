@@ -1,3 +1,4 @@
+use crate::error::Result;
 use nix::{libc::user_regs_struct, sys::ptrace};
 use std::{
     arch::x86_64::CpuidResult,
@@ -157,17 +158,19 @@ impl Registers {
 }
 
 impl Process {
-    pub fn read_registers(&self) -> Registers {
-        Registers::new(ptrace::getregs(self.pid).unwrap())
+    pub fn read_registers(&self) -> Result<Registers> {
+        Ok(Registers::new(ptrace::getregs(self.pid)?))
     }
 
-    pub fn write_registers(&self, regs: Registers) {
-        ptrace::setregs(self.pid, regs.inner).unwrap();
+    pub fn write_registers(&self, regs: Registers) -> Result<()> {
+        ptrace::setregs(self.pid, regs.inner)?;
+        Ok(())
     }
 
-    pub fn modify_registers_with(&self, f: impl FnOnce(Registers) -> Registers) {
-        let regs = self.read_registers();
+    pub fn modify_registers_with(&self, f: impl FnOnce(Registers) -> Registers) -> Result<()> {
+        let regs = self.read_registers()?;
         let regs = f(regs);
-        self.write_registers(regs);
+        self.write_registers(regs)?;
+        Ok(())
     }
 }

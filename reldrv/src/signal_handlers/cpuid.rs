@@ -1,5 +1,5 @@
 use std::{
-    arch::x86_64::__cpuid_count,
+    arch::x86_64::{CpuidResult, __cpuid_count},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -10,6 +10,7 @@ use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::{Error, Result},
     segments::SavedTrapEvent,
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
@@ -31,14 +32,16 @@ impl CpuidHandler {
 }
 
 impl SignalHandler for CpuidHandler {
-    fn handle_signal(&self, signal: Signal, context: &HandlerContext) -> SignalHandlerExitAction {
+    fn handle_signal(
+        &self,
+        signal: Signal,
+        context: &HandlerContext,
+    ) -> Result<SignalHandlerExitAction> {
         let process = context.process;
 
         if signal == Signal::SIGSEGV {
-            let regs = process.read_registers();
-            let instr: u64 = process
-                .read_value(Addr::from_raw(regs.inner.rip as _).unwrap())
-                .unwrap();
+            let regs = process.read_registers()?;
+            let instr: u64 = process.read_value(Addr::from_raw(regs.rip as _).unwrap())?;
 
             let get_cpuid = || {
                 let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
@@ -52,37 +55,44 @@ impl SignalHandler for CpuidHandler {
                 let cpuid = context
                     .check_coord
                     .segments
-                    .get_active_segment_with(process.pid, |segment, is_main| {
-                        if is_main {
-                            let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                            let cpuid = get_cpuid();
+                    .get_active_segment_with::<Result<CpuidResult>>(
+                        process.pid,
+                        |segment, is_main| {
+                            if is_main {
+                                let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+                                let cpuid = get_cpuid();
 
-                            // add to the log
-                            segment
-                                .trap_event_log
-                                .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
+                                // add to the log
+                                segment
+                                    .trap_event_log
+                                    .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
 
-                            cpuid
-                        } else {
-                            // replay from the log
-                            let event = segment.trap_event_log.pop_front().unwrap();
-                            if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
-                                assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
-                                cpuid
+                                Ok(cpuid)
                             } else {
-                                panic!("Unexpected trap event");
+                                // replay from the log
+                                let event = segment
+                                    .trap_event_log
+                                    .pop_front()
+                                    .ok_or(Error::UnexpectedTrap)?;
+
+                                if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
+                                    assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
+                                    Ok(cpuid)
+                                } else {
+                                    panic!("Unexpected trap event");
+                                }
                             }
-                        }
-                    })
-                    .unwrap_or_else(get_cpuid);
+                        },
+                    )
+                    .unwrap_or_else(|| Ok(get_cpuid()))?;
 
-                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2));
+                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2))?;
 
-                return SignalHandlerExitAction::SuppressSignalAndContinueInferior;
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
         }
 
-        SignalHandlerExitAction::NextHandler
+        Ok(SignalHandlerExitAction::NextHandler)
     }
 }
 
@@ -92,13 +102,13 @@ impl StandardSyscallHandler for CpuidHandler {
         _ret_val: isize,
         syscall: &Syscall,
         _context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) {
             // arch_prctl cpuid is cleared after every execve
             self.init_done.store(false, Ordering::SeqCst);
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -108,7 +118,7 @@ impl CustomSyscallHandler for CpuidHandler {
         _sysno: usize,
         _args: SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if context.check_coord.main.pid == context.process.pid
             && self
                 .init_done
@@ -120,12 +130,12 @@ impl CustomSyscallHandler for CpuidHandler {
                 syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
                 true,
                 false,
-            );
+            )?;
             assert_eq!(ret, 0);
             info!("Cpuid init done");
         };
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

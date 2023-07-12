@@ -2,6 +2,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
     segments::Segment,
 };
@@ -25,8 +26,8 @@ impl StandardSyscallHandler for ExitHandler {
         syscall: &Syscall,
         _active_segment: &mut Segment,
         _context: &HandlerContext,
-    ) -> StandardSyscallEntryMainHandlerExitAction {
-        match syscall {
+    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
+        Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {
                 StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                     SavedIncompleteSyscall {
@@ -37,7 +38,7 @@ impl StandardSyscallHandler for ExitHandler {
                 )
             }
             _ => StandardSyscallEntryMainHandlerExitAction::NextHandler,
-        }
+        })
     }
 
     fn handle_standard_syscall_entry_checker(
@@ -45,8 +46,8 @@ impl StandardSyscallHandler for ExitHandler {
         syscall: &Syscall,
         active_segment: &mut Segment,
         _context: &HandlerContext,
-    ) -> StandardSyscallEntryCheckerHandlerExitAction {
-        match syscall {
+    ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
+        Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {
                 assert_eq!(
                     &active_segment.ongoing_syscall.as_ref().unwrap().syscall,
@@ -55,7 +56,7 @@ impl StandardSyscallHandler for ExitHandler {
                 StandardSyscallEntryCheckerHandlerExitAction::Checkpoint
             }
             _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,
-        }
+        })
     }
 
     // Exit syscall never exits

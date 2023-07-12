@@ -2,6 +2,7 @@ use reverie_syscalls::{Syscall, SyscallInfo};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
     segments::Segment,
 };
@@ -25,8 +26,8 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         syscall: &Syscall,
         _active_segment: &mut Segment,
         _context: &HandlerContext,
-    ) -> StandardSyscallEntryMainHandlerExitAction {
-        match syscall {
+    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
+        Ok(match syscall {
             Syscall::ArchPrctl(_) | Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {
                 StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
                     syscall: *syscall,
@@ -35,7 +36,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
                 })
             }
             _ => StandardSyscallEntryMainHandlerExitAction::NextHandler,
-        }
+        })
     }
 
     fn handle_standard_syscall_entry_checker(
@@ -43,8 +44,8 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         syscall: &Syscall,
         active_segment: &mut Segment,
         _context: &HandlerContext,
-    ) -> StandardSyscallEntryCheckerHandlerExitAction {
-        match syscall {
+    ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
+        Ok(match syscall {
             Syscall::ArchPrctl(_) | Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {
                 let saved_syscall = active_segment
                     .syscall_log
@@ -56,7 +57,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
                 StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior
             }
             _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,
-        }
+        })
     }
 
     // Exit syscall never exits

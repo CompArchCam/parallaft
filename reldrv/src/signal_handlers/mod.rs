@@ -3,6 +3,7 @@ pub mod rdtsc;
 
 use nix::sys::signal::Signal;
 
+use crate::error::Result;
 use crate::syscall_handlers::HandlerContext;
 
 #[allow(unused)]
@@ -18,7 +19,11 @@ pub enum SignalHandlerExitAction {
 }
 
 pub trait SignalHandler {
-    fn handle_signal(&self, _signal: Signal, _context: &HandlerContext) -> SignalHandlerExitAction {
-        SignalHandlerExitAction::NextHandler
+    fn handle_signal(
+        &self,
+        _signal: Signal,
+        _context: &HandlerContext,
+    ) -> Result<SignalHandlerExitAction> {
+        Ok(SignalHandlerExitAction::NextHandler)
     }
 }

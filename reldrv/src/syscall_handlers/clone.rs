@@ -1,6 +1,7 @@
 use reverie_syscalls::Syscall;
 
 use crate::dispatcher::{Dispatcher, Installable};
+use crate::error::Result;
 
 use super::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction};
 
@@ -17,7 +18,7 @@ impl StandardSyscallHandler for CloneHandler {
         &self,
         syscall: &Syscall,
         _context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if matches!(
             syscall,
             Syscall::Fork(_) | Syscall::Vfork(_) | Syscall::Clone(_) | Syscall::Clone3(_)
@@ -25,7 +26,7 @@ impl StandardSyscallHandler for CloneHandler {
             panic!("fork/vfork/clone/clone3 is disallowed");
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

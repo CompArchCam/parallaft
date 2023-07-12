@@ -2,6 +2,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     segments::Segment,
 };
 
@@ -21,12 +22,12 @@ impl StandardSyscallHandler for ExecveHandler {
         syscall: &Syscall,
         _active_segment: &mut Segment,
         _context: &HandlerContext,
-    ) -> StandardSyscallEntryMainHandlerExitAction {
+    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) {
             panic!("Execve(at) is disallowed in protected regions");
         }
 
-        StandardSyscallEntryMainHandlerExitAction::NextHandler
+        Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
     }
 }
 

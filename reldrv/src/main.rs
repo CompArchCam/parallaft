@@ -1,4 +1,5 @@
 mod check_coord;
+mod error;
 mod inferior_rtlib;
 mod vdso;
 
@@ -222,13 +223,14 @@ fn parent_work(
     let check_coord = CheckCoordinator::new(
         inferior,
         check_coord_options,
-        CheckCoordinatorHooks::default()
-            .with_on_checker_created(move |process| process.set_cpu_affinity(&checker_cpu_set)),
+        CheckCoordinatorHooks::default().with_on_checker_created(move |process| {
+            process.set_cpu_affinity(&checker_cpu_set).unwrap()
+        }),
         &disp,
     );
 
-    check_coord.main.set_cpu_affinity(&main_cpu_set);
-    check_coord.main.resume();
+    check_coord.main.set_cpu_affinity(&main_cpu_set).unwrap();
+    check_coord.main.resume().unwrap();
 
     let mut main_finished = false;
     let mut last_syscall_entry_handled_by_check_coord: HashMap<Pid, bool> = HashMap::new();
@@ -247,7 +249,7 @@ fn parent_work(
 
         match status {
             WaitStatus::Stopped(pid, sig) => {
-                check_coord.handle_signal(pid, sig);
+                check_coord.handle_signal(pid, sig).unwrap();
             }
             WaitStatus::Exited(pid, status) => {
                 info!("Child {} exited", pid);
@@ -271,50 +273,56 @@ fn parent_work(
                 };
 
                 let process = Process::new(pid);
-                let regs = process.read_registers();
+                let regs = process.read_registers().unwrap();
 
                 if matches!(syscall_info.op, SyscallInfoOp::Entry { .. }) {
                     // syscall entry
 
                     if let Some(sysno) = regs.sysno() {
                         let args = regs.syscall_args();
-                        check_coord.handle_syscall_entry(pid, sysno, args);
+                        check_coord.handle_syscall_entry(pid, sysno, args).unwrap();
                         last_syscall_entry_handled_by_check_coord.insert(pid, true);
                     } else {
-                        let handled = disp.handle_custom_syscall_entry(
-                            regs.sysno_raw(),
-                            regs.syscall_args(),
-                            &HandlerContext {
-                                process: &process,
-                                check_coord: &check_coord,
-                            },
-                        );
+                        let handled = disp
+                            .handle_custom_syscall_entry(
+                                regs.sysno_raw(),
+                                regs.syscall_args(),
+                                &HandlerContext {
+                                    process: &process,
+                                    check_coord: &check_coord,
+                                },
+                            )
+                            .unwrap();
 
                         if matches!(handled, SyscallHandlerExitAction::NextHandler) {
                             // handle our custom syscalls
                             match (regs.sysno_raw(), regs.syscall_args()) {
                                 (0xff77, ..) => {
                                     info!("Checkpoint requested by {}", pid);
-                                    check_coord.handle_checkpoint(
-                                        pid,
-                                        false,
-                                        false,
-                                        CheckpointCaller::Child,
-                                    );
+                                    check_coord
+                                        .handle_checkpoint(
+                                            pid,
+                                            false,
+                                            false,
+                                            CheckpointCaller::Child,
+                                        )
+                                        .unwrap();
                                 }
                                 (0xff78, ..) => {
                                     info!("Checkpoint finish requested by {}", pid);
-                                    check_coord.handle_checkpoint(
-                                        pid,
-                                        true,
-                                        false,
-                                        CheckpointCaller::Child,
-                                    );
+                                    check_coord
+                                        .handle_checkpoint(
+                                            pid,
+                                            true,
+                                            false,
+                                            CheckpointCaller::Child,
+                                        )
+                                        .unwrap();
                                 }
                                 (0xff79, ..) => {
                                     if pid == check_coord.main.pid {
                                         info!("Sync requested by main");
-                                        check_coord.handle_sync();
+                                        check_coord.handle_sync().unwrap();
                                     }
                                 }
                                 _ => {
@@ -334,7 +342,9 @@ fn parent_work(
                         .get(&pid)
                         .unwrap_or(&false)
                     {
-                        check_coord.handle_syscall_exit(pid, regs.syscall_ret_val());
+                        check_coord
+                            .handle_syscall_exit(pid, regs.syscall_ret_val())
+                            .unwrap();
                     } else {
                         disp.handle_custom_syscall_exit(
                             regs.syscall_ret_val(),
@@ -342,7 +352,8 @@ fn parent_work(
                                 process: &process,
                                 check_coord: &check_coord,
                             },
-                        );
+                        )
+                        .unwrap();
 
                         ptrace::syscall(pid, None).unwrap();
                     }
@@ -360,6 +371,21 @@ fn parent_work(
                     if main_finished && check_coord.is_all_finished() {
                         break;
                     }
+
+                    check_coord
+                        .segments
+                        .get_active_segment_with(pid, |segment, is_main| {
+                            if is_main {
+                                panic!("Inferior unexpectedly killed by SIGKILL");
+                            } else {
+                                if !matches!(
+                                    segment.status,
+                                    segments::SegmentStatus::Checked { .. }
+                                ) {
+                                    panic!("Checker {} unexpected killed by SIGKILL", pid);
+                                }
+                            }
+                        });
                 } else {
                     panic!("PID {} signaled by {}", pid, sig);
                 }
@@ -564,6 +590,10 @@ mod tests {
 
     fn checkpoint_fini() {
         unsafe { libc::syscall(0xff78) };
+    }
+
+    fn checkpoint_sync() {
+        unsafe { libc::syscall(0xff79) };
     }
 
     #[test]
@@ -1486,6 +1516,48 @@ mod tests {
                     if result == 1 {
                         return 1;
                     }
+
+                    0
+                },
+                CheckCoordinatorOptions::default()
+            ),
+            0
+        )
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic]
+    fn test_oom_handling() {
+        setup();
+        assert_eq!(
+            trace(
+                || {
+                    let size: usize = (procfs::Meminfo::new().unwrap().mem_free as f64 * 0.75) as _; // 75% free mem
+                    println!("size = {}", size);
+                    let addr = unsafe {
+                        mman::mmap::<OwnedFd>(
+                            None,
+                            NonZeroUsize::new_unchecked(size),
+                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                            mman::MapFlags::MAP_PRIVATE | mman::MapFlags::MAP_ANONYMOUS,
+                            None,
+                            0,
+                        )
+                        .map_err(|_| std::process::exit(1))
+                        .unwrap()
+                    };
+
+                    let buf = unsafe { slice::from_raw_parts_mut(addr as *mut u8, size) };
+
+                    checkpoint_take();
+
+                    for c in buf.chunks_mut(4096) {
+                        c[0] = 42;
+                    }
+
+                    checkpoint_fini();
+                    checkpoint_sync();
 
                     0
                 },

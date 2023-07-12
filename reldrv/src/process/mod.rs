@@ -10,6 +10,7 @@ mod compel_parasite;
 #[cfg(feature = "compel")]
 mod compel;
 
+use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -27,7 +28,7 @@ use nix::{
 
 pub struct Process {
     pub pid: Pid,
-    procfs: Lazy<procfs::process::Process>,
+    procfs: Lazy<procfs::ProcResult<procfs::process::Process>>,
 }
 
 #[allow(unused)]
@@ -39,34 +40,42 @@ impl Process {
         }
     }
 
-    pub fn procfs(&self) -> &procfs::process::Process {
-        self.procfs
-            .get_or_create(|| procfs::process::Process::new(self.pid.as_raw()).unwrap())
+    pub fn procfs(&self) -> Result<&procfs::process::Process> {
+        let p = self
+            .procfs
+            .get_or_create(|| procfs::process::Process::new(self.pid.as_raw()))
+            .as_ref()
+            .map_err(|_| Error::Other)?;
+
+        Ok(p)
     }
 
-    pub fn resume(&self) {
-        ptrace::syscall(self.pid, None).unwrap();
+    pub fn resume(&self) -> Result<()> {
+        ptrace::syscall(self.pid, None)?;
+        Ok(())
     }
 
-    pub fn interrupt(&self) {
-        ptrace::interrupt(self.pid).unwrap();
+    pub fn interrupt(&self) -> Result<()> {
+        ptrace::interrupt(self.pid)?;
+        Ok(())
     }
 
-    pub fn set_cpu_affinity(&self, cpus: &Vec<usize>) {
+    pub fn set_cpu_affinity(&self, cpus: &Vec<usize>) -> Result<()> {
         if !cpus.is_empty() {
             let mut cpuset = CpuSet::new();
             for cpu in cpus {
-                cpuset.set(*cpu).unwrap();
+                cpuset.set(*cpu)?;
             }
-            sched_setaffinity(self.pid, &cpuset).unwrap();
+            sched_setaffinity(self.pid, &cpuset)?;
         }
+        Ok(())
     }
 
     pub fn as_owned(self) -> OwnedProcess {
         OwnedProcess { inner: self }
     }
 
-    pub fn waitpid(&self) -> Result<WaitStatus, Errno> {
+    pub fn waitpid(&self) -> std::result::Result<WaitStatus, Errno> {
         waitpid(self.pid, None)
     }
 }

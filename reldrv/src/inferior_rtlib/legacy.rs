@@ -5,6 +5,7 @@ use syscalls::SyscallArgs;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     process::{dirty_pages::IgnoredPagesProvider, Process},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     syscall_handlers::{
@@ -52,7 +53,8 @@ impl SegmentEventHandler for LegacyInferiorRtLib {
         &self,
         segment: &mut Segment,
         _checkpoint_end_caller: CheckpointCaller,
-    ) {
+    ) -> Result<()> {
+        // TODO: handle errors more gracefully
         let last_checker = segment.checker().unwrap();
         let checkpoint = segment.status.checkpoint_end().unwrap();
 
@@ -74,6 +76,8 @@ impl SegmentEventHandler for LegacyInferiorRtLib {
                 .write_value(AddrMut::from_raw(*base_address).unwrap(), &ctl)
                 .unwrap();
         }
+
+        Ok(())
     }
 }
 
@@ -92,7 +96,7 @@ impl CustomSyscallHandler for LegacyInferiorRtLib {
         sysno: usize,
         args: SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if sysno == SYSNO_SET_CLI_CONTROL_ADDR {
             assert_eq!(context.process.pid, context.check_coord.main.pid);
 
@@ -109,10 +113,10 @@ impl CustomSyscallHandler for LegacyInferiorRtLib {
 
             *self.client_control_addr.write() = base_address;
 
-            return SyscallHandlerExitAction::ContinueInferior;
+            return Ok(SyscallHandlerExitAction::ContinueInferior);
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

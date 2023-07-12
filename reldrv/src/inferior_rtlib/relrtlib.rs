@@ -7,6 +7,7 @@ use syscalls::SyscallArgs;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::{Error, Result},
     process::Process,
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
@@ -35,21 +36,27 @@ impl RelRtLib {
         }
     }
 
-    pub fn get_counter(&self, process: &Process) -> Option<u64> {
-        self.counter_addr
+    pub fn get_counter(&self, process: &Process) -> Result<u64> {
+        let ret = self
+            .counter_addr
             .read()
-            .map(|addr| process.read_value(addr).unwrap())
+            .ok_or(Error::InvalidState)
+            .map(|addr| process.read_value::<usize, u64>(addr))??;
+
+        Ok(ret)
     }
 
-    pub fn set_counter(&self, process: &Process, val: u64) -> Option<()> {
-        let addr = *self.counter_addr.read().as_ref()?;
+    pub fn set_counter(&self, process: &Process, val: u64) -> Result<()> {
+        let addr = *self
+            .counter_addr
+            .read()
+            .as_ref()
+            .ok_or(Error::InvalidState)?;
 
         let mut process = Process::new(process.pid);
-        process
-            .write_value(AddrMut::from_raw(addr).unwrap(), &val)
-            .unwrap();
+        process.write_value(AddrMut::from_raw(addr).unwrap(), &val)?;
 
-        Some(())
+        Ok(())
     }
 }
 
@@ -58,14 +65,17 @@ impl SegmentEventHandler for RelRtLib {
         &self,
         segment: &mut Segment,
         _checkpoint_end_caller: CheckpointCaller,
-    ) {
+    ) -> Result<()> {
         let last_checker = segment.checker().unwrap();
         let checkpoint = segment.status.checkpoint_end().unwrap();
 
         if checkpoint.caller == CheckpointCaller::Child {
             let counter = *self.saved_counter_value.lock();
-            self.set_counter(last_checker, (-(counter as i64) - 1) as u64);
+            self.set_counter(last_checker, (-(counter as i64) - 1) as u64)
+                .ok();
         }
+
+        Ok(())
     }
 }
 
@@ -75,9 +85,9 @@ impl CustomSyscallHandler for RelRtLib {
         sysno: usize,
         args: SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if sysno == SYSNO_SET_COUNTER_ADDR {
-            assert_eq!(context.process.pid, context.check_coord.main.pid);
+            assert_eq!(context.process.pid, context.check_coord.main.pid); // TODO: handle this more gracefully
             assert!(self.perf_counter.lock().is_none());
 
             let base_address = if args.arg0 == 0 {
@@ -98,50 +108,48 @@ impl CustomSyscallHandler for RelRtLib {
                 .sample(SampleFlag::IP)
                 .sigtrap(true)
                 .remove_on_exec(true)
-                .build()
-                .unwrap();
+                .build()?;
 
             *self.counter_addr.write() = base_address;
 
             self.perf_counter.lock().insert(counter).enable().unwrap();
 
-            return SyscallHandlerExitAction::ContinueInferior;
+            return Ok(SyscallHandlerExitAction::ContinueInferior);
         } else if sysno == SYSNO_CHECKPOINT_TAKE {
             if context.process.pid == context.check_coord.main.pid {
                 if let Some(c) = self.perf_counter.lock().as_mut() {
-                    c.enable().unwrap();
+                    c.enable()?;
                 }
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
 impl SignalHandler for RelRtLib {
-    fn handle_signal(&self, signal: Signal, context: &HandlerContext) -> SignalHandlerExitAction {
+    fn handle_signal(
+        &self,
+        signal: Signal,
+        context: &HandlerContext,
+    ) -> Result<SignalHandlerExitAction> {
         if signal == Signal::SIGTRAP {
-            let siginfo = ptrace::getsiginfo(context.process.pid).unwrap();
+            let siginfo = ptrace::getsiginfo(context.process.pid)?;
             if siginfo.si_code == 0x6
             /* TRAP_PERF */
             {
                 info!("[PID {: >8}] Trap: Perf", context.process.pid);
-                let c = self.get_counter(context.process).unwrap();
-                self.set_counter(context.process, -1_i64 as u64);
+                let c = self.get_counter(context.process)?;
+                self.set_counter(context.process, -1_i64 as u64)?;
                 *self.saved_counter_value.lock() = c;
 
-                self.perf_counter
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .disable()
-                    .unwrap();
+                self.perf_counter.lock().as_mut().unwrap().disable()?;
 
-                return SignalHandlerExitAction::SuppressSignalAndContinueInferior;
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
         }
 
-        SignalHandlerExitAction::NextHandler
+        Ok(SignalHandlerExitAction::NextHandler)
     }
 }
 

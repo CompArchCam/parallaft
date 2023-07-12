@@ -6,6 +6,7 @@ use std::sync::Arc;
 use bitflags::bitflags;
 
 use log::{error, info, warn};
+use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::uio::RemoteIoVec;
@@ -19,6 +20,7 @@ use reverie_syscalls::{
 };
 
 use crate::dispatcher::Dispatcher;
+use crate::error::{Error, Result};
 use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{
@@ -135,7 +137,7 @@ impl<'a> CheckCoordinator<'a> {
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
-    ) {
+    ) -> Result<()> {
         if pid == self.main.pid {
             info!("Main called checkpoint");
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -145,8 +147,8 @@ impl<'a> CheckCoordinator<'a> {
                 .flags
                 .contains(CheckCoordinatorFlags::DONT_FORK)
             {
-                self.main.resume();
-                return;
+                self.main.resume()?;
+                return Ok(());
             }
 
             let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
@@ -161,7 +163,7 @@ impl<'a> CheckCoordinator<'a> {
                         clone_signal,
                         restart_old_syscall,
                         restart_old_syscall || !is_last_checkpoint_finalizing,
-                    )
+                    )?
                     .as_owned();
 
                 if !self
@@ -169,13 +171,14 @@ impl<'a> CheckCoordinator<'a> {
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
                 {
-                    self.main.clear_dirty_page_bits();
+                    self.main.clear_dirty_page_bits()?;
                 }
 
                 if self.options.max_nr_live_segments == 0
                     || self.segments.len() < self.options.max_nr_live_segments
                 {
-                    self.main.resume();
+                    info!("Resuming main process");
+                    self.main.resume()?;
                 } else {
                     self.throttling
                         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -193,7 +196,7 @@ impl<'a> CheckCoordinator<'a> {
                                 clone_signal,
                                 restart_old_syscall,
                                 restart_old_syscall,
-                            )
+                            )?
                             .as_owned(),
                         Checkpoint::new(epoch_local, reference, caller),
                     )
@@ -221,13 +224,13 @@ impl<'a> CheckCoordinator<'a> {
                             clone_signal,
                             restart_old_syscall,
                             restart_old_syscall,
-                        )
+                        )?
                         .as_owned();
-                    self.main.resume();
+                    self.main.resume()?;
                     let checkpoint = Checkpoint::new(epoch_local, reference, caller);
 
                     info!("New checkpoint: {:?}", checkpoint);
-                    self.add_checkpoint(checkpoint, None);
+                    self.add_checkpoint(checkpoint, None)?;
                 } else {
                     info!("No-op checkpoint_fini");
                     self.main.resume();
@@ -297,23 +300,30 @@ impl<'a> CheckCoordinator<'a> {
                     .spawn(move || {
                         let mut segment = segment.lock();
 
-                        let (result, nr_dirty_pages) = segment.check(&ignored_pages).unwrap();
+                        match segment.check(&ignored_pages) {
+                            Ok((result, nr_dirty_pages)) => {
+                                stats.update_nr_dirty_pages(nr_dirty_pages);
 
-                        stats.update_nr_dirty_pages(nr_dirty_pages);
+                                if !result {
+                                    if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
+                                        warn!("Check fails");
+                                    } else {
+                                        error!("Check fails");
+                                    }
+
+                                    main.dump_memory_maps();
+                                } else {
+                                    info!("Check passed");
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to check: {:?}", e);
+                                segment.mark_as_checked(true).unwrap();
+                            }
+                        }
 
                         drop(segment);
 
-                        if !result {
-                            if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
-                                warn!("Check fails");
-                            } else {
-                                error!("Check fails");
-                            }
-
-                            main.dump_memory_maps();
-                        } else {
-                            info!("Check passed");
-                        }
                         Self::cleanup_committed_segments(
                             &main,
                             &mut pending_sync.lock(),
@@ -321,21 +331,27 @@ impl<'a> CheckCoordinator<'a> {
                             max_nr_live_segments,
                             flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                             &throttling,
-                        );
+                        )
+                        .unwrap();
                     });
             }
         } else {
             panic!("invalid pid");
         }
+
+        Ok(())
     }
 
-    pub fn handle_sync(&self) {
+    pub fn handle_sync(&self) -> Result<()> {
         if let Some(last_segment) = self.segments.get_last_segment() {
             let epoch = last_segment
                 .lock()
                 .status
                 .checkpoint_end()
-                .expect("Attempt to sync before checkpoint_fini is called")
+                .ok_or(Error::ReturnedToUser(
+                    Errno::EINVAL,
+                    "Attempt to sync before checkpoint_fini is called".to_string(),
+                ))?
                 .epoch;
 
             let mut pending_sync = self.pending_sync.lock();
@@ -343,8 +359,10 @@ impl<'a> CheckCoordinator<'a> {
             assert!(pending_sync.is_none());
             pending_sync.insert(epoch);
         } else {
-            self.main.resume();
+            self.main.resume()?;
         }
+
+        Ok(())
     }
 
     fn cleanup_committed_segments(
@@ -354,7 +372,7 @@ impl<'a> CheckCoordinator<'a> {
         max_nr_live_segments: usize,
         ignore_errors: bool,
         throttling: &AtomicBool,
-    ) {
+    ) -> Result<()> {
         let old_len = segments.len();
 
         segments.cleanup_committed_segments(ignore_errors);
@@ -363,11 +381,11 @@ impl<'a> CheckCoordinator<'a> {
             if let Some(front) = segments.get_first_segment() {
                 if front.lock().checkpoint_start.epoch > *epoch {
                     pending_sync.take().map(drop);
-                    main.resume();
+                    main.resume()?;
                 }
             } else {
                 pending_sync.take().map(drop);
-                main.resume();
+                main.resume()?;
             }
         }
 
@@ -382,12 +400,14 @@ impl<'a> CheckCoordinator<'a> {
                 .is_ok()
         {
             info!("Resuming main");
-            main.resume();
+            main.resume()?;
         }
+
+        Ok(())
     }
 
     /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
-    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<OwnedProcess>) {
+    fn add_checkpoint(&self, checkpoint: Checkpoint, checker: Option<OwnedProcess>) -> Result<()> {
         self.segments.add_checkpoint(
             checkpoint,
             checker,
@@ -397,14 +417,14 @@ impl<'a> CheckCoordinator<'a> {
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_RUN_CHECKER)
                 {
-                    last_segment.mark_as_checked(false);
-                    true
+                    last_segment.mark_as_checked(false).unwrap();
+                    Ok(true)
                 } else {
                     self.dispatcher
-                        .handle_segment_ready(last_segment, checkpoint.caller);
+                        .handle_segment_ready(last_segment, checkpoint.caller)?;
 
-                    last_segment.checker().unwrap().resume();
-                    false
+                    last_segment.checker().unwrap().resume()?;
+                    Ok(false)
                 }
             },
             || {
@@ -417,9 +437,9 @@ impl<'a> CheckCoordinator<'a> {
                         .flags
                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
                     &self.throttling,
-                );
+                )
             },
-        );
+        )
     }
 
     /// Get the current epoch.
@@ -446,7 +466,7 @@ impl<'a> CheckCoordinator<'a> {
             && self.segments.has_errors()
     }
 
-    pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) {
+    pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) -> Result<()> {
         let syscall = reverie_syscalls::Syscall::from_raw(sysno, args);
         let process = Process::new(pid);
 
@@ -463,11 +483,11 @@ impl<'a> CheckCoordinator<'a> {
 
         if matches!(
             self.dispatcher
-                .handle_standard_syscall_entry(&syscall, &handler_context),
+                .handle_standard_syscall_entry(&syscall, &handler_context)?,
             SyscallHandlerExitAction::ContinueInferior
         ) {
-            ptrace::syscall(pid, None).unwrap();
-            return;
+            ptrace::syscall(pid, None)?;
+            return Ok(());
         }
 
         if let Some((active_segment, is_main)) = self.segments.get_active_segment_by_pid(pid) {
@@ -479,14 +499,16 @@ impl<'a> CheckCoordinator<'a> {
                     &syscall,
                     &mut active_segment,
                     &handler_context,
-                );
+                )?;
 
                 match result {
                     StandardSyscallEntryMainHandlerExitAction::NextHandler => false,
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                         saved_incomplete_syscall,
                     ) => {
-                        assert!(active_segment.ongoing_syscall.is_none());
+                        if active_segment.ongoing_syscall.is_some() {
+                            return Err(Error::UnexpectedSyscall);
+                        }
 
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         true
@@ -494,12 +516,14 @@ impl<'a> CheckCoordinator<'a> {
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                         saved_incomplete_syscall,
                     ) => {
-                        assert!(active_segment.ongoing_syscall.is_none());
+                        if active_segment.ongoing_syscall.is_some() {
+                            return Err(Error::UnexpectedSyscall);
+                        }
 
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         drop(active_segment);
 
-                        self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
+                        self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell)?;
                         skip_ptrace_syscall = true;
                         true
                     }
@@ -512,7 +536,7 @@ impl<'a> CheckCoordinator<'a> {
                     &syscall,
                     &mut active_segment,
                     &handler_context,
-                );
+                )?;
 
                 match result {
                     StandardSyscallEntryCheckerHandlerExitAction::NextHandler => false,
@@ -520,7 +544,7 @@ impl<'a> CheckCoordinator<'a> {
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
                         drop(active_segment);
 
-                        self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell);
+                        self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell)?;
                         skip_ptrace_syscall = true;
                         true
                     }
@@ -534,7 +558,9 @@ impl<'a> CheckCoordinator<'a> {
 
                         if is_main {
                             // main process
-                            assert!(active_segment.ongoing_syscall.is_none());
+                            if active_segment.ongoing_syscall.is_some() {
+                                return Err(Error::UnexpectedSyscall);
+                            }
 
                             // HACK
                             // if mmap.flags().contains(MapFlags::MAP_SHARED) {
@@ -553,27 +579,33 @@ impl<'a> CheckCoordinator<'a> {
 
                             if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
                                 // File-backed mmap
-                                assert!(mmap.fd() >= 0);
 
-                                active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                    syscall,
-                                    kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                    exit_action: SyscallExitAction::Checkpoint,
-                                });
+                                if mmap.fd() >= 0 {
+                                    active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
+                                        syscall,
+                                        kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                                        exit_action: SyscallExitAction::Checkpoint,
+                                    });
 
-                                drop(active_segment);
+                                    drop(active_segment);
 
-                                self.main.modify_registers_with(|regs| {
-                                    regs.with_syscall_args(mmap.into_parts().1)
-                                });
+                                    self.main.modify_registers_with(|regs| {
+                                        regs.with_syscall_args(mmap.into_parts().1)
+                                    })?;
 
-                                info!("Main mmap checkpoint fini");
-                                self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell);
-                                skip_ptrace_syscall = true;
+                                    info!("Main mmap checkpoint fini");
+                                    self.handle_checkpoint(
+                                        pid,
+                                        true,
+                                        true,
+                                        CheckpointCaller::Shell,
+                                    )?;
+                                    skip_ptrace_syscall = true;
+                                }
                             } else {
                                 self.main.modify_registers_with(|regs| {
                                     regs.with_syscall_args(mmap.into_parts().1)
-                                });
+                                })?;
 
                                 active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                                     syscall,
@@ -588,17 +620,23 @@ impl<'a> CheckCoordinator<'a> {
                             if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
                                 info!("Checker mmap checkpoint fini");
                                 // File-backed mmap
-                                assert!(mmap.fd() >= 0);
 
-                                drop(active_segment);
+                                if mmap.fd() >= 0 {
+                                    drop(active_segment);
 
-                                self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell);
-                                skip_ptrace_syscall = true;
+                                    self.handle_checkpoint(
+                                        pid,
+                                        true,
+                                        false,
+                                        CheckpointCaller::Shell,
+                                    )?;
+                                    skip_ptrace_syscall = true;
+                                }
                             } else {
                                 let saved_syscall = active_segment
                                     .syscall_log
                                     .front()
-                                    .expect("spurious syscall made by checker");
+                                    .ok_or(Error::UnexpectedSyscall)?;
 
                                 assert_eq!(
                                     saved_syscall.syscall.into_parts(),
@@ -616,7 +654,7 @@ impl<'a> CheckCoordinator<'a> {
                                         |regs| {
                                             regs.with_sysno(new_sysno).with_syscall_args(new_args)
                                         },
-                                    )
+                                    )?;
                                 }
                             }
                         }
@@ -634,7 +672,7 @@ impl<'a> CheckCoordinator<'a> {
                             let saved_syscall = active_segment
                                 .syscall_log
                                 .front()
-                                .expect("spurious syscall made by checker");
+                                .ok_or(Error::UnexpectedSyscall)?;
 
                             assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
 
@@ -660,12 +698,9 @@ impl<'a> CheckCoordinator<'a> {
                                 }
 
                                 let (new_sysno, new_args) = mremap.into_parts();
-                                active_segment
-                                    .checker()
-                                    .unwrap()
-                                    .modify_registers_with(|regs| {
-                                        regs.with_sysno(new_sysno).with_syscall_args(new_args)
-                                    });
+                                active_segment.checker().unwrap().modify_registers_with(
+                                    |regs| regs.with_sysno(new_sysno).with_syscall_args(new_args),
+                                )?;
                             }
                         }
                     }
@@ -676,7 +711,10 @@ impl<'a> CheckCoordinator<'a> {
                         if is_main {
                             // info!("Main syscall entry");
                             // we are the main process
-                            assert!(active_segment.ongoing_syscall.is_none());
+
+                            if active_segment.ongoing_syscall.is_some() {
+                                return Err(Error::UnexpectedSyscall);
+                            }
 
                             let may_read = syscall.may_read(&process).ok().map(|slices| {
                                 slices
@@ -706,8 +744,7 @@ impl<'a> CheckCoordinator<'a> {
                                     active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                                         syscall,
                                         kind: SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
-                                            mem_read: SavedMemory::save(&process, &may_read)
-                                                .unwrap(),
+                                            mem_read: SavedMemory::save(&process, &may_read)?,
                                             mem_written_ranges: may_write,
                                         },
                                         exit_action: SyscallExitAction::ReplicateMemoryWrites,
@@ -743,17 +780,17 @@ impl<'a> CheckCoordinator<'a> {
                                     }
                                     SavedSyscallKind::KnownMemoryRw { mem_read, .. } => {
                                         // compare memory read by the syscall
-                                        assert!(mem_read.compare(&process).unwrap());
+                                        assert!(mem_read.compare(&process)?); // TODO: handle this more gracefully
                                     }
                                 }
                             } else {
-                                panic!("spurious syscall made by checker {:}", pid);
+                                return Err(Error::UnexpectedSyscall);
                             }
 
                             active_segment
                                 .checker()
                                 .unwrap()
-                                .modify_registers_with(|regs| regs.with_syscall_skipped());
+                                .modify_registers_with(|regs| regs.with_syscall_skipped())?;
                         }
                     }
                 }
@@ -763,9 +800,11 @@ impl<'a> CheckCoordinator<'a> {
         if !skip_ptrace_syscall {
             ptrace::syscall(pid, None).unwrap();
         }
+
+        Ok(())
     }
 
-    pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) {
+    pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) -> Result<()> {
         let mut process = Process::new(pid);
         let mut skip_ptrace_syscall = false;
 
@@ -774,15 +813,22 @@ impl<'a> CheckCoordinator<'a> {
             check_coord: self,
         };
 
-        let last_syscall = self.last_syscall.lock().remove(&pid).unwrap();
+        let last_syscall = self
+            .last_syscall
+            .lock()
+            .remove(&pid)
+            .ok_or(Error::UnexpectedSyscall)?;
 
         if matches!(
-            self.dispatcher
-                .handle_standard_syscall_exit(ret_val, &last_syscall, &handler_context,),
+            self.dispatcher.handle_standard_syscall_exit(
+                ret_val,
+                &last_syscall,
+                &handler_context,
+            )?,
             SyscallHandlerExitAction::ContinueInferior
         ) {
-            ptrace::syscall(pid, None).unwrap();
-            return;
+            ptrace::syscall(pid, None)?;
+            return Ok(());
         }
 
         if let Some((active_segment, is_main)) = self.segments.get_active_segment_by_pid(pid) {
@@ -790,7 +836,11 @@ impl<'a> CheckCoordinator<'a> {
 
             if is_main {
                 // we are the main process
-                let saved_incomplete_syscall = active_segment.ongoing_syscall.take().unwrap();
+                let saved_incomplete_syscall = active_segment
+                    .ongoing_syscall
+                    .take()
+                    .ok_or(Error::UnexpectedSyscall)?;
+
                 let (sysno, args) = saved_incomplete_syscall.syscall.into_parts();
 
                 let saved_syscall = match saved_incomplete_syscall.exit_action {
@@ -800,7 +850,7 @@ impl<'a> CheckCoordinator<'a> {
                             SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
                                 mem_read,
                                 mem_written_ranges,
-                            } => SavedMemory::save(&process, &mem_written_ranges).unwrap(),
+                            } => SavedMemory::save(&process, &mem_written_ranges)?,
                             _ => panic!(),
                         };
 
@@ -815,14 +865,15 @@ impl<'a> CheckCoordinator<'a> {
                             &saved_incomplete_syscall,
                             &mut active_segment,
                             &handler_context,
-                        );
+                        )?;
 
                         if matches!(result, SyscallHandlerExitAction::NextHandler) {
                             match saved_incomplete_syscall.syscall {
                                 Syscall::Mmap(_) | Syscall::Mremap(_) => {
                                     // restore registers as if we haven't modified mmap/mremap flags
-                                    self.main
-                                        .modify_registers_with(|regs| regs.with_syscall_args(args));
+                                    self.main.modify_registers_with(|regs| {
+                                        regs.with_syscall_args(args)
+                                    })?;
                                 }
                                 _ => panic!("unhandled custom syscall during syscall exit"),
                             }
@@ -842,22 +893,25 @@ impl<'a> CheckCoordinator<'a> {
                 // info!("Checker syscall exit");
                 // dbg!(&active_segment);
                 // we are one of the checker processes
-                let saved_syscall = active_segment.syscall_log.pop_front().unwrap();
+                let saved_syscall = active_segment
+                    .syscall_log
+                    .pop_front()
+                    .ok_or(Error::UnexpectedSyscall)?;
+
                 let (sysno, args) = saved_syscall.syscall.into_parts();
 
                 match saved_syscall.exit_action {
-                    SyscallExitAction::ReplicateMemoryWrites => match saved_syscall.kind {
-                        SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
-                            active_segment
-                                .checker()
-                                .unwrap()
-                                .modify_registers_with(|regs| {
-                                    regs.with_syscall_ret_val(saved_syscall.ret_val)
-                                });
-                            mem_written.dump(&mut process).unwrap();
+                    SyscallExitAction::ReplicateMemoryWrites => {
+                        match saved_syscall.kind {
+                            SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
+                                active_segment.checker().unwrap().modify_registers_with(
+                                    |regs| regs.with_syscall_ret_val(saved_syscall.ret_val),
+                                )?;
+                                mem_written.dump(&mut process)?;
+                            }
+                            _ => panic!(),
                         }
-                        _ => panic!(),
-                    },
+                    }
                     SyscallExitAction::ReplicateSyscall => {
                         assert_eq!(ret_val, saved_syscall.ret_val);
                     }
@@ -870,16 +924,15 @@ impl<'a> CheckCoordinator<'a> {
                             &saved_syscall,
                             &mut active_segment,
                             &handler_context,
-                        );
+                        )?;
 
                         if matches!(result, SyscallHandlerExitAction::NextHandler) {
                             match saved_syscall.syscall {
                                 Syscall::Mmap(_) | Syscall::Mremap(_) => {
                                     // restore registers as if we haven't modified mmap/mremap flags
-                                    active_segment
-                                        .checker()
-                                        .unwrap()
-                                        .modify_registers_with(|regs| regs.with_syscall_args(args));
+                                    active_segment.checker().unwrap().modify_registers_with(
+                                        |regs| regs.with_syscall_args(args),
+                                    )?;
                                 }
                                 _ => panic!("unhandled custom syscall during syscall exit"),
                             }
@@ -902,18 +955,20 @@ impl<'a> CheckCoordinator<'a> {
                         regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
                     });
 
-                    self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell);
+                    self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell)?;
                     skip_ptrace_syscall = true;
                 }
             }
         }
 
         if !skip_ptrace_syscall {
-            ptrace::syscall(pid, None).unwrap();
+            ptrace::syscall(pid, None)?;
         }
+
+        Ok(())
     }
 
-    pub fn handle_signal(&self, pid: Pid, sig: Signal) {
+    pub fn handle_signal(&self, pid: Pid, sig: Signal) -> Result<()> {
         info!("[PID {: >8}] Signal: {:}", pid, sig);
 
         let process = Process::new(pid);
@@ -924,15 +979,17 @@ impl<'a> CheckCoordinator<'a> {
                 process: &process,
                 check_coord: self,
             },
-        );
+        )?;
 
         match result {
             SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
-                ptrace::syscall(pid, None).unwrap();
+                ptrace::syscall(pid, None)?;
             }
             _ => {
-                ptrace::syscall(pid, sig).unwrap();
+                ptrace::syscall(pid, sig)?;
             }
         }
+
+        Ok(())
     }
 }

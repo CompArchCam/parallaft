@@ -9,15 +9,9 @@ use log::info;
 use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock};
 
+use crate::error::{Error, Result};
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
-
-#[derive(Debug)]
-pub enum CheckpointError {
-    InvalidState,
-}
-
-type Result<T> = std::result::Result<T, CheckpointError>;
 
 #[derive(Debug)]
 pub enum CheckpointKind {
@@ -94,7 +88,7 @@ impl SegmentStatus {
             }
             _ => {
                 mem::forget(status);
-                Err(CheckpointError::InvalidState)
+                Err(Error::InvalidState)
             }
         }
     }
@@ -113,7 +107,7 @@ impl SegmentStatus {
             }
             _ => {
                 mem::forget(status);
-                Err(CheckpointError::InvalidState)
+                Err(Error::InvalidState)
             }
         }
     }
@@ -175,12 +169,12 @@ impl Segment {
         } = &self.status
         {
             let (result, nr_dirty_pages) = checker
-                .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages);
-            self.mark_as_checked(result.is_err())?;
+                .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages)?;
+            self.mark_as_checked(!result).unwrap();
 
-            Ok((result.is_ok(), nr_dirty_pages))
+            Ok((result, nr_dirty_pages))
         } else {
-            Err(CheckpointError::InvalidState)
+            Err(Error::InvalidState)
         }
     }
 
@@ -251,7 +245,7 @@ impl SegmentChain {
         } else if let Some(segment) = self.get_segment_by_checker_pid(pid) {
             return Some((segment, false));
         } else {
-            panic!("unexpected pid")
+            return None;
         }
 
         None
@@ -308,18 +302,18 @@ impl SegmentChain {
         &self,
         checkpoint: Checkpoint,
         checker: Option<OwnedProcess>,
-        on_segment_ready: impl FnOnce(&mut Segment, &Checkpoint) -> bool,
-        on_cleanup_needed: impl FnOnce() -> (),
-    ) {
+        on_segment_ready: impl FnOnce(&mut Segment, &Checkpoint) -> Result<bool>,
+        on_cleanup_needed: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let checkpoint = Arc::new(checkpoint);
         let mut do_cleanup = false;
 
         if !self.is_last_checkpoint_finalizing() {
             if let Some(last_segment) = self.inner.read().back() {
                 let mut last_segment = last_segment.lock();
-                last_segment.mark_as_ready(checkpoint.clone()).unwrap();
+                last_segment.mark_as_ready(checkpoint.clone())?;
 
-                do_cleanup = on_segment_ready(&mut last_segment, &checkpoint);
+                do_cleanup = on_segment_ready(&mut last_segment, &checkpoint)?;
             }
         }
 
@@ -334,8 +328,10 @@ impl SegmentChain {
         }
 
         if do_cleanup {
-            on_cleanup_needed();
+            on_cleanup_needed()?;
         }
+
+        Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -356,5 +352,9 @@ impl SegmentChain {
 
 #[allow(unused)]
 pub trait SegmentEventHandler {
-    fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller);
+    fn handle_segment_ready(
+        &self,
+        segment: &mut Segment,
+        checkpoint_end_caller: CheckpointCaller,
+    ) -> Result<()>;
 }

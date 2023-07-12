@@ -5,11 +5,12 @@ use std::{
 };
 
 use log::{debug, info, trace};
-use nix::errno::Errno;
+
 use pretty_hex::PrettyHex;
 use procfs::process::MMPermissions;
 use reverie_syscalls::MemoryAccess;
 
+use crate::error::Result;
 use crate::process::Process;
 
 pub fn page_diff(
@@ -17,7 +18,7 @@ pub fn page_diff(
     p2: &impl MemoryAccess,
     pages_p1: &[usize],
     pages_p2: &[usize],
-) -> Result<(), Errno> {
+) -> Result<bool> {
     let mut pages: HashSet<usize> = HashSet::new();
     pages.extend(pages_p1.iter());
     pages.extend(pages_p2.iter());
@@ -37,8 +38,8 @@ pub fn page_diff(
         let local_iov_p1 = IoSliceMut::new(&mut buf_p1[..remote_iov.len() * page_size]);
         let local_iov_p2 = IoSliceMut::new(&mut buf_p2[..remote_iov.len() * page_size]);
 
-        p1.read_vectored(remote_iov, &mut [local_iov_p1]).unwrap();
-        p2.read_vectored(remote_iov, &mut [local_iov_p2]).unwrap();
+        p1.read_vectored(remote_iov, &mut [local_iov_p1])?;
+        p2.read_vectored(remote_iov, &mut [local_iov_p2])?;
 
         trace!(
             "page data p1@{:p}:\n{:?}",
@@ -59,11 +60,11 @@ pub fn page_diff(
                     .map(|i| i.as_ptr())
                     .collect::<Vec<*const u8>>()
             );
-            return Err(Errno::EFAULT);
+            return Ok(false);
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 impl Process {
@@ -71,31 +72,31 @@ impl Process {
         &self,
         other: &Process,
         ignored_pages: &[usize],
-    ) -> (Result<(), Errno>, usize) {
+    ) -> Result<(bool, usize)> {
         let dirty_pages_myself: Vec<usize> = self
-            .get_dirty_pages()
+            .get_dirty_pages()?
             .into_iter()
             .filter(|addr| !ignored_pages.contains(addr))
             .collect();
 
         let dirty_pages_other: Vec<usize> = other
-            .get_dirty_pages()
+            .get_dirty_pages()?
             .into_iter()
             .filter(|addr| !ignored_pages.contains(addr))
             .collect();
 
         info!("{} dirty pages", dirty_pages_myself.len());
 
-        (
-            page_diff(self, other, &dirty_pages_myself, &dirty_pages_other),
+        Ok((
+            page_diff(self, other, &dirty_pages_myself, &dirty_pages_other)?,
             dirty_pages_myself.len(),
-        )
+        ))
     }
 
-    pub fn get_dirty_pages(&self) -> Vec<usize> {
-        let maps = self.procfs().maps().expect("failed to read memory map");
+    pub fn get_dirty_pages(&self) -> Result<Vec<usize>> {
+        let maps = self.procfs()?.maps()?;
         let page_size = procfs::page_size();
-        let mut pagemap = self.procfs().pagemap().expect("failed to open pagemap");
+        let mut pagemap = self.procfs()?.pagemap()?;
         let mut dirty_pages_it: Vec<usize> = Vec::new();
 
         debug!("Page map for pid {}", self.pid);
@@ -112,9 +113,7 @@ impl Process {
                 map.offset as *const u8
             );
             let range = (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
-            let range_info = pagemap
-                .get_range_info(range)
-                .expect("failed to get range info from pagemap");
+            let range_info = pagemap.get_range_info(range)?;
 
             for (loc, pte) in (map.address.0..map.address.1)
                 .step_by(page_size as _)
@@ -136,16 +135,16 @@ impl Process {
             }
         }
 
-        dirty_pages_it
+        Ok(dirty_pages_it)
     }
 
-    pub fn clear_dirty_page_bits(&self) {
-        self.procfs()
-            .clear_refs(4)
-            .expect("failed to clear dirty bits");
+    pub fn clear_dirty_page_bits(&self) -> Result<()> {
+        self.procfs()?.clear_refs(4)?;
+
+        Ok(())
     }
 
-    pub fn dump_memory_maps(&self) {
+    pub fn dump_memory_maps(&self) -> Result<()> {
         fn perm_to_str<'a>(
             perms: MMPermissions,
             bit: MMPermissions,
@@ -159,7 +158,7 @@ impl Process {
             }
         }
 
-        for map in self.procfs().maps().unwrap() {
+        for map in self.procfs()?.maps()? {
             let mut perms_string = String::new();
 
             perms_string += perm_to_str(map.perms, MMPermissions::READ, "r", "-");
@@ -177,6 +176,8 @@ impl Process {
                 map.offset as *const u8
             );
         }
+
+        Ok(())
     }
 }
 

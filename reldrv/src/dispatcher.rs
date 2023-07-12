@@ -3,6 +3,7 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
+    error::Result,
     process::{dirty_pages::IgnoredPagesProvider, Process},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
@@ -91,16 +92,16 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
-            let ret = handler.handle_standard_syscall_entry(syscall, context);
+            let ret = handler.handle_standard_syscall_entry(syscall, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     fn handle_standard_syscall_exit(
@@ -108,16 +109,16 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         ret_val: isize,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
-            let ret = handler.handle_standard_syscall_exit(ret_val, syscall, context);
+            let ret = handler.handle_standard_syscall_exit(ret_val, syscall, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     fn handle_standard_syscall_entry_main(
@@ -125,16 +126,17 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         syscall: &Syscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> StandardSyscallEntryMainHandlerExitAction {
+    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
-            let ret = handler.handle_standard_syscall_entry_main(syscall, active_segment, context);
+            let ret =
+                handler.handle_standard_syscall_entry_main(syscall, active_segment, context)?;
 
             if !matches!(ret, StandardSyscallEntryMainHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        StandardSyscallEntryMainHandlerExitAction::NextHandler
+        Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
     }
 
     fn handle_standard_syscall_exit_main(
@@ -143,21 +145,21 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         saved_incomplete_syscall: &SavedIncompleteSyscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_main(
                 ret_val,
                 saved_incomplete_syscall,
                 active_segment,
                 context,
-            );
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     fn handle_standard_syscall_entry_checker(
@@ -165,20 +167,20 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         syscall: &Syscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> StandardSyscallEntryCheckerHandlerExitAction {
+    ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
             let ret =
-                handler.handle_standard_syscall_entry_checker(syscall, active_segment, context);
+                handler.handle_standard_syscall_entry_checker(syscall, active_segment, context)?;
 
             if !matches!(
                 ret,
                 StandardSyscallEntryCheckerHandlerExitAction::NextHandler
             ) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        StandardSyscallEntryCheckerHandlerExitAction::NextHandler
+        Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler)
     }
 
     fn handle_standard_syscall_exit_checker(
@@ -187,21 +189,21 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         saved_syscall: &SavedSyscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_checker(
                 ret_val,
                 saved_syscall,
                 active_segment,
                 context,
-            );
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -211,54 +213,64 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
         sysno: usize,
         args: SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.custom_syscall_handlers {
-            let ret = handler.handle_custom_syscall_entry(sysno, args, context);
+            let ret = handler.handle_custom_syscall_entry(sysno, args, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.custom_syscall_handlers {
-            let ret = handler.handle_custom_syscall_exit(ret_val, context);
+            let ret = handler.handle_custom_syscall_exit(ret_val, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
 impl<'a> SignalHandler for Dispatcher<'a> {
-    fn handle_signal(&self, signal: Signal, context: &HandlerContext) -> SignalHandlerExitAction {
+    fn handle_signal(
+        &self,
+        signal: Signal,
+        context: &HandlerContext,
+    ) -> Result<SignalHandlerExitAction> {
         for handler in &self.signal_handlers {
-            let ret = handler.handle_signal(signal, context);
+            let ret = handler.handle_signal(signal, context)?;
 
             if !matches!(ret, SignalHandlerExitAction::NextHandler) {
-                return ret;
+                return Ok(ret);
             }
         }
 
-        SignalHandlerExitAction::NextHandler
+        Ok(SignalHandlerExitAction::NextHandler)
     }
 }
 
 impl<'a> SegmentEventHandler for Dispatcher<'a> {
-    fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller) {
+    fn handle_segment_ready(
+        &self,
+        segment: &mut Segment,
+        checkpoint_end_caller: CheckpointCaller,
+    ) -> Result<()> {
         for handler in &self.segment_event_handlers {
-            handler.handle_segment_ready(segment, checkpoint_end_caller);
+            handler.handle_segment_ready(segment, checkpoint_end_caller)?;
         }
+
+        Ok(())
     }
 }
 

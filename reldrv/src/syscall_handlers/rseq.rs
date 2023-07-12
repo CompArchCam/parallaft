@@ -8,10 +8,14 @@ use syscalls::SyscallArgs;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     process::Process,
 };
 
-use super::{CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, StandardSyscallHandler};
+use super::{
+    CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, StandardSyscallHandler,
+    SyscallHandlerExitAction,
+};
 
 pub struct RseqHandler {
     rseq_config: Mutex<Option<ptrace_rseq_configuration>>,
@@ -26,7 +30,7 @@ impl RseqHandler {
         }
     }
 
-    pub fn unregister_rseq(&self, process: &Process) {
+    pub fn unregister_rseq(&self, process: &Process) -> Result<()> {
         if let Some(rseq_config) = self.rseq_config.lock().take() {
             let ret = process.syscall_direct(
                 syscalls::Sysno::rseq,
@@ -38,10 +42,12 @@ impl RseqHandler {
                 ),
                 true,
                 false,
-            );
+            )?;
             assert_eq!(ret, 0);
             info!("rseq unregistered");
         }
+
+        Ok(())
     }
 }
 
@@ -50,21 +56,21 @@ impl StandardSyscallHandler for RseqHandler {
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> super::SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         let process = context.process;
 
-        match syscall {
+        Ok(match syscall {
             Syscall::Rseq(_) => {
-                process.modify_registers_with(|regs| regs.with_syscall_skipped());
+                process.modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
-                super::SyscallHandlerExitAction::ContinueInferior
+                SyscallHandlerExitAction::ContinueInferior
             }
             Syscall::Execve(_) | Syscall::Execveat(_) => {
                 self.execve_done.store(true, Ordering::SeqCst);
-                super::SyscallHandlerExitAction::NextHandler
+                SyscallHandlerExitAction::NextHandler
             }
-            _ => super::SyscallHandlerExitAction::NextHandler,
-        }
+            _ => SyscallHandlerExitAction::NextHandler,
+        })
     }
 
     fn handle_standard_syscall_exit(
@@ -72,11 +78,11 @@ impl StandardSyscallHandler for RseqHandler {
         _ret_val: isize,
         syscall: &Syscall,
         _context: &HandlerContext,
-    ) -> super::SyscallHandlerExitAction {
-        match syscall {
-            Syscall::Rseq(_) => super::SyscallHandlerExitAction::ContinueInferior,
-            _ => super::SyscallHandlerExitAction::NextHandler,
-        }
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(match syscall {
+            Syscall::Rseq(_) => SyscallHandlerExitAction::ContinueInferior,
+            _ => SyscallHandlerExitAction::NextHandler,
+        })
     }
 }
 
@@ -86,12 +92,12 @@ impl CustomSyscallHandler for RseqHandler {
         _sysno: usize,
         _args: SyscallArgs,
         context: &HandlerContext,
-    ) -> super::SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if !self.execve_done.load(Ordering::SeqCst) {
-            self.unregister_rseq(context.process);
+            self.unregister_rseq(context.process)?;
         }
 
-        super::SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

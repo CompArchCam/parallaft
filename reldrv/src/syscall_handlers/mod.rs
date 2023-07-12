@@ -9,6 +9,7 @@ use syscalls::SyscallArgs;
 
 use crate::{
     check_coord::CheckCoordinator,
+    error::Result,
     process::Process,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::Segment,
@@ -67,8 +68,8 @@ pub trait StandardSyscallHandler {
         syscall: &Syscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> StandardSyscallEntryMainHandlerExitAction {
-        StandardSyscallEntryMainHandlerExitAction::NextHandler
+    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
+        Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
     }
 
     /// Called when the main process exits from a standard syscall AND is in a protected region.
@@ -79,8 +80,8 @@ pub trait StandardSyscallHandler {
         saved_incomplete_syscall: &SavedIncompleteSyscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     /// Called when a checker process enters a standard syscall.
@@ -89,8 +90,8 @@ pub trait StandardSyscallHandler {
         syscall: &Syscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> StandardSyscallEntryCheckerHandlerExitAction {
-        StandardSyscallEntryCheckerHandlerExitAction::NextHandler
+    ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
+        Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler)
     }
 
     /// Called when a checker process exits from a standard syscall.
@@ -101,8 +102,8 @@ pub trait StandardSyscallHandler {
         saved_syscall: &SavedSyscall,
         active_segment: &mut Segment,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     /// Called when any process enters a standard syscall.
@@ -111,8 +112,8 @@ pub trait StandardSyscallHandler {
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     /// Called when any process exits from a standard syscall.
@@ -122,8 +123,8 @@ pub trait StandardSyscallHandler {
         ret_val: isize,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -134,16 +135,16 @@ pub trait CustomSyscallHandler {
         sysno: usize,
         args: SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
-        SyscallHandlerExitAction::NextHandler
+    ) -> Result<SyscallHandlerExitAction> {
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

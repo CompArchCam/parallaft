@@ -4,6 +4,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
         SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE,
@@ -56,11 +57,11 @@ impl<'a> StandardSyscallHandler for CounterCollector<'a> {
         &self,
         _syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if context.process.pid == context.check_coord.main.pid {
             self.syscall_count.fetch_add(1, Ordering::SeqCst);
         }
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -70,13 +71,13 @@ impl<'a> CustomSyscallHandler for CounterCollector<'a> {
         sysno: usize,
         _args: syscalls::SyscallArgs,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if context.process.pid == context.check_coord.main.pid
             && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
         {
             self.checkpoint_count.fetch_add(1, Ordering::SeqCst);
         }
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

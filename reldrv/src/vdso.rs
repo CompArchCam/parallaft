@@ -3,6 +3,7 @@ use reverie_syscalls::{Addr, MemoryAccess, Syscall};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
+    error::Result,
     process::Process,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
@@ -22,17 +23,17 @@ impl StandardSyscallHandler for VdsoRemover {
         ret_val: isize,
         syscall: &Syscall,
         context: &HandlerContext,
-    ) -> SyscallHandlerExitAction {
+    ) -> Result<SyscallHandlerExitAction> {
         if ret_val == 0 {
             match syscall {
                 Syscall::Execve(_) | Syscall::Execveat(_) => {
                     let process = context.process;
-                    let sp = process.read_registers().rsp;
+                    let sp = process.read_registers()?.rsp;
                     let mut addr = Addr::<u64>::from_raw(sp as _).unwrap();
 
                     let mut zero_count: i32 = 2;
                     while zero_count > 0 {
-                        let t = process.read_value(addr).unwrap();
+                        let t = process.read_value(addr)?;
                         if t == 0 {
                             zero_count -= 1;
                         }
@@ -40,7 +41,7 @@ impl StandardSyscallHandler for VdsoRemover {
                     }
 
                     loop {
-                        let v = process.read_value(addr).unwrap();
+                        let v = process.read_value(addr)?;
 
                         if v == nix::libc::AT_NULL {
                             break;
@@ -48,8 +49,7 @@ impl StandardSyscallHandler for VdsoRemover {
 
                         if v == nix::libc::AT_SYSINFO_EHDR {
                             Process::new(process.pid) // TODO
-                            .write_value(unsafe { addr.into_mut() }, &nix::libc::AT_IGNORE)
-                            .unwrap();
+                            .write_value(unsafe { addr.into_mut() }, &nix::libc::AT_IGNORE)?;
 
                             info!(
                                 "vDSO removed at offset {:p}",
@@ -65,7 +65,7 @@ impl StandardSyscallHandler for VdsoRemover {
                 _ => (),
             }
         }
-        SyscallHandlerExitAction::NextHandler
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

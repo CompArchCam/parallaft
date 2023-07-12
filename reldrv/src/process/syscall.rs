@@ -10,6 +10,7 @@ use nix::{
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use super::{registers::Registers, Process};
+use crate::error::Result;
 
 impl Process {
     pub fn syscall_direct(
@@ -18,8 +19,8 @@ impl Process {
         args: SyscallArgs,
         mut restart_parent_old_syscall: bool,
         mut restart_child_old_syscall: bool,
-    ) -> i64 {
-        let is_syscall_exit = match ptrace::getsyscallinfo(self.pid).unwrap().op {
+    ) -> Result<i64> {
+        let is_syscall_exit = match ptrace::getsyscallinfo(self.pid)?.op {
             SyscallInfoOp::Entry { .. } => false,
             SyscallInfoOp::Exit { .. } => {
                 // never restart old syscalls on exit
@@ -31,49 +32,49 @@ impl Process {
         };
 
         // save the old states
-        let (saved_regs, saved_sigmask) = Self::save_state(self.pid);
+        let (saved_regs, saved_sigmask) = Self::save_state(self.pid)?;
 
         // handle syscall exit
         if is_syscall_exit {
             assert_eq!(self.instr_at(saved_regs.rip as usize - 2, 2), 0x050f); // syscall
 
-            self.write_registers(saved_regs.with_offsetted_rip(-2)); // jump back to previous syscall
-            ptrace::syscall(self.pid, None).unwrap();
+            self.write_registers(saved_regs.with_offsetted_rip(-2))?; // jump back to previous syscall
+            ptrace::syscall(self.pid, None)?;
 
             assert!(matches!(
-                waitpid(self.pid, None).unwrap(),
+                waitpid(self.pid, None)?,
                 WaitStatus::PtraceSyscall(_)
             ));
 
             assert!(matches!(
-                ptrace::getsyscallinfo(self.pid).unwrap().op,
+                ptrace::getsyscallinfo(self.pid)?.op,
                 SyscallInfoOp::Entry { .. }
             ));
         }
 
         // prepare the injected syscall number and arguments
-        self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args));
+        self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args))?;
 
         // block signals during our injected syscall
-        ptrace::setsigmask(self.pid, !0).unwrap();
+        ptrace::setsigmask(self.pid, !0)?;
 
         // execute our injected syscall
-        ptrace::syscall(self.pid, None).unwrap();
+        ptrace::syscall(self.pid, None)?;
 
         // expect the syscall event
-        let mut wait_status = waitpid(self.pid, None).unwrap();
+        let mut wait_status = waitpid(self.pid, None)?;
 
         // handle fork/clone event
         let child_pid = if let WaitStatus::PtraceEvent(pid, _sig, event) = wait_status {
             let child_pid = Pid::from_raw(match event {
                 nix::libc::PTRACE_EVENT_CLONE | nix::libc::PTRACE_EVENT_FORK => {
-                    ptrace::getevent(pid).unwrap() as _
+                    ptrace::getevent(pid)? as _
                 }
                 _ => panic!("Unexpected ptrace event received"),
             });
 
-            ptrace::syscall(self.pid, None).unwrap();
-            wait_status = waitpid(self.pid, None).unwrap();
+            ptrace::syscall(self.pid, None)?;
+            wait_status = waitpid(self.pid, None)?;
             Some(child_pid)
         } else {
             None
@@ -82,7 +83,7 @@ impl Process {
         assert_eq!(wait_status, WaitStatus::PtraceSyscall(self.pid));
 
         // get the syscall return value
-        let syscall_info = ptrace::getsyscallinfo(self.pid).unwrap();
+        let syscall_info = ptrace::getsyscallinfo(self.pid)?;
         let syscall_ret = if let SyscallInfoOp::Exit { ret_val, .. } = syscall_info.op {
             ret_val
         } else {
@@ -94,10 +95,10 @@ impl Process {
             saved_regs,
             saved_sigmask,
             restart_parent_old_syscall,
-        );
+        )?;
 
         if let Some(child_pid) = child_pid {
-            let wait_status = waitpid(child_pid, None).unwrap();
+            let wait_status = waitpid(child_pid, None)?;
             assert!(
                 matches!(wait_status, WaitStatus::PtraceEvent(pid, sig, _ev) if pid == child_pid && sig == Signal::SIGTRAP)
             );
@@ -107,10 +108,10 @@ impl Process {
                 saved_regs,
                 saved_sigmask,
                 restart_child_old_syscall,
-            );
+            )?;
         }
 
-        syscall_ret
+        Ok(syscall_ret)
     }
 
     pub fn clone_process(
@@ -119,7 +120,7 @@ impl Process {
         signal: Option<Signal>,
         restart_parent_old_syscall: bool,
         restart_child_old_syscall: bool,
-    ) -> Process {
+    ) -> Result<Process> {
         let clone_flags: usize = flags.bits() as usize | signal.map_or(0, |x| x as usize);
 
         let child_pid = self.syscall_direct(
@@ -127,21 +128,21 @@ impl Process {
             syscall_args!(clone_flags, 0, 0, 0, 0),
             restart_parent_old_syscall,
             restart_child_old_syscall,
-        );
+        )?;
 
         if child_pid <= 0 {
             panic!("Unexpected pid returned from clone: {}", child_pid);
         }
 
         let child = Process::new(Pid::from_raw(child_pid as _));
-        child
+        Ok(child)
     }
 
-    fn save_state(pid: Pid) -> (Registers, u64) {
-        (
-            Registers::new(ptrace::getregs(pid).unwrap()),
-            ptrace::getsigmask(pid).unwrap(),
-        )
+    fn save_state(pid: Pid) -> Result<(Registers, u64)> {
+        Ok((
+            Registers::new(ptrace::getregs(pid)?),
+            ptrace::getsigmask(pid)?,
+        ))
     }
 
     fn restore_state(
@@ -149,14 +150,14 @@ impl Process {
         saved_regs: Registers,
         saved_sigmask: u64,
         restart_old_syscall: bool,
-    ) {
+    ) -> Result<()> {
         let mut saved_regs = saved_regs;
 
         if restart_old_syscall {
             // jump back to the previous instruction
             if cfg!(target_arch = "x86_64") {
                 let last_instr =
-                    (ptrace::read(pid, (saved_regs.inner.rip - 2) as _).unwrap() as u64) & 0xffff;
+                    (ptrace::read(pid, (saved_regs.inner.rip - 2) as _)? as u64) & 0xffff;
                 assert_eq!(last_instr, 0x050f); // syscall
                 saved_regs.inner.rip -= 2;
                 saved_regs.inner.rax = saved_regs.inner.orig_rax;
@@ -166,19 +167,19 @@ impl Process {
         }
 
         // restore the registers
-        Process::new(pid).write_registers(saved_regs);
+        Process::new(pid).write_registers(saved_regs)?;
 
         if restart_old_syscall {
             // execute the original syscall
-            ptrace::syscall(pid, None).unwrap();
+            ptrace::syscall(pid, None)?;
 
             // expect the syscall event
             // TODO: handle death
-            let wait_status = waitpid(pid, None).unwrap();
+            let wait_status = waitpid(pid, None)?;
             assert_eq!(wait_status, WaitStatus::PtraceSyscall(pid));
 
             // expect the syscall nr
-            let syscall_info = ptrace::getsyscallinfo(pid).unwrap();
+            let syscall_info = ptrace::getsyscallinfo(pid)?;
 
             let orig_nr = if cfg!(target_arch = "x86_64") {
                 saved_regs.inner.orig_rax as usize
@@ -192,7 +193,9 @@ impl Process {
         }
 
         // restore the signal mask
-        ptrace::setsigmask(pid, saved_sigmask).unwrap();
+        ptrace::setsigmask(pid, saved_sigmask)?;
+
+        Ok(())
     }
 }
 
@@ -266,10 +269,15 @@ mod tests {
             WaitStatus::PtraceSyscall(_)
         ));
 
-        assert_eq!(process.read_registers().sysno().unwrap(), Sysno::getpid);
+        assert_eq!(
+            process.read_registers().unwrap().sysno().unwrap(),
+            Sysno::getpid
+        );
 
         // inject a getuid syscall
-        let uid2 = process.syscall_direct(Sysno::getuid, syscall_args!(), true, true);
+        let uid2 = process
+            .syscall_direct(Sysno::getuid, syscall_args!(), true, true)
+            .unwrap();
 
         assert_eq!(uid.as_raw(), uid2 as u32);
 
@@ -288,7 +296,10 @@ mod tests {
             process.waitpid().unwrap(),
             WaitStatus::PtraceSyscall(_)
         ));
-        assert_eq!(process.read_registers().sysno().unwrap(), Sysno::gettid);
+        assert_eq!(
+            process.read_registers().unwrap().sysno().unwrap(),
+            Sysno::gettid
+        );
 
         // program exit
         ptrace::cont(process.pid, None).unwrap();
@@ -335,7 +346,10 @@ mod tests {
             WaitStatus::PtraceSyscall(_)
         ));
 
-        assert_eq!(process.read_registers().sysno().unwrap(), Sysno::getpid);
+        assert_eq!(
+            process.read_registers().unwrap().sysno().unwrap(),
+            Sysno::getpid
+        );
 
         // second getpid exit
         ptrace::syscall(process.pid, None).unwrap();
@@ -345,7 +359,9 @@ mod tests {
         ));
 
         // inject a getuid syscall
-        let uid2 = process.syscall_direct(Sysno::getuid, syscall_args!(), true, true);
+        let uid2 = process
+            .syscall_direct(Sysno::getuid, syscall_args!(), true, true)
+            .unwrap();
         assert_eq!(uid.as_raw(), uid2 as u32);
 
         // gettid entry
@@ -354,7 +370,10 @@ mod tests {
             process.waitpid().unwrap(),
             WaitStatus::PtraceSyscall(_)
         ));
-        assert_eq!(process.read_registers().sysno().unwrap(), Sysno::gettid);
+        assert_eq!(
+            process.read_registers().unwrap().sysno().unwrap(),
+            Sysno::gettid
+        );
 
         // program exit
         ptrace::cont(process.pid, None).unwrap();
@@ -399,7 +418,10 @@ mod tests {
             WaitStatus::PtraceSyscall(_)
         ));
 
-        assert_eq!(parent.read_registers().sysno().unwrap(), Sysno::getpid);
+        assert_eq!(
+            parent.read_registers().unwrap().sysno().unwrap(),
+            Sysno::getpid
+        );
 
         // second getpid exit
         ptrace::syscall(parent.pid, None).unwrap();
@@ -411,6 +433,7 @@ mod tests {
         // clone the process
         let child = parent
             .clone_process(CloneFlags::CLONE_PARENT, None, false, false)
+            .unwrap()
             .as_owned();
 
         // parent gettid entry
@@ -419,7 +442,10 @@ mod tests {
             parent.waitpid().unwrap(),
             WaitStatus::PtraceSyscall(_)
         ));
-        assert_eq!(parent.read_registers().sysno().unwrap(), Sysno::gettid);
+        assert_eq!(
+            parent.read_registers().unwrap().sysno().unwrap(),
+            Sysno::gettid
+        );
 
         // parent exit
         ptrace::cont(parent.pid, None).unwrap();
@@ -431,7 +457,10 @@ mod tests {
             child.waitpid().unwrap(),
             WaitStatus::PtraceSyscall(_)
         ));
-        assert_eq!(child.read_registers().sysno().unwrap(), Sysno::gettid);
+        assert_eq!(
+            child.read_registers().unwrap().sysno().unwrap(),
+            Sysno::gettid
+        );
 
         // child exit
         ptrace::cont(child.pid, None).unwrap();
@@ -456,9 +485,12 @@ mod tests {
             WaitStatus::PtraceSyscall(_)
         ));
 
-        assert_eq!(parent.read_registers().sysno().unwrap(), Sysno::getpid);
+        assert_eq!(
+            parent.read_registers().unwrap().sysno().unwrap(),
+            Sysno::getpid
+        );
 
-        let mut regs = parent.read_registers();
+        let mut regs = parent.read_registers().unwrap();
 
         regs.inner.r8 = 0x8086;
         regs.inner.r9 = 0x8087;
@@ -477,15 +509,16 @@ mod tests {
         regs.inner.rsi = 0x8094;
         regs.inner.rsp = 0x8095;
 
-        parent.write_registers(regs);
+        parent.write_registers(regs).unwrap();
 
         // clone the process
         let child = parent
             .clone_process(CloneFlags::CLONE_PARENT, None, false, false)
+            .unwrap()
             .as_owned();
 
-        assert_eq!(parent.read_registers().inner, regs.inner);
-        assert_eq!(child.read_registers().inner, regs.inner);
+        assert_eq!(parent.read_registers().unwrap().inner, regs.inner);
+        assert_eq!(child.read_registers().unwrap().inner, regs.inner);
 
         ptrace::kill(parent.pid).unwrap();
         assert!(matches!(
