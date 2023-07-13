@@ -23,6 +23,7 @@ pub struct TimingCollector {
     start_time: Mutex<Option<Instant>>,
     main_wall_time: Mutex<Option<Duration>>,
     all_wall_time: Mutex<Option<Duration>>,
+    exit_status: Mutex<Option<i32>>,
 }
 
 impl TimingCollector {
@@ -33,6 +34,7 @@ impl TimingCollector {
             start_time: Mutex::new(None),
             main_wall_time: Mutex::new(None),
             all_wall_time: Mutex::new(None),
+            exit_status: Mutex::new(None),
         }
     }
 
@@ -56,6 +58,7 @@ impl Statistics for TimingCollector {
         let main_cpu_time = main_utime + main_stime;
         let main_wall_time = self.main_wall_time.lock().unwrap().as_secs_f64();
         let all_wall_time = self.all_wall_time.lock().unwrap().as_secs_f64();
+        let exit_status = self.exit_status.lock().unwrap_or(255);
 
         vec![
             ("main_user_time", Value::Float(main_utime)),
@@ -67,6 +70,7 @@ impl Statistics for TimingCollector {
                 "main_cpu_usage",
                 Value::Float(main_cpu_time / main_wall_time),
             ),
+            ("exit_status", Value::Int(exit_status as _)),
         ]
         .into_boxed_slice()
     }
@@ -97,9 +101,10 @@ impl ProcessLifetimeHook for TimingCollector {
         *self.start_time.lock() = Some(Instant::now())
     }
 
-    fn handle_main_fini(&self, _ret_val: i32) {
+    fn handle_main_fini(&self, ret_val: i32) {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.main_wall_time.lock() = Some(elapsed);
+        *self.exit_status.lock() = Some(ret_val);
     }
 
     fn handle_all_fini(&self) {
