@@ -1,3 +1,4 @@
+mod affinity;
 mod check_coord;
 mod error;
 mod inferior_rtlib;
@@ -33,6 +34,7 @@ use clap::Parser;
 
 use log::{info, warn};
 
+use crate::affinity::AffinitySetter;
 use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags,
     CheckCoordinatorOptions, /* CheckCoordinatorHooks */
@@ -203,6 +205,9 @@ fn parent_work(
     let vdso_remover = VdsoRemover::new();
     vdso_remover.install(&mut disp);
 
+    let affinity_setter = AffinitySetter::new(&main_cpu_set, &checker_cpu_set);
+    affinity_setter.install(&mut disp);
+
     let time_stats = TimingCollector::new();
     time_stats.install(&mut disp);
 
@@ -218,17 +223,9 @@ fn parent_work(
     disp.handle_main_init(&inferior);
     let mut exit_status = None;
 
-    let check_coord = CheckCoordinator::new(
-        inferior,
-        check_coord_options,
-        // CheckCoordinatorHooks::default().with_on_checker_created(move |process| {
-        //     process.set_cpu_affinity(&checker_cpu_set).unwrap()
-        // }),
-        &disp,
-    );
+    let check_coord = CheckCoordinator::new(inferior, check_coord_options, &disp);
 
     std::thread::scope(|scope| {
-        check_coord.main.set_cpu_affinity(&main_cpu_set).unwrap();
         check_coord.main.resume().unwrap();
 
         let mut main_finished = false;

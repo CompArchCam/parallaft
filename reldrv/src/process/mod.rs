@@ -60,7 +60,7 @@ impl Process {
         Ok(())
     }
 
-    pub fn set_cpu_affinity(&self, cpus: &Vec<usize>) -> Result<()> {
+    pub fn set_cpu_affinity(&self, cpus: &[usize]) -> Result<()> {
         if !cpus.is_empty() {
             let mut cpuset = CpuSet::new();
             for cpu in cpus {

@@ -45,7 +45,6 @@ pub struct CheckCoordinator<'disp> {
     pending_sync: Arc<Mutex<Option<u32>>>,
     stats: Arc<Statistics>,
     options: CheckCoordinatorOptions,
-    // hooks: CheckCoordinatorHooks,
     dispatcher: &'disp Dispatcher<'disp>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
@@ -87,31 +86,11 @@ impl CheckCoordinatorOptions {
     }
 }
 
-// pub struct CheckCoordinatorHooks {
-//     pub on_checker_created: Box<dyn Fn(&OwnedProcess) -> ()>,
-// }
-
-// impl Default for CheckCoordinatorHooks {
-//     fn default() -> Self {
-//         Self {
-//             on_checker_created: Box::new(|_| ()),
-//         }
-//     }
-// }
-
-// impl CheckCoordinatorHooks {
-//     pub fn with_on_checker_created(mut self, f: impl Fn(&OwnedProcess) -> () + 'static) -> Self {
-//         self.on_checker_created = Box::new(f);
-//         self
-//     }
-// }
-
 #[allow(unused)]
 impl<'disp> CheckCoordinator<'disp> {
     pub fn new(
         main: OwnedProcess,
         options: CheckCoordinatorOptions,
-        // hooks: CheckCoordinatorHooks,
         dispatcher: &'disp Dispatcher,
     ) -> Self {
         // main.pid
@@ -123,7 +102,6 @@ impl<'disp> CheckCoordinator<'disp> {
             pending_sync: Arc::new(Mutex::new(None)),
             stats: Arc::new(Statistics::new()),
             options,
-            // hooks,
             throttling: Arc::new(AtomicBool::new(false)),
             dispatcher,
             last_syscall: Mutex::new(HashMap::new()),
@@ -206,7 +184,6 @@ impl<'disp> CheckCoordinator<'disp> {
                     )
                 };
 
-                // (self.hooks.on_checker_created)(&checker);
                 self.dispatcher.handle_checker_init(&checker);
 
                 if !self
