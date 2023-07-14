@@ -52,7 +52,6 @@ pub struct CheckCoordinator<'disp> {
 
 bitflags! {
     pub struct CheckCoordinatorFlags: u32 {
-        const SYNC_MEM_CHECK = 0b00000001;
         const NO_MEM_CHECK = 0b00000010;
         const DONT_RUN_CHECKER = 0b00000100;
         const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
@@ -251,33 +250,6 @@ impl<'disp> CheckCoordinator<'disp> {
             {
                 segment.lock().mark_as_checked(false).unwrap();
                 self.cleanup_committed_segments();
-            } else if self
-                .options
-                .flags
-                .contains(CheckCoordinatorFlags::SYNC_MEM_CHECK)
-            {
-                todo!();
-                // let mut segment = segment.lock();
-                // let (result, nr_dirty_pages) = segment.check().unwrap();
-                // let mut avg_nr_dirty_pages = self.avg_nr_dirty_pages.lock();
-
-                // let alpha = 1.0 / segment.checkpoint_start.epoch as f64;
-                // info!("alpha = {}", alpha);
-
-                // *avg_nr_dirty_pages =
-                //     *avg_nr_dirty_pages * (1.0 - alpha) + (nr_dirty_pages as f64) * alpha;
-
-                // drop(avg_nr_dirty_pages);
-                // drop(segment);
-
-                // if !result {
-                //     panic!("check fails");
-                // }
-                // info!("Check passed");
-                // Self::cleanup_committed_segments(
-                //     self.pending_sync.lock().deref_mut(),
-                //     self.segments.write().deref_mut(),
-                // );
             } else {
                 let segment = segment.clone();
 

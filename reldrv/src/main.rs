@@ -88,10 +88,6 @@ struct CliArgs {
     #[arg(long)]
     dont_fork: bool,
 
-    /// Check dirty memory synchronously.
-    #[arg(long)]
-    sync_mem_check: bool,
-
     /// Ignore check errors.
     #[arg(long)]
     ignore_check_errors: bool,
@@ -496,7 +492,6 @@ fn main() {
     runner_flags.set(RunnerFlags::DONT_TRAP_CPUID, cli.dont_trap_cpuid);
 
     let mut check_coord_flags = CheckCoordinatorFlags::empty();
-    check_coord_flags.set(CheckCoordinatorFlags::SYNC_MEM_CHECK, cli.sync_mem_check);
     check_coord_flags.set(CheckCoordinatorFlags::NO_MEM_CHECK, cli.no_mem_check);
     check_coord_flags.set(
         CheckCoordinatorFlags::DONT_RUN_CHECKER,
