@@ -16,12 +16,12 @@ use crate::{
 };
 
 pub struct Dispatcher<'a> {
-    process_lifetime_hooks: Vec<&'a dyn ProcessLifetimeHook>,
-    standard_syscall_handlers: Vec<&'a dyn StandardSyscallHandler>,
-    custom_syscall_handlers: Vec<&'a dyn CustomSyscallHandler>,
-    signal_handlers: Vec<&'a dyn SignalHandler>,
-    segment_event_handlers: Vec<&'a dyn SegmentEventHandler>,
-    ignored_pages_providers: Vec<&'a dyn IgnoredPagesProvider>,
+    process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
+    standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
+    custom_syscall_handlers: Vec<&'a (dyn CustomSyscallHandler + Sync)>,
+    signal_handlers: Vec<&'a (dyn SignalHandler + Sync)>,
+    segment_event_handlers: Vec<&'a (dyn SegmentEventHandler + Sync)>,
+    ignored_pages_providers: Vec<&'a (dyn IgnoredPagesProvider + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -36,27 +36,27 @@ impl<'a> Dispatcher<'a> {
         }
     }
 
-    pub fn install_process_lifetime_hook(&mut self, handler: &'a dyn ProcessLifetimeHook) {
+    pub fn install_process_lifetime_hook(&mut self, handler: &'a (dyn ProcessLifetimeHook + Sync)) {
         self.process_lifetime_hooks.push(handler)
     }
 
-    pub fn install_standard_syscall_handler(&mut self, handler: &'a dyn StandardSyscallHandler) {
+    pub fn install_standard_syscall_handler(&mut self, handler: &'a (dyn StandardSyscallHandler + Sync)) {
         self.standard_syscall_handlers.push(handler)
     }
 
-    pub fn install_custom_syscall_handler(&mut self, handler: &'a dyn CustomSyscallHandler) {
+    pub fn install_custom_syscall_handler(&mut self, handler: &'a (dyn CustomSyscallHandler + Sync)) {
         self.custom_syscall_handlers.push(handler)
     }
 
-    pub fn install_signal_handler(&mut self, handler: &'a dyn SignalHandler) {
+    pub fn install_signal_handler(&mut self, handler: &'a (dyn SignalHandler + Sync)) {
         self.signal_handlers.push(handler)
     }
 
-    pub fn install_segment_event_handler(&mut self, handler: &'a dyn SegmentEventHandler) {
+    pub fn install_segment_event_handler(&mut self, handler: &'a (dyn SegmentEventHandler + Sync)) {
         self.segment_event_handlers.push(handler)
     }
 
-    pub fn install_ignored_pages_provider(&mut self, provider: &'a dyn IgnoredPagesProvider) {
+    pub fn install_ignored_pages_provider(&mut self, provider: &'a (dyn IgnoredPagesProvider + Sync)) {
         self.ignored_pages_providers.push(provider)
     }
 }

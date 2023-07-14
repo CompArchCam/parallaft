@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::thread::Scope;
 
 use bitflags::bitflags;
 
@@ -36,7 +37,7 @@ use crate::syscall_handlers::{
 };
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
-pub struct CheckCoordinator<'a> {
+pub struct CheckCoordinator<'disp> {
     pub segments: Arc<SegmentChain>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
@@ -44,8 +45,8 @@ pub struct CheckCoordinator<'a> {
     pending_sync: Arc<Mutex<Option<u32>>>,
     stats: Arc<Statistics>,
     options: CheckCoordinatorOptions,
-    hooks: CheckCoordinatorHooks,
-    dispatcher: &'a Dispatcher<'a>,
+    // hooks: CheckCoordinatorHooks,
+    dispatcher: &'disp Dispatcher<'disp>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
 
@@ -87,32 +88,32 @@ impl CheckCoordinatorOptions {
     }
 }
 
-pub struct CheckCoordinatorHooks {
-    pub on_checker_created: Box<dyn Fn(&OwnedProcess) -> ()>,
-}
+// pub struct CheckCoordinatorHooks {
+//     pub on_checker_created: Box<dyn Fn(&OwnedProcess) -> ()>,
+// }
 
-impl Default for CheckCoordinatorHooks {
-    fn default() -> Self {
-        Self {
-            on_checker_created: Box::new(|_| ()),
-        }
-    }
-}
+// impl Default for CheckCoordinatorHooks {
+//     fn default() -> Self {
+//         Self {
+//             on_checker_created: Box::new(|_| ()),
+//         }
+//     }
+// }
 
-impl CheckCoordinatorHooks {
-    pub fn with_on_checker_created(mut self, f: impl Fn(&OwnedProcess) -> () + 'static) -> Self {
-        self.on_checker_created = Box::new(f);
-        self
-    }
-}
+// impl CheckCoordinatorHooks {
+//     pub fn with_on_checker_created(mut self, f: impl Fn(&OwnedProcess) -> () + 'static) -> Self {
+//         self.on_checker_created = Box::new(f);
+//         self
+//     }
+// }
 
 #[allow(unused)]
-impl<'a> CheckCoordinator<'a> {
+impl<'disp> CheckCoordinator<'disp> {
     pub fn new(
         main: OwnedProcess,
         options: CheckCoordinatorOptions,
-        hooks: CheckCoordinatorHooks,
-        dispatcher: &'a Dispatcher,
+        // hooks: CheckCoordinatorHooks,
+        dispatcher: &'disp Dispatcher,
     ) -> Self {
         // main.pid
         let main_pid = main.pid;
@@ -123,7 +124,7 @@ impl<'a> CheckCoordinator<'a> {
             pending_sync: Arc::new(Mutex::new(None)),
             stats: Arc::new(Statistics::new()),
             options,
-            hooks,
+            // hooks,
             throttling: Arc::new(AtomicBool::new(false)),
             dispatcher,
             last_syscall: Mutex::new(HashMap::new()),
@@ -131,13 +132,17 @@ impl<'a> CheckCoordinator<'a> {
     }
 
     /// Handle checkpoint request from the target
-    pub fn handle_checkpoint(
-        &self,
+    pub fn handle_checkpoint<'s, 'scope, 'env>(
+        &'s self,
         pid: Pid,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
-    ) -> Result<()> {
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+    {
         if pid == self.main.pid {
             info!("Main called checkpoint");
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -202,7 +207,7 @@ impl<'a> CheckCoordinator<'a> {
                     )
                 };
 
-                (self.hooks.on_checker_created)(&checker);
+                // (self.hooks.on_checker_created)(&checker);
                 self.dispatcher.handle_checker_init(&checker);
 
                 if !self
@@ -245,16 +250,7 @@ impl<'a> CheckCoordinator<'a> {
                 .contains(CheckCoordinatorFlags::NO_MEM_CHECK)
             {
                 segment.lock().mark_as_checked(false).unwrap();
-                Self::cleanup_committed_segments(
-                    &self.main,
-                    &mut self.pending_sync.lock(),
-                    &self.segments,
-                    self.options.max_nr_live_segments,
-                    self.options
-                        .flags
-                        .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
-                    &self.throttling,
-                );
+                self.cleanup_committed_segments();
             } else if self
                 .options
                 .flags
@@ -284,56 +280,40 @@ impl<'a> CheckCoordinator<'a> {
                 // );
             } else {
                 let segment = segment.clone();
-                let segments = self.segments.clone();
 
-                let pending_sync = self.pending_sync.clone();
-                let stats = self.stats.clone();
+                scope.spawn(move || {
+                    let mut segment = segment.lock();
 
-                let main = self.main.clone();
-                let flags = self.options.flags;
-                let max_nr_live_segments = self.options.max_nr_live_segments;
-                let throttling = self.throttling.clone();
-                let ignored_pages = self.dispatcher.get_ignored_pages();
+                    match segment.check(&self.dispatcher.get_ignored_pages()) {
+                        Ok((result, nr_dirty_pages)) => {
+                            self.stats.update_nr_dirty_pages(nr_dirty_pages);
 
-                std::thread::Builder::new()
-                    .name(format!("checker-memcmp-{}", pid))
-                    .spawn(move || {
-                        let mut segment = segment.lock();
-
-                        match segment.check(&ignored_pages) {
-                            Ok((result, nr_dirty_pages)) => {
-                                stats.update_nr_dirty_pages(nr_dirty_pages);
-
-                                if !result {
-                                    if flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS) {
-                                        warn!("Check fails");
-                                    } else {
-                                        error!("Check fails");
-                                    }
-
-                                    main.dump_memory_maps();
+                            if !result {
+                                if self
+                                    .options
+                                    .flags
+                                    .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
+                                {
+                                    warn!("Check fails");
                                 } else {
-                                    info!("Check passed");
+                                    error!("Check fails");
                                 }
-                            }
-                            Err(e) => {
-                                error!("Failed to check: {:?}", e);
-                                segment.mark_as_checked(true).unwrap();
+
+                                // self.main.dump_memory_maps();
+                            } else {
+                                info!("Check passed");
                             }
                         }
+                        Err(e) => {
+                            error!("Failed to check: {:?}", e);
+                            segment.mark_as_checked(true).unwrap();
+                        }
+                    }
 
-                        drop(segment);
+                    drop(segment);
 
-                        Self::cleanup_committed_segments(
-                            &main,
-                            &mut pending_sync.lock(),
-                            &segments,
-                            max_nr_live_segments,
-                            flags.contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
-                            &throttling,
-                        )
-                        .unwrap();
-                    });
+                    self.cleanup_committed_segments().unwrap(); // TODO: error handling
+                });
             }
         } else {
             panic!("invalid pid");
@@ -365,27 +345,27 @@ impl<'a> CheckCoordinator<'a> {
         Ok(())
     }
 
-    fn cleanup_committed_segments(
-        main: &Process,
-        pending_sync: &mut Option<u32>,
-        segments: &SegmentChain,
-        max_nr_live_segments: usize,
-        ignore_errors: bool,
-        throttling: &AtomicBool,
-    ) -> Result<()> {
-        let old_len = segments.len();
+    fn cleanup_committed_segments(&self) -> Result<()> {
+        let old_len = self.segments.len();
 
-        segments.cleanup_committed_segments(ignore_errors);
+        let ignore_errors = self
+            .options
+            .flags
+            .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS);
+
+        self.segments.cleanup_committed_segments(ignore_errors);
+
+        let mut pending_sync = self.pending_sync.lock();
 
         if let Some(epoch) = pending_sync.as_ref() {
-            if let Some(front) = segments.get_first_segment() {
+            if let Some(front) = self.segments.get_first_segment() {
                 if front.lock().checkpoint_start.epoch > *epoch {
                     pending_sync.take().map(drop);
-                    main.resume()?;
+                    self.main.resume()?;
                 }
             } else {
                 pending_sync.take().map(drop);
-                main.resume()?;
+                self.main.resume()?;
             }
         }
 
@@ -393,14 +373,15 @@ impl<'a> CheckCoordinator<'a> {
         // dbg!(max_nr_live_segments);
         // dbg!(segments.len());
 
-        if max_nr_live_segments != 0
-            && segments.len() <= max_nr_live_segments
-            && throttling
+        if self.options.max_nr_live_segments != 0
+            && self.segments.len() <= self.options.max_nr_live_segments
+            && self
+                .throttling
                 .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
         {
             info!("Resuming main");
-            main.resume()?;
+            self.main.resume()?;
         }
 
         Ok(())
@@ -427,18 +408,7 @@ impl<'a> CheckCoordinator<'a> {
                     Ok(false)
                 }
             },
-            || {
-                Self::cleanup_committed_segments(
-                    &self.main,
-                    &mut self.pending_sync.lock(),
-                    &self.segments,
-                    self.options.max_nr_live_segments,
-                    self.options
-                        .flags
-                        .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS),
-                    &self.throttling,
-                )
-            },
+            || self.cleanup_committed_segments(),
         )
     }
 
@@ -466,7 +436,16 @@ impl<'a> CheckCoordinator<'a> {
             && self.segments.has_errors()
     }
 
-    pub fn handle_syscall_entry(&self, pid: Pid, sysno: Sysno, args: SyscallArgs) -> Result<()> {
+    pub fn handle_syscall_entry<'s, 'scope, 'env>(
+        &'s self,
+        pid: Pid,
+        sysno: Sysno,
+        args: SyscallArgs,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+    {
         let syscall = reverie_syscalls::Syscall::from_raw(sysno, args);
         let process = Process::new(pid);
 
@@ -523,7 +502,7 @@ impl<'a> CheckCoordinator<'a> {
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         drop(active_segment);
 
-                        self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell)?;
+                        self.handle_checkpoint(pid, true, true, CheckpointCaller::Shell, scope)?;
                         skip_ptrace_syscall = true;
                         true
                     }
@@ -544,7 +523,7 @@ impl<'a> CheckCoordinator<'a> {
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
                         drop(active_segment);
 
-                        self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell)?;
+                        self.handle_checkpoint(pid, true, false, CheckpointCaller::Shell, scope)?;
                         skip_ptrace_syscall = true;
                         true
                     }
@@ -599,6 +578,7 @@ impl<'a> CheckCoordinator<'a> {
                                         true,
                                         true,
                                         CheckpointCaller::Shell,
+                                        scope,
                                     )?;
                                     skip_ptrace_syscall = true;
                                 }
@@ -629,6 +609,7 @@ impl<'a> CheckCoordinator<'a> {
                                         true,
                                         false,
                                         CheckpointCaller::Shell,
+                                        scope,
                                     )?;
                                     skip_ptrace_syscall = true;
                                 }
@@ -804,7 +785,15 @@ impl<'a> CheckCoordinator<'a> {
         Ok(())
     }
 
-    pub fn handle_syscall_exit(&self, pid: Pid, ret_val: isize) -> Result<()> {
+    pub fn handle_syscall_exit<'s, 'scope, 'env>(
+        &'s self,
+        pid: Pid,
+        ret_val: isize,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+    {
         let mut process = Process::new(pid);
         let mut skip_ptrace_syscall = false;
 
@@ -955,7 +944,7 @@ impl<'a> CheckCoordinator<'a> {
                         regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
                     });
 
-                    self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell)?;
+                    self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell, scope)?;
                     skip_ptrace_syscall = true;
                 }
             }
