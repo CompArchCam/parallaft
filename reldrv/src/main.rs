@@ -1,7 +1,7 @@
-mod affinity;
 mod check_coord;
 mod dispatcher;
 mod error;
+mod helpers;
 mod inferior_rtlib;
 mod process;
 mod saved_syscall;
@@ -9,7 +9,6 @@ mod segments;
 mod signal_handlers;
 mod statistics;
 mod syscall_handlers;
-mod vdso;
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -32,12 +31,13 @@ use clap::Parser;
 
 use log::{info, warn};
 
-use crate::affinity::AffinitySetter;
 use crate::check_coord::{
     CheckCoordinator, CheckCoordinatorFlags,
     CheckCoordinatorOptions, /* CheckCoordinatorHooks */
 };
 use crate::dispatcher::{Dispatcher, Installable};
+use crate::helpers::affinity::AffinitySetter;
+use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
 use crate::process::{OwnedProcess, Process};
@@ -57,7 +57,6 @@ use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
 };
-use crate::vdso::VdsoRemover;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
