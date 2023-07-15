@@ -160,8 +160,10 @@ pub trait ProcessLifetimeHook {
         Ok(())
     }
 
-    // /// Called before killing a checker process
-    // fn handle_checker_fini(&self, process: &Process) {}
+    /// Called before killing a checker process
+    fn handle_checker_fini(&self, process: &Process, nr_dirty_pages: Option<usize>) -> Result<()> {
+        Ok(())
+    }
 
     /// Called after all subprocesses exit
     fn handle_all_fini(&self) -> Result<()> {

@@ -30,7 +30,6 @@ use crate::saved_syscall::{
 };
 use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain, SegmentEventHandler};
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
-use crate::stats::Statistics;
 use crate::syscall_handlers::{
     HandlerContext, ProcessLifetimeHook, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
@@ -43,7 +42,6 @@ pub struct CheckCoordinator<'disp> {
     pub epoch: AtomicU32,
     throttling: Arc<AtomicBool>,
     pending_sync: Arc<Mutex<Option<u32>>>,
-    stats: Arc<Statistics>,
     options: CheckCoordinatorOptions,
     dispatcher: &'disp Dispatcher<'disp>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
@@ -100,7 +98,6 @@ impl<'disp> CheckCoordinator<'disp> {
             segments: Arc::new(SegmentChain::new(main_pid)),
             epoch: AtomicU32::new(0),
             pending_sync: Arc::new(Mutex::new(None)),
-            stats: Arc::new(Statistics::new()),
             options,
             throttling: Arc::new(AtomicBool::new(false)),
             dispatcher,
@@ -233,9 +230,11 @@ impl<'disp> CheckCoordinator<'disp> {
                 scope.spawn(move || {
                     let mut segment = segment.lock();
 
+                    let mut outer_nr_dirty_pages = None;
+
                     match segment.check(&self.dispatcher.get_ignored_pages()) {
                         Ok((result, nr_dirty_pages)) => {
-                            self.stats.update_nr_dirty_pages(nr_dirty_pages);
+                            outer_nr_dirty_pages = Some(nr_dirty_pages);
 
                             if !result {
                                 if self
@@ -258,6 +257,9 @@ impl<'disp> CheckCoordinator<'disp> {
                             segment.mark_as_checked(true).unwrap();
                         }
                     }
+                    self.dispatcher
+                        .handle_checker_fini(&Process::new(pid), outer_nr_dirty_pages) // TODO: process may have terminated
+                        .unwrap(); // TODO: error handling
 
                     drop(segment);
 
@@ -364,11 +366,6 @@ impl<'disp> CheckCoordinator<'disp> {
     /// Get the current epoch.
     pub fn epoch(&self) -> u32 {
         self.epoch.load(Ordering::SeqCst)
-    }
-
-    /// Get the average number of dirty pages per iteration.
-    pub fn avg_nr_dirty_pages(&self) -> f64 {
-        self.stats.avg_nr_dirty_pages()
     }
 
     /// Check if all checkers has finished.

@@ -1,17 +1,15 @@
 mod affinity;
 mod check_coord;
+mod dispatcher;
 mod error;
 mod inferior_rtlib;
-mod vdso;
-
-mod dispatcher;
 mod process;
 mod saved_syscall;
 mod segments;
 mod signal_handlers;
 mod statistics;
-mod stats;
 mod syscall_handlers;
+mod vdso;
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -48,6 +46,7 @@ use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
 use crate::statistics::cache::CacheStatsCollector;
 use crate::statistics::counter::CounterCollector;
+use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::timing::TimingCollector;
 use crate::statistics::StatisticsSet;
 use crate::syscall_handlers::clone::CloneHandler;
@@ -218,7 +217,15 @@ fn parent_work(
     let cache_stats = CacheStatsCollector::new();
     cache_stats.install(&mut disp);
 
-    let all_stats = StatisticsSet::new(vec![&time_stats, &counter_stats, &cache_stats]);
+    let dirty_page_stats = DirtyPageStatsCollector::new();
+    dirty_page_stats.install(&mut disp);
+
+    let all_stats = StatisticsSet::new(vec![
+        &time_stats,
+        &counter_stats,
+        &cache_stats,
+        &dirty_page_stats,
+    ]);
 
     info!("Child process tracing started");
 

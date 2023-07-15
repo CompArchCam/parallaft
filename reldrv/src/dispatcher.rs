@@ -87,6 +87,14 @@ impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
         Ok(())
     }
 
+    fn handle_checker_fini(&self, process: &Process, nr_dirty_pages: Option<usize>) -> Result<()> {
+        for handler in &self.process_lifetime_hooks {
+            handler.handle_checker_fini(process, nr_dirty_pages)?;
+        }
+
+        Ok(())
+    }
+
     fn handle_all_fini(&self) -> Result<()> {
         for handler in &self.process_lifetime_hooks {
             handler.handle_all_fini()?;
