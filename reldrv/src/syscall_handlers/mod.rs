@@ -151,17 +151,25 @@ pub trait CustomSyscallHandler {
 #[allow(unused_variables)]
 pub trait ProcessLifetimeHook {
     /// Called after spawning the main process
-    fn handle_main_init(&self, process: &Process) {}
+    fn handle_main_init(&self, process: &Process) -> Result<()> {
+        Ok(())
+    }
 
     /// Called after spawning a checker process
-    fn handle_checker_init(&self, process: &Process) {}
+    fn handle_checker_init(&self, process: &Process) -> Result<()> {
+        Ok(())
+    }
 
     // /// Called before killing a checker process
     // fn handle_checker_fini(&self, process: &Process) {}
 
     /// Called after all subprocesses exit
-    fn handle_all_fini(&self) {}
+    fn handle_all_fini(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// Called after main exits
-    fn handle_main_fini(&self, ret_val: i32) {}
+    fn handle_main_fini(&self, ret_val: i32) -> Result<()> {
+        Ok(())
+    }
 }

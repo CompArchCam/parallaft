@@ -40,11 +40,17 @@ impl<'a> Dispatcher<'a> {
         self.process_lifetime_hooks.push(handler)
     }
 
-    pub fn install_standard_syscall_handler(&mut self, handler: &'a (dyn StandardSyscallHandler + Sync)) {
+    pub fn install_standard_syscall_handler(
+        &mut self,
+        handler: &'a (dyn StandardSyscallHandler + Sync),
+    ) {
         self.standard_syscall_handlers.push(handler)
     }
 
-    pub fn install_custom_syscall_handler(&mut self, handler: &'a (dyn CustomSyscallHandler + Sync)) {
+    pub fn install_custom_syscall_handler(
+        &mut self,
+        handler: &'a (dyn CustomSyscallHandler + Sync),
+    ) {
         self.custom_syscall_handlers.push(handler)
     }
 
@@ -56,34 +62,45 @@ impl<'a> Dispatcher<'a> {
         self.segment_event_handlers.push(handler)
     }
 
-    pub fn install_ignored_pages_provider(&mut self, provider: &'a (dyn IgnoredPagesProvider + Sync)) {
+    pub fn install_ignored_pages_provider(
+        &mut self,
+        provider: &'a (dyn IgnoredPagesProvider + Sync),
+    ) {
         self.ignored_pages_providers.push(provider)
     }
 }
 
 impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
-    fn handle_main_init(&self, process: &Process) {
+    fn handle_main_init(&self, process: &Process) -> Result<()> {
         for handler in &self.process_lifetime_hooks {
-            handler.handle_main_init(process)
+            handler.handle_main_init(process)?;
         }
+
+        Ok(())
     }
 
-    fn handle_checker_init(&self, process: &Process) {
+    fn handle_checker_init(&self, process: &Process) -> Result<()> {
         for handler in &self.process_lifetime_hooks {
-            handler.handle_checker_init(process)
+            handler.handle_checker_init(process)?;
         }
+
+        Ok(())
     }
 
-    fn handle_all_fini(&self) {
+    fn handle_all_fini(&self) -> Result<()> {
         for handler in &self.process_lifetime_hooks {
-            handler.handle_all_fini()
+            handler.handle_all_fini()?;
         }
+
+        Ok(())
     }
 
-    fn handle_main_fini(&self, ret_val: i32) {
+    fn handle_main_fini(&self, ret_val: i32) -> Result<()> {
         for handler in &self.process_lifetime_hooks {
-            handler.handle_main_fini(ret_val)
+            handler.handle_main_fini(ret_val)?;
         }
+
+        Ok(())
     }
 }
 

@@ -46,6 +46,7 @@ use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
+use crate::statistics::cache::CacheStatsCollector;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::timing::TimingCollector;
 use crate::statistics::StatisticsSet;
@@ -214,13 +215,16 @@ fn parent_work(
     let counter_stats = CounterCollector::new(&time_stats);
     counter_stats.install(&mut disp);
 
-    let all_stats = StatisticsSet::new(vec![&time_stats, &counter_stats]);
+    let cache_stats = CacheStatsCollector::new();
+    cache_stats.install(&mut disp);
+
+    let all_stats = StatisticsSet::new(vec![&time_stats, &counter_stats, &cache_stats]);
 
     info!("Child process tracing started");
 
     let inferior = OwnedProcess::new(child_pid);
 
-    disp.handle_main_init(&inferior);
+    disp.handle_main_init(&inferior).unwrap();
     let mut exit_status = None;
 
     let check_coord = CheckCoordinator::new(inferior, check_coord_options, &disp);
@@ -251,7 +255,7 @@ fn parent_work(
                     if pid == check_coord.main.pid {
                         main_finished = true;
 
-                        disp.handle_main_fini(status);
+                        disp.handle_main_fini(status).unwrap();
 
                         exit_status = Some(status);
 
@@ -393,7 +397,7 @@ fn parent_work(
             }
         }
 
-        disp.handle_all_fini();
+        disp.handle_all_fini().unwrap();
 
         if flags.contains(RunnerFlags::DUMP_STATS) || stats_output.is_some() {
             let _nr_checkpoints = check_coord.epoch();

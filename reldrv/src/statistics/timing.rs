@@ -97,19 +97,25 @@ impl StandardSyscallHandler for TimingCollector {
 }
 
 impl ProcessLifetimeHook for TimingCollector {
-    fn handle_main_init(&self, _process: &Process) {
-        *self.start_time.lock() = Some(Instant::now())
+    fn handle_main_init(&self, _process: &Process) -> Result<()> {
+        *self.start_time.lock() = Some(Instant::now());
+
+        Ok(())
     }
 
-    fn handle_main_fini(&self, ret_val: i32) {
+    fn handle_main_fini(&self, ret_val: i32) -> Result<()> {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.main_wall_time.lock() = Some(elapsed);
         *self.exit_status.lock() = Some(ret_val);
+
+        Ok(())
     }
 
-    fn handle_all_fini(&self) {
+    fn handle_all_fini(&self) -> Result<()> {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.all_wall_time.lock() = Some(elapsed);
+
+        Ok(())
     }
 }
 

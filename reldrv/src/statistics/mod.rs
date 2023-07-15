@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+pub mod cache;
 pub mod counter;
 pub mod timing;
 
