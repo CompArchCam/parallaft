@@ -67,6 +67,7 @@ pub fn page_diff(
     Ok(true)
 }
 
+#[allow(unused)]
 impl Process {
     pub fn dirty_page_delta_against(
         &self,
