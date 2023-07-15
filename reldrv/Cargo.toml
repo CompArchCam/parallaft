@@ -13,8 +13,6 @@ clap = { version = "4.1.1", features = ["derive"] }
 env_logger = "0.10.0"
 log = "0.4.17"
 nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-get-rseq-configuration" }
-compel = { git = "https://github.com/mbyzhang/compel-rs.git", optional = true }
-parasite = { path = "parasite", optional = true }
 procfs = { git = "https://github.com/mbyzhang/procfs.git" }
 pretty-hex = "0.3.0"
 parking_lot = "0.12.1"
@@ -38,4 +36,3 @@ debug = true
 
 [features]
 default = []
-compel = ["dep:compel", "dep:parasite"]

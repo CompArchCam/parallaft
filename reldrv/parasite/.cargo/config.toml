@@ -1,9 +1,0 @@
-[build]
-
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["--emit", "obj", "-C", "relocation-model=dynamic-no-pic", "-C", "linker-flavor=ld", # "-C", "link-self-contained=no",
-             "-C", "link-args=-nostdlib -r -z noexecstack -T /usr/local/libexec/compel/scripts/compel-pack.lds.S /usr/local/libexec/compel/std.lib.a"]
-
-[target.aarch64-unknown-linux-gnu]
-rustflags = ["--emit", "obj", "-C", "relocation-model=dynamic-no-pic", "-C", "linker-flavor=ld",
-             "-C", "link-args=-nostdlib -z noexecstack -T /usr/local/libexec/compel/scripts/compel-pack.lds.S /usr/local/libexec/compel/std.lib.a"]

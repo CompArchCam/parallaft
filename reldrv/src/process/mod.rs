@@ -4,12 +4,6 @@ mod registers;
 mod stats;
 mod syscall;
 
-#[cfg(feature = "compel")]
-mod compel_parasite;
-
-#[cfg(feature = "compel")]
-mod compel;
-
 use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use std::fmt::Debug;

@@ -458,9 +458,6 @@ fn run(
 }
 
 fn main() {
-    #[cfg(feature = "compel")]
-    compel::log_init(log::Level::Error);
-
     let cli = CliArgs::parse();
     let pause_on_panic = cli.pause_on_panic;
 
