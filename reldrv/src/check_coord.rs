@@ -17,7 +17,7 @@ use nix::{sched::CloneFlags, unistd::Pid};
 use parking_lot::Mutex;
 
 use reverie_syscalls::{
-    Addr, AddrMut, Displayable, MapFlags, Syscall, SyscallArgs, SyscallInfo, Sysno,
+    Displayable, Syscall, SyscallArgs, SyscallInfo, Sysno,
 };
 
 use crate::dispatcher::Dispatcher;
@@ -477,249 +477,89 @@ impl<'disp> CheckCoordinator<'disp> {
             };
 
             if !is_handled {
-                match syscall {
-                    Syscall::Mmap(mut mmap) => {
-                        let mut active_segment = active_segment.lock();
+                let mut active_segment = active_segment.lock();
 
-                        if is_main {
-                            // main process
-                            if active_segment.ongoing_syscall.is_some() {
-                                return Err(Error::UnexpectedSyscall);
-                            }
+                // replicate memory written by the syscall in the checker
+                if is_main {
+                    // info!("Main syscall entry");
+                    // we are the main process
 
-                            // HACK
-                            // if mmap.flags().contains(MapFlags::MAP_SHARED) {
-                            //     mmap = mmap.with_prot(mmap.prot() & !ProtFlags::PROT_WRITE);
-                            // }
-
-                            mmap = mmap.with_flags(
-                                (mmap.flags() & !MapFlags::MAP_SHARED) | MapFlags::MAP_PRIVATE, // TODO: MAP_SHARED_VALIDATE
-                            );
-
-                            // if mmap.flags().contains(MapFlags::MAP_SHARED)
-                            //     && mmap.prot().contains(ProtFlags::PROT_WRITE)
-                            // {
-                            //     panic!("Unsupported MAP_SHARED and PROT_WRITE combination");
-                            // }
-
-                            if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
-                                // File-backed mmap
-
-                                if mmap.fd() >= 0 {
-                                    active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                        syscall,
-                                        kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                        exit_action: SyscallExitAction::Checkpoint,
-                                    });
-
-                                    drop(active_segment);
-
-                                    self.main.modify_registers_with(|regs| {
-                                        regs.with_syscall_args(mmap.into_parts().1)
-                                    })?;
-
-                                    info!("Main mmap checkpoint fini");
-                                    self.handle_checkpoint(
-                                        pid,
-                                        true,
-                                        true,
-                                        CheckpointCaller::Shell,
-                                        scope,
-                                    )?;
-                                    skip_ptrace_syscall = true;
-                                }
-                            } else {
-                                self.main.modify_registers_with(|regs| {
-                                    regs.with_syscall_args(mmap.into_parts().1)
-                                })?;
-
-                                active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                    syscall,
-                                    kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                    exit_action: SyscallExitAction::Custom,
-                                });
-                            }
-                        } else {
-                            // checker process
-                            // use MAP_FIXED, mapping exactly the same address that the main process did
-
-                            if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
-                                info!("Checker mmap checkpoint fini");
-                                // File-backed mmap
-
-                                if mmap.fd() >= 0 {
-                                    drop(active_segment);
-
-                                    self.handle_checkpoint(
-                                        pid,
-                                        true,
-                                        false,
-                                        CheckpointCaller::Shell,
-                                        scope,
-                                    )?;
-                                    skip_ptrace_syscall = true;
-                                }
-                            } else {
-                                let saved_syscall = active_segment
-                                    .syscall_log
-                                    .front()
-                                    .ok_or(Error::UnexpectedSyscall)?;
-
-                                assert_eq!(
-                                    saved_syscall.syscall.into_parts(),
-                                    syscall.into_parts()
-                                );
-
-                                if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
-                                    // rewrite only if mmap has succeeded
-                                    let mmap = mmap
-                                        .with_addr(Addr::from_raw(saved_syscall.ret_val as _))
-                                        .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
-
-                                    let (new_sysno, new_args) = mmap.into_parts();
-                                    active_segment.checker().unwrap().modify_registers_with(
-                                        |regs| {
-                                            regs.with_sysno(new_sysno).with_syscall_args(new_args)
-                                        },
-                                    )?;
-                                }
-                            }
-                        }
+                    if active_segment.ongoing_syscall.is_some() {
+                        return Err(Error::UnexpectedSyscall);
                     }
-                    Syscall::Mremap(mut mremap) => {
-                        let mut active_segment = active_segment.lock();
 
-                        if is_main {
+                    let may_read = syscall.may_read(&process).ok().map(|slices| {
+                        slices
+                            .iter()
+                            .map(|slice| RemoteIoVec {
+                                base: unsafe { slice.as_ptr() as _ },
+                                len: slice.len(),
+                            })
+                            .collect::<Vec<RemoteIoVec>>()
+                            .into_boxed_slice()
+                    });
+
+                    let may_write = syscall.may_write(&process).ok().map(|slices| {
+                        slices
+                            .iter()
+                            .map(|slice| RemoteIoVec {
+                                base: unsafe { slice.as_ptr() as _ },
+                                len: slice.len(),
+                            })
+                            .collect::<Vec<RemoteIoVec>>()
+                            .into_boxed_slice()
+                    });
+
+                    match (may_read, may_write) {
+                        (Some(may_read), Some(may_write)) => {
+                            // we know the exact memory r/w of the syscall
+                            active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
+                                syscall,
+                                kind: SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
+                                    mem_read: SavedMemory::save(&process, &may_read)?,
+                                    mem_written_ranges: may_write,
+                                },
+                                exit_action: SyscallExitAction::ReplicateMemoryWrites,
+                            });
+                        }
+                        _ => {
+                            // otherwise, take a full checkpoint right before the syscall and another right after the syscall
                             active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
                                 syscall,
                                 kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                exit_action: SyscallExitAction::Custom,
+                                exit_action: SyscallExitAction::Checkpoint,
                             });
-                        } else {
-                            let saved_syscall = active_segment
-                                .syscall_log
-                                .front()
-                                .ok_or(Error::UnexpectedSyscall)?;
 
-                            assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
-
-                            // rewrite only if mmap has succeeded
-                            if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
-                                // rewrite only if the original call moves the address
-                                if mremap.flags() & nix::libc::MREMAP_MAYMOVE as usize != 0 {
-                                    let addr_raw = mremap.addr().map(|a| a.as_raw()).unwrap_or(0);
-
-                                    if addr_raw == saved_syscall.ret_val as _ {
-                                        mremap = mremap.with_flags(
-                                            mremap.flags() & !nix::libc::MREMAP_MAYMOVE as usize,
-                                        );
-                                    } else {
-                                        mremap = mremap
-                                            .with_new_addr(AddrMut::from_ptr(
-                                                saved_syscall.ret_val as _,
-                                            ))
-                                            .with_flags(
-                                                mremap.flags() | nix::libc::MREMAP_FIXED as usize,
-                                            );
-                                    }
-                                }
-
-                                let (new_sysno, new_args) = mremap.into_parts();
-                                active_segment.checker().unwrap().modify_registers_with(
-                                    |regs| regs.with_sysno(new_sysno).with_syscall_args(new_args),
-                                )?;
-                            }
+                            // TODO: take a checkpoint now
+                            todo!("take a full checkpoint");
                         }
                     }
-                    _ => {
-                        let mut active_segment = active_segment.lock();
 
-                        // replicate memory written by the syscall in the checker
-                        if is_main {
-                            // info!("Main syscall entry");
-                            // we are the main process
+                    // dbg!(active_segment);
+                } else {
+                    // info!("Checker syscall entry");
+                    // dbg!(&active_segment);
+                    // we are one of the checker processes
+                    if let Some(saved_syscall) = active_segment.syscall_log.front() {
+                        assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
 
-                            if active_segment.ongoing_syscall.is_some() {
-                                return Err(Error::UnexpectedSyscall);
+                        match &saved_syscall.kind {
+                            SavedSyscallKind::UnknownMemoryRw => {
+                                todo!("take a full checkpoint");
                             }
-
-                            let may_read = syscall.may_read(&process).ok().map(|slices| {
-                                slices
-                                    .iter()
-                                    .map(|slice| RemoteIoVec {
-                                        base: unsafe { slice.as_ptr() as _ },
-                                        len: slice.len(),
-                                    })
-                                    .collect::<Vec<RemoteIoVec>>()
-                                    .into_boxed_slice()
-                            });
-
-                            let may_write = syscall.may_write(&process).ok().map(|slices| {
-                                slices
-                                    .iter()
-                                    .map(|slice| RemoteIoVec {
-                                        base: unsafe { slice.as_ptr() as _ },
-                                        len: slice.len(),
-                                    })
-                                    .collect::<Vec<RemoteIoVec>>()
-                                    .into_boxed_slice()
-                            });
-
-                            match (may_read, may_write) {
-                                (Some(may_read), Some(may_write)) => {
-                                    // we know the exact memory r/w of the syscall
-                                    active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                        syscall,
-                                        kind: SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
-                                            mem_read: SavedMemory::save(&process, &may_read)?,
-                                            mem_written_ranges: may_write,
-                                        },
-                                        exit_action: SyscallExitAction::ReplicateMemoryWrites,
-                                    });
-                                }
-                                _ => {
-                                    // otherwise, take a full checkpoint right before the syscall and another right after the syscall
-                                    active_segment.ongoing_syscall = Some(SavedIncompleteSyscall {
-                                        syscall,
-                                        kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                                        exit_action: SyscallExitAction::Checkpoint,
-                                    });
-
-                                    // TODO: take a checkpoint now
-                                    todo!("take a full checkpoint");
-                                }
+                            SavedSyscallKind::KnownMemoryRw { mem_read, .. } => {
+                                // compare memory read by the syscall
+                                assert!(mem_read.compare(&process)?); // TODO: handle this more gracefully
                             }
-
-                            // dbg!(active_segment);
-                        } else {
-                            // info!("Checker syscall entry");
-                            // dbg!(&active_segment);
-                            // we are one of the checker processes
-                            if let Some(saved_syscall) = active_segment.syscall_log.front() {
-                                assert_eq!(
-                                    saved_syscall.syscall.into_parts(),
-                                    syscall.into_parts()
-                                );
-
-                                match &saved_syscall.kind {
-                                    SavedSyscallKind::UnknownMemoryRw => {
-                                        todo!("take a full checkpoint");
-                                    }
-                                    SavedSyscallKind::KnownMemoryRw { mem_read, .. } => {
-                                        // compare memory read by the syscall
-                                        assert!(mem_read.compare(&process)?); // TODO: handle this more gracefully
-                                    }
-                                }
-                            } else {
-                                return Err(Error::UnexpectedSyscall);
-                            }
-
-                            active_segment
-                                .checker()
-                                .unwrap()
-                                .modify_registers_with(|regs| regs.with_syscall_skipped())?;
                         }
+                    } else {
+                        return Err(Error::UnexpectedSyscall);
                     }
+
+                    active_segment
+                        .checker()
+                        .unwrap()
+                        .modify_registers_with(|regs| regs.with_syscall_skipped())?;
                 }
             }
         };
@@ -803,15 +643,7 @@ impl<'disp> CheckCoordinator<'disp> {
                         )?;
 
                         if matches!(result, SyscallHandlerExitAction::NextHandler) {
-                            match saved_incomplete_syscall.syscall {
-                                Syscall::Mmap(_) | Syscall::Mremap(_) => {
-                                    // restore registers as if we haven't modified mmap/mremap flags
-                                    self.main.modify_registers_with(|regs| {
-                                        regs.with_syscall_args(args)
-                                    })?;
-                                }
-                                _ => panic!("unhandled custom syscall during syscall exit"),
-                            }
+                            panic!("Unhandled custom syscall during syscall exit");
                         };
 
                         saved_incomplete_syscall.upgrade(ret_val, None)
@@ -862,15 +694,7 @@ impl<'disp> CheckCoordinator<'disp> {
                         )?;
 
                         if matches!(result, SyscallHandlerExitAction::NextHandler) {
-                            match saved_syscall.syscall {
-                                Syscall::Mmap(_) | Syscall::Mremap(_) => {
-                                    // restore registers as if we haven't modified mmap/mremap flags
-                                    active_segment.checker().unwrap().modify_registers_with(
-                                        |regs| regs.with_syscall_args(args),
-                                    )?;
-                                }
-                                _ => panic!("unhandled custom syscall during syscall exit"),
-                            }
+                            panic!("unhandled custom syscall during syscall exit");
                         }
                     }
                 }

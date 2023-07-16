@@ -52,6 +52,7 @@ use crate::statistics::StatisticsSet;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::exit::ExitHandler;
+use crate::syscall_handlers::mmap::MmapHandler;
 use crate::syscall_handlers::replicate::ReplicatedSyscallHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
@@ -179,6 +180,9 @@ fn parent_work(
 
     let exit_handler = ExitHandler::new();
     exit_handler.install(&mut disp);
+
+    let mmap_handler = MmapHandler::new();
+    mmap_handler.install(&mut disp);
 
     let replicated_syscall_handler = ReplicatedSyscallHandler::new();
     replicated_syscall_handler.install(&mut disp);
