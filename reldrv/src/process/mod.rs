@@ -6,6 +6,7 @@ mod syscall;
 
 use crate::error::{Error, Result};
 use lazy_init::Lazy;
+use lazy_static::lazy_static;
 use std::fmt::Debug;
 use std::ops::Deref;
 
@@ -19,6 +20,10 @@ use nix::{
     },
     unistd::Pid,
 };
+
+lazy_static! {
+    pub static ref PAGESIZE: u64 = procfs::page_size();
+}
 
 pub struct Process {
     pub pid: Pid,

@@ -13,6 +13,8 @@ use reverie_syscalls::MemoryAccess;
 use crate::error::Result;
 use crate::process::Process;
 
+use super::PAGESIZE;
+
 pub fn page_diff(
     p1: &impl MemoryAccess,
     p2: &impl MemoryAccess,
@@ -24,7 +26,7 @@ pub fn page_diff(
     pages.extend(pages_p2.iter());
 
     let block_size = 128;
-    let page_size = procfs::page_size() as usize;
+    let page_size = *PAGESIZE as usize;
 
     let mut buf_p1 = vec![0_u8; block_size * page_size];
     let mut buf_p2 = vec![0_u8; block_size * page_size];

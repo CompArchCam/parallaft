@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread::Scope;
 
@@ -16,9 +16,7 @@ use nix::{sched::CloneFlags, unistd::Pid};
 
 use parking_lot::Mutex;
 
-use reverie_syscalls::{
-    Displayable, Syscall, SyscallArgs, SyscallInfo, Sysno,
-};
+use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo, Sysno};
 
 use crate::dispatcher::Dispatcher;
 use crate::error::{Error, Result};
@@ -34,15 +32,16 @@ use crate::syscall_handlers::{
     HandlerContext, ProcessLifetimeHook, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
+use crate::throttler::Throttler;
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
 pub struct CheckCoordinator<'disp> {
     pub segments: Arc<SegmentChain>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
-    throttling: Arc<AtomicBool>,
+    throttling: Mutex<Option<&'disp (dyn Throttler + Sync)>>,
     pending_sync: Arc<Mutex<Option<u32>>>,
-    options: CheckCoordinatorOptions,
+    flags: CheckCoordinatorFlags,
     dispatcher: &'disp Dispatcher<'disp>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
@@ -57,38 +56,11 @@ bitflags! {
     }
 }
 
-pub struct CheckCoordinatorOptions {
-    pub max_nr_live_segments: usize,
-    pub flags: CheckCoordinatorFlags,
-}
-
-impl Default for CheckCoordinatorOptions {
-    fn default() -> Self {
-        Self {
-            max_nr_live_segments: 0,
-            flags: CheckCoordinatorFlags::empty(),
-        }
-    }
-}
-
-#[allow(unused)]
-impl CheckCoordinatorOptions {
-    pub fn with_max_nr_live_segments(mut self, max_nr_live_segments: usize) -> Self {
-        self.max_nr_live_segments = max_nr_live_segments;
-        self
-    }
-
-    pub fn with_flags(mut self, flags: CheckCoordinatorFlags) -> Self {
-        self.flags = flags;
-        self
-    }
-}
-
 #[allow(unused)]
 impl<'disp> CheckCoordinator<'disp> {
     pub fn new(
         main: OwnedProcess,
-        options: CheckCoordinatorOptions,
+        flags: CheckCoordinatorFlags,
         dispatcher: &'disp Dispatcher,
     ) -> Self {
         // main.pid
@@ -98,8 +70,8 @@ impl<'disp> CheckCoordinator<'disp> {
             segments: Arc::new(SegmentChain::new(main_pid)),
             epoch: AtomicU32::new(0),
             pending_sync: Arc::new(Mutex::new(None)),
-            options,
-            throttling: Arc::new(AtomicBool::new(false)),
+            flags,
+            throttling: Mutex::new(None),
             dispatcher,
             last_syscall: Mutex::new(HashMap::new()),
         }
@@ -119,13 +91,17 @@ impl<'disp> CheckCoordinator<'disp> {
     {
         if pid == self.main.pid {
             info!("Main called checkpoint");
+
+            let nr_dirty_pages = self.main.nr_dirty_pages()?;
+
+            assert!(
+                self.pending_sync.lock().is_none(),
+                "Unexpected pending_sync state when handling checkpoint request"
+            );
+
             let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
-            if self
-                .options
-                .flags
-                .contains(CheckCoordinatorFlags::DONT_FORK)
-            {
+            if self.flags.contains(CheckCoordinatorFlags::DONT_FORK) {
                 self.main.resume()?;
                 return Ok(());
             }
@@ -146,23 +122,29 @@ impl<'disp> CheckCoordinator<'disp> {
                     .as_owned();
 
                 if !self
-                    .options
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
                 {
                     self.main.clear_dirty_page_bits()?;
                 }
 
-                if self.options.max_nr_live_segments == 0
-                    || self.segments.len() < self.options.max_nr_live_segments
-                {
-                    info!("Resuming main process");
-                    self.main.resume()?;
+                if !is_last_checkpoint_finalizing {
+                    let mut throttling = self.throttling.lock();
+
+                    if let Some(throttler) = throttling.as_ref() {
+                        panic!("Unexpected throttling state");
+                    } else {
+                        if let Some(throttler) =
+                            self.dispatcher.dispatch_throttle(nr_dirty_pages, self)
+                        {
+                            info!("Throttling");
+                            *throttling = Some(throttler);
+                        } else {
+                            self.main.resume()?;
+                        }
+                    }
                 } else {
-                    self.throttling
-                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                        .unwrap();
-                    info!("Too many live segments. Pausing the main process");
+                    self.main.resume()?;
                 }
 
                 let (checker, checkpoint) = if is_last_checkpoint_finalizing {
@@ -177,14 +159,13 @@ impl<'disp> CheckCoordinator<'disp> {
                                 restart_old_syscall,
                             )?
                             .as_owned(),
-                        Checkpoint::new(epoch_local, reference, caller),
+                        Checkpoint::new(epoch_local, reference, nr_dirty_pages, caller),
                     )
                 };
 
                 self.dispatcher.handle_checker_init(&checker);
 
                 if !self
-                    .options
                     .flags
                     .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
                 {
@@ -205,7 +186,8 @@ impl<'disp> CheckCoordinator<'disp> {
                         )?
                         .as_owned();
                     self.main.resume()?;
-                    let checkpoint = Checkpoint::new(epoch_local, reference, caller);
+                    let checkpoint =
+                        Checkpoint::new(epoch_local, reference, nr_dirty_pages, caller);
 
                     info!("New checkpoint: {:?}", checkpoint);
                     self.add_checkpoint(checkpoint, None)?;
@@ -217,11 +199,7 @@ impl<'disp> CheckCoordinator<'disp> {
         } else if let Some(segment) = self.segments.get_segment_by_checker_pid(pid) {
             info!("Checker called checkpoint");
 
-            if self
-                .options
-                .flags
-                .contains(CheckCoordinatorFlags::NO_MEM_CHECK)
-            {
+            if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
                 segment.lock().mark_as_checked(false).unwrap();
                 self.cleanup_committed_segments();
             } else {
@@ -238,7 +216,6 @@ impl<'disp> CheckCoordinator<'disp> {
 
                             if !result {
                                 if self
-                                    .options
                                     .flags
                                     .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
                                 {
@@ -274,6 +251,11 @@ impl<'disp> CheckCoordinator<'disp> {
     }
 
     pub fn handle_sync(&self) -> Result<()> {
+        assert!(
+            self.throttling.lock().is_none(),
+            "Unexpected throttling state when checkpoint_sync is called"
+        );
+
         if let Some(last_segment) = self.segments.get_last_segment() {
             let epoch = last_segment
                 .lock()
@@ -287,7 +269,10 @@ impl<'disp> CheckCoordinator<'disp> {
 
             let mut pending_sync = self.pending_sync.lock();
 
-            assert!(pending_sync.is_none());
+            assert!(
+                pending_sync.is_none(),
+                "Unexpected pending_sync state when checkpoint_sync is called"
+            );
             pending_sync.insert(epoch);
         } else {
             self.main.resume()?;
@@ -297,18 +282,20 @@ impl<'disp> CheckCoordinator<'disp> {
     }
 
     fn cleanup_committed_segments(&self) -> Result<()> {
-        let old_len = self.segments.len();
-
         let ignore_errors = self
-            .options
             .flags
             .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS);
 
-        self.segments.cleanup_committed_segments(ignore_errors);
+        let (_, new_len) = self.segments.cleanup_committed_segments(ignore_errors);
 
         let mut pending_sync = self.pending_sync.lock();
 
         if let Some(epoch) = pending_sync.as_ref() {
+            assert!(
+                self.throttling.lock().is_none(),
+                "Unexpected throttling state when pending_sync is active"
+            );
+
             if let Some(front) = self.segments.get_first_segment() {
                 if front.lock().checkpoint_start.epoch > *epoch {
                     pending_sync.take().map(drop);
@@ -318,22 +305,34 @@ impl<'disp> CheckCoordinator<'disp> {
                 pending_sync.take().map(drop);
                 self.main.resume()?;
             }
+        } else {
+            let mut throttling = self.throttling.lock();
+
+            if let Some(&throttler) = throttling.as_ref() {
+                if throttler.should_unthrottle(self) {
+                    *throttling = None;
+                    self.main.resume()?;
+                    info!("Unthrottled");
+                } else {
+                    if self.segments.nr_live_segments() == 0 {
+                        panic!(
+                            "Deadlock detected: unthrottle not called after the number of live segments reaching zero"
+                        );
+                    }
+                }
+            }
         }
 
-        // dbg!(old_len);
-        // dbg!(max_nr_live_segments);
-        // dbg!(segments.len());
-
-        if self.options.max_nr_live_segments != 0
-            && self.segments.len() <= self.options.max_nr_live_segments
-            && self
-                .throttling
-                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
-            info!("Resuming main");
-            self.main.resume()?;
-        }
+        // if self.options.max_nr_live_segments != 0
+        //     && self.segments.len() <= self.options.max_nr_live_segments
+        //     && self
+        //         .throttling
+        //         .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+        //         .is_ok()
+        // {
+        //     info!("Resuming main");
+        //     self.main.resume()?;
+        // }
 
         Ok(())
     }
@@ -344,11 +343,7 @@ impl<'disp> CheckCoordinator<'disp> {
             checkpoint,
             checker,
             |last_segment, checkpoint| {
-                if self
-                    .options
-                    .flags
-                    .contains(CheckCoordinatorFlags::DONT_RUN_CHECKER)
-                {
+                if self.flags.contains(CheckCoordinatorFlags::DONT_RUN_CHECKER) {
                     last_segment.mark_as_checked(false).unwrap();
                     Ok(true)
                 } else {
@@ -376,7 +371,6 @@ impl<'disp> CheckCoordinator<'disp> {
     /// Check if any checker has errors unless IGNORE_CHECK_ERRORS is set.
     pub fn has_errors(&self) -> bool {
         !self
-            .options
             .flags
             .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
             && self.segments.has_errors()

@@ -1,6 +1,7 @@
 use std::arch::x86_64::CpuidResult;
 use std::collections::LinkedList;
-use std::ops::DerefMut;
+use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::{mem, ptr};
@@ -15,7 +16,10 @@ use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
 
 #[derive(Debug)]
 pub enum CheckpointKind {
-    Subsequent { reference: OwnedProcess },
+    Subsequent {
+        reference: OwnedProcess,
+        nr_dirty_pages: usize,
+    },
     Initial,
 }
 
@@ -34,11 +38,19 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn new(epoch: u32, reference: OwnedProcess, caller: CheckpointCaller) -> Self {
+    pub fn new(
+        epoch: u32,
+        reference: OwnedProcess,
+        nr_dirty_pages: usize,
+        caller: CheckpointCaller,
+    ) -> Self {
         Self {
             epoch,
             caller,
-            kind: CheckpointKind::Subsequent { reference },
+            kind: CheckpointKind::Subsequent {
+                reference,
+                nr_dirty_pages,
+            },
         }
     }
 
@@ -52,8 +64,17 @@ impl Checkpoint {
 
     pub fn reference<'a>(&'a self) -> Option<&'a OwnedProcess> {
         match &self.kind {
-            CheckpointKind::Subsequent { reference: ref_pid } => Some(ref_pid),
+            CheckpointKind::Subsequent {
+                reference: ref_pid, ..
+            } => Some(ref_pid),
             CheckpointKind::Initial => None,
+        }
+    }
+
+    pub fn nr_dirty_pages(&self) -> usize {
+        match &self.kind {
+            CheckpointKind::Subsequent { nr_dirty_pages, .. } => *nr_dirty_pages,
+            CheckpointKind::Initial => 0,
         }
     }
 }
@@ -138,6 +159,7 @@ pub struct Segment {
     pub trap_event_log: LinkedList<SavedTrapEvent>,
 }
 
+#[allow(unused)]
 impl Segment {
     pub fn new(checkpoint_start: Arc<Checkpoint>, checker: OwnedProcess, nr: u32) -> Self {
         Self {
@@ -192,6 +214,15 @@ impl Segment {
         }
     }
 
+    /// Get the reference process, it it exists.
+    pub fn reference<'a>(&'a self) -> Option<&'a Process> {
+        self.checkpoint_start.reference().map(|r| r.deref())
+    }
+
+    pub fn nr_dirty_pages(&self) -> Option<usize> {
+        self.status.checkpoint_end().map(|c| c.nr_dirty_pages())
+    }
+
     pub fn has_errors(&self) -> bool {
         match self.status {
             SegmentStatus::Checked { has_errors, .. } => has_errors,
@@ -205,10 +236,11 @@ type SegmentList = RwLock<LinkedList<Arc<Mutex<Segment>>>>;
 #[derive(Debug)]
 pub struct SegmentChain {
     main_pid: Pid,
-    inner: SegmentList,
+    pub inner: SegmentList,
     nr_segments: AtomicU32,
 }
 
+#[allow(unused)]
 impl SegmentChain {
     pub fn new(main_pid: Pid) -> Self {
         Self {
@@ -263,9 +295,10 @@ impl SegmentChain {
         }
     }
 
-    /// Clean up committed segments. Returns if any segment has errors unless `ignore_errors` is set.
+    /// Clean up committed segments. Returns a tuple indicating if any segment has errors
+    /// unless `ignore_errors` is set, as well as the number of active segments after the cleanup.
     /// Erroneous segments will not be cleaned up unless `ignore_errors` is set.
-    pub fn cleanup_committed_segments(&self, ignore_errors: bool) -> bool {
+    pub fn cleanup_committed_segments(&self, ignore_errors: bool) -> (bool, usize) {
         let mut segments = self.inner.write();
         loop {
             let mut should_break = true;
@@ -274,7 +307,7 @@ impl SegmentChain {
                 let front = front.lock();
                 if let SegmentStatus::Checked { has_errors, .. } = front.status {
                     if !ignore_errors && has_errors {
-                        return true;
+                        return (true, segments.len());
                     }
                     mem::drop(front);
                     segments.pop_front();
@@ -286,7 +319,7 @@ impl SegmentChain {
             }
         }
 
-        false
+        (false, segments.len())
     }
 
     pub fn get_active_segment_with<R>(
@@ -347,6 +380,31 @@ impl SegmentChain {
 
     pub fn len(&self) -> usize {
         self.inner.read().len()
+    }
+
+    pub fn nr_live_segments(&self) -> usize {
+        self.inner
+            .read()
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.lock().status,
+                    SegmentStatus::Checked { .. } | SegmentStatus::ReadyToCheck { .. }
+                )
+            })
+            .count()
+    }
+
+    /// Get the total number of dirty pages in this segment chain.
+    pub fn nr_dirty_pages(&self) -> usize {
+        self.inner
+            .read()
+            .iter()
+            .map(|segment| {
+                let segment = segment.lock();
+                segment.nr_dirty_pages().unwrap_or(0)
+            })
+            .sum()
     }
 }
 

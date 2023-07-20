@@ -9,6 +9,7 @@ mod segments;
 mod signal_handlers;
 mod statistics;
 mod syscall_handlers;
+mod throttler;
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -31,10 +32,7 @@ use clap::Parser;
 
 use log::{info, warn};
 
-use crate::check_coord::{
-    CheckCoordinator, CheckCoordinatorFlags,
-    CheckCoordinatorOptions, /* CheckCoordinatorHooks */
-};
+use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::vdso::VdsoRemover;
@@ -58,6 +56,8 @@ use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
 };
+use crate::throttler::memory::MemoryBasedThrottler;
+use crate::throttler::nr_segments::NrSegmentsBasedThrottler;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -124,6 +124,10 @@ struct CliArgs {
     #[arg(long, default_value_t = 8)]
     max_nr_live_segments: usize,
 
+    /// Memory overhead limit in bytes (0 = unlimited).
+    #[arg(long, default_value_t = 0)]
+    max_memory_overhead: usize,
+
     /// Pause on panic (e.g. when errors are detected), instead of aborting.
     #[arg(long)]
     pause_on_panic: bool,
@@ -145,15 +149,53 @@ bitflags! {
     }
 }
 
-fn parent_work(
-    child_pid: Pid,
-    checker_cpu_set: Vec<usize>,
-    main_cpu_set: Vec<usize>,
-    flags: RunnerFlags,
-    check_coord_options: CheckCoordinatorOptions,
+struct RelShellOptions {
+    runner_flags: RunnerFlags,
+    check_coord_flags: CheckCoordinatorFlags,
     stats_output: Option<PathBuf>,
+
+    // librelrt plugin options
     librelrt_checkpoint_period: u64,
-) -> i32 {
+
+    // nr segments based throttler plugin options
+    max_nr_live_segments: usize,
+
+    // memory based throttler plugin options
+    memory_overhead_watermark: usize,
+
+    // affinity setter plugin options
+    main_cpu_set: Vec<usize>,
+    checker_cpu_set: Vec<usize>,
+}
+
+impl Default for RelShellOptions {
+    fn default() -> Self {
+        Self {
+            runner_flags: RunnerFlags::empty(),
+            check_coord_flags: CheckCoordinatorFlags::empty(),
+            stats_output: None,
+            librelrt_checkpoint_period: 0,
+            max_nr_live_segments: 0,
+            memory_overhead_watermark: 0,
+            main_cpu_set: Vec::new(),
+            checker_cpu_set: Vec::new(),
+        }
+    }
+}
+
+#[allow(unused)]
+impl RelShellOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_nr_live_segments(mut self, max_nr_live_segments: usize) -> Self {
+        self.max_nr_live_segments = max_nr_live_segments;
+        self
+    }
+}
+
+fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     info!("Starting");
 
     let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
@@ -189,26 +231,26 @@ fn parent_work(
 
     let rdtsc_handler = RdtscHandler::new();
 
-    if !flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
+    if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
         rdtsc_handler.install(&mut disp);
     }
 
     let cpuid_handler = CpuidHandler::new();
 
-    if !flags.contains(RunnerFlags::DONT_TRAP_CPUID) {
+    if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_CPUID) {
         cpuid_handler.install(&mut disp);
     }
 
     let legacy_rtlib_handler = LegacyInferiorRtLib::new();
     legacy_rtlib_handler.install(&mut disp);
 
-    let relrtlib_handler = RelRtLib::new(librelrt_checkpoint_period);
+    let relrtlib_handler = RelRtLib::new(options.librelrt_checkpoint_period);
     relrtlib_handler.install(&mut disp);
 
     let vdso_remover = VdsoRemover::new();
     vdso_remover.install(&mut disp);
 
-    let affinity_setter = AffinitySetter::new(&main_cpu_set, &checker_cpu_set);
+    let affinity_setter = AffinitySetter::new(&options.main_cpu_set, &options.checker_cpu_set);
     affinity_setter.install(&mut disp);
 
     let time_stats = TimingCollector::new();
@@ -230,6 +272,12 @@ fn parent_work(
         &dirty_page_stats,
     ]);
 
+    let memory_based_throttler = MemoryBasedThrottler::new(options.memory_overhead_watermark);
+    memory_based_throttler.install(&mut disp);
+
+    let nr_segment_based_throttler = NrSegmentsBasedThrottler::new(options.max_nr_live_segments);
+    nr_segment_based_throttler.install(&mut disp);
+
     info!("Child process tracing started");
 
     let inferior = OwnedProcess::new(child_pid);
@@ -237,7 +285,7 @@ fn parent_work(
     disp.handle_main_init(&inferior).unwrap();
     let mut exit_status = None;
 
-    let check_coord = CheckCoordinator::new(inferior, check_coord_options, &disp);
+    let check_coord = CheckCoordinator::new(inferior, options.check_coord_flags, &disp);
 
     std::thread::scope(|scope| {
         check_coord.main.resume().unwrap();
@@ -248,7 +296,7 @@ fn parent_work(
         loop {
             let status = waitpid(
                 None,
-                if flags.contains(RunnerFlags::POLL_WAITPID) {
+                if options.runner_flags.contains(RunnerFlags::POLL_WAITPID) {
                     Some(WaitPidFlag::WNOHANG)
                 } else {
                     None
@@ -409,13 +457,14 @@ fn parent_work(
 
         disp.handle_all_fini().unwrap();
 
-        if flags.contains(RunnerFlags::DUMP_STATS) || stats_output.is_some() {
+        if options.runner_flags.contains(RunnerFlags::DUMP_STATS) || options.stats_output.is_some()
+        {
             let _nr_checkpoints = check_coord.epoch();
 
             let mut s = all_stats.as_text();
             s.push_str("\n");
 
-            if let Some(output_path) = stats_output {
+            if let Some(output_path) = options.stats_output {
                 fs::write(output_path, s).unwrap();
             } else {
                 print!("{}", s);
@@ -426,34 +475,16 @@ fn parent_work(
     exit_status.unwrap()
 }
 
-fn run(
-    cmd: &mut Command,
-    checker_cpu_set: Vec<usize>,
-    main_cpu_set: Vec<usize>,
-    runner_flags: RunnerFlags,
-    check_coord_options: CheckCoordinatorOptions,
-    checkpoint_freq: u32,
-    stats_output: Option<PathBuf>,
-    librelrt_checkpoint_period: u64,
-) -> i32 {
+fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
     match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => parent_work(
-            child,
-            checker_cpu_set,
-            main_cpu_set,
-            runner_flags,
-            check_coord_options,
-            stats_output,
-            librelrt_checkpoint_period,
-        ),
+        Ok(ForkResult::Parent { child }) => parent_work(child, options),
         Ok(ForkResult::Child) => {
             let err = unsafe {
-                cmd.env("CHECKER_CHECKPOINT_FREQ", checkpoint_freq.to_string())
-                    .pre_exec(move || {
-                        raise(Signal::SIGSTOP).unwrap();
-                        Ok(())
-                    })
-                    .exec()
+                cmd.pre_exec(move || {
+                    raise(Signal::SIGSTOP).unwrap();
+                    Ok(())
+                })
+                .exec()
             };
             panic!("failed to spawn subcommand: {:?}", err)
         }
@@ -517,16 +548,16 @@ fn main() {
 
     let exit_status = run(
         Command::new(cli.command).args(cli.args),
-        cli.checker_cpu_set,
-        cli.main_cpu_set,
-        runner_flags,
-        CheckCoordinatorOptions {
+        RelShellOptions {
+            runner_flags,
+            check_coord_flags,
+            stats_output: cli.stats_output,
+            librelrt_checkpoint_period: cli.librelrt_checkpoint_period,
             max_nr_live_segments: cli.max_nr_live_segments,
-            flags: check_coord_flags,
+            memory_overhead_watermark: cli.max_memory_overhead,
+            main_cpu_set: cli.main_cpu_set,
+            checker_cpu_set: cli.checker_cpu_set,
         },
-        cli.checkpoint_freq,
-        cli.stats_output,
-        cli.librelrt_checkpoint_period,
     );
 
     std::process::exit(exit_status as _);
@@ -575,23 +606,19 @@ mod tests {
         });
     }
 
-    fn trace(f: impl FnOnce() -> i32, options: CheckCoordinatorOptions) -> i32 {
+    fn trace_with_options(f: impl FnOnce() -> i32, options: RelShellOptions) -> i32 {
         match unsafe { fork().unwrap() } {
-            ForkResult::Parent { child } => parent_work(
-                child,
-                Vec::new(),
-                Vec::new(),
-                RunnerFlags::empty(),
-                options,
-                None,
-                0,
-            ),
+            ForkResult::Parent { child } => parent_work(child, options),
             ForkResult::Child => {
                 raise(Signal::SIGSTOP).unwrap();
                 let code = f();
                 std::process::exit(code);
             }
         }
+    }
+
+    fn trace(f: impl FnOnce() -> i32) -> i32 {
+        trace_with_options(f, Default::default())
     }
 
     fn checkpoint_take() {
@@ -612,14 +639,11 @@ mod tests {
         setup();
 
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -630,7 +654,7 @@ mod tests {
         setup();
 
         assert_eq!(
-            trace(
+            trace_with_options(
                 || {
                     for _ in 0..20 {
                         checkpoint_take();
@@ -638,7 +662,7 @@ mod tests {
                     checkpoint_fini();
                     0
                 },
-                CheckCoordinatorOptions::default().with_max_nr_live_segments(1)
+                RelShellOptions::new().with_max_nr_live_segments(1)
             ),
             0
         );
@@ -650,7 +674,7 @@ mod tests {
         setup();
 
         assert_eq!(
-            trace(
+            trace_with_options(
                 || {
                     for _ in 0..2000 {
                         checkpoint_take();
@@ -659,7 +683,7 @@ mod tests {
                     checkpoint_fini();
                     0
                 },
-                CheckCoordinatorOptions::default().with_max_nr_live_segments(8)
+                RelShellOptions::new().with_max_nr_live_segments(8)
             ),
             0
         );
@@ -670,26 +694,23 @@ mod tests {
     fn test_syscall_replication_handling_brk() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    const LEN: usize = 16384;
+            trace(|| {
+                const LEN: usize = 16384;
 
-                    checkpoint_take();
+                checkpoint_take();
 
-                    let ptr = unsafe { libc::sbrk(LEN as _) };
-                    assert_ne!(ptr, -1_isize as *mut libc::c_void);
+                let ptr = unsafe { libc::sbrk(LEN as _) };
+                assert_ne!(ptr, -1_isize as *mut libc::c_void);
 
-                    let s = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, LEN) };
+                let s = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, LEN) };
 
-                    // ensure we can read and write without causing a segfault
-                    s.fill(42);
-                    assert!(s.iter().all(|&x| x == 42));
+                // ensure we can read and write without causing a segfault
+                s.fill(42);
+                assert!(s.iter().all(|&x| x == 42));
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         );
     }
@@ -699,22 +720,19 @@ mod tests {
     fn test_syscall_getpid_loop() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let orig_pid = unsafe { libc::getpid() };
+            trace(|| {
+                let orig_pid = unsafe { libc::getpid() };
 
-                    checkpoint_take();
+                checkpoint_take();
 
-                    for _ in 0..20 {
-                        let pid = unsafe { libc::getpid() };
-                        assert_eq!(pid, orig_pid);
-                    }
+                for _ in 0..20 {
+                    let pid = unsafe { libc::getpid() };
+                    assert_eq!(pid, orig_pid);
+                }
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         );
     }
@@ -724,21 +742,18 @@ mod tests {
     fn test_checkpoint_syscall_getpid_loop() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let orig_pid = unsafe { libc::getpid() };
+            trace(|| {
+                let orig_pid = unsafe { libc::getpid() };
 
-                    for _ in 0..200 {
-                        checkpoint_take();
-                        let pid = unsafe { libc::getpid() };
-                        assert_eq!(pid, orig_pid);
-                    }
+                for _ in 0..200 {
+                    checkpoint_take();
+                    let pid = unsafe { libc::getpid() };
+                    assert_eq!(pid, orig_pid);
+                }
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         );
     }
@@ -748,13 +763,10 @@ mod tests {
     fn test_no_checkpoint_fini() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                0
+            }),
             0
         );
     }
@@ -764,15 +776,12 @@ mod tests {
     fn test_duplicated_checkpoint_fini() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    checkpoint_fini();
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                checkpoint_fini();
+                checkpoint_fini();
+                0
+            }),
             0
         );
     }
@@ -782,20 +791,17 @@ mod tests {
     #[should_panic]
     fn test_syscall_fork() {
         setup();
-        trace(
-            || {
-                match unsafe { fork().unwrap() } {
-                    ForkResult::Parent { .. } => {
-                        println!("You should not see this line");
-                    }
-                    ForkResult::Child => {
-                        println!("You should not see this line");
-                    }
-                };
-                0
-            },
-            CheckCoordinatorOptions::default(),
-        );
+        trace(|| {
+            match unsafe { fork().unwrap() } {
+                ForkResult::Parent { .. } => {
+                    println!("You should not see this line");
+                }
+                ForkResult::Child => {
+                    println!("You should not see this line");
+                }
+            };
+            0
+        });
     }
 
     #[test]
@@ -803,14 +809,11 @@ mod tests {
     fn test_syscall_exit() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    unsafe { libc::syscall(libc::SYS_exit, 42) };
-                    unreachable!()
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                unsafe { libc::syscall(libc::SYS_exit, 42) };
+                unreachable!()
+            }),
             42
         );
     }
@@ -820,14 +823,11 @@ mod tests {
     fn test_syscall_exit_group() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    unsafe { libc::syscall(libc::SYS_exit_group, 42) };
-                    unreachable!()
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                unsafe { libc::syscall(libc::SYS_exit_group, 42) };
+                unreachable!()
+            }),
             42
         );
     }
@@ -837,29 +837,26 @@ mod tests {
     fn test_syscall_read_write() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let (rx, tx) = unistd::pipe().unwrap();
+            trace(|| {
+                let (rx, tx) = unistd::pipe().unwrap();
 
-                    checkpoint_take();
+                checkpoint_take();
 
-                    let data = [0, 1, 2, 3, 4, 5, 6, 7];
-                    unistd::write(tx, &data).unwrap();
+                let data = [0, 1, 2, 3, 4, 5, 6, 7];
+                unistd::write(tx, &data).unwrap();
 
-                    let mut buf = [0u8; 4];
-                    unistd::read(rx, &mut buf).unwrap();
-                    assert_eq!(buf, data[..4]);
-                    unistd::read(rx, &mut buf).unwrap();
-                    assert_eq!(buf, data[4..]);
+                let mut buf = [0u8; 4];
+                unistd::read(rx, &mut buf).unwrap();
+                assert_eq!(buf, data[..4]);
+                unistd::read(rx, &mut buf).unwrap();
+                assert_eq!(buf, data[4..]);
 
-                    unistd::close(rx).unwrap();
-                    unistd::close(tx).unwrap();
+                unistd::close(rx).unwrap();
+                unistd::close(tx).unwrap();
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -869,37 +866,34 @@ mod tests {
     fn test_syscall_mmap_anon() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    const LEN: usize = 4096 * 4;
+                const LEN: usize = 4096 * 4;
 
-                    let addr = unsafe {
-                        mman::mmap::<OwnedFd>(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
-                            mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
-                            None,
-                            0,
-                        )
-                        .unwrap()
-                    };
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
+                        None,
+                        0,
+                    )
+                    .unwrap()
+                };
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
-                    // ensure we can read and write the mremap-ped memory
-                    arr.fill(42);
-                    assert!(arr.iter().all(|&x| x == 42));
+                // ensure we can read and write the mremap-ped memory
+                arr.fill(42);
+                assert!(arr.iter().all(|&x| x == 42));
 
-                    unsafe { mman::munmap(addr, LEN).unwrap() };
+                unsafe { mman::munmap(addr, LEN).unwrap() };
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -909,36 +903,33 @@ mod tests {
     fn test_syscall_mmap_fd_read_dev_zero() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let file = File::open("/dev/zero").unwrap();
-                    const LEN: usize = 4096 * 4;
+            trace(|| {
+                let file = File::open("/dev/zero").unwrap();
+                const LEN: usize = 4096 * 4;
 
-                    checkpoint_take();
+                checkpoint_take();
 
-                    let addr = unsafe {
-                        mman::mmap(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ,
-                            mman::MapFlags::MAP_PRIVATE,
-                            Some(&file),
-                            0,
-                        )
-                        .unwrap()
-                    };
+                let addr = unsafe {
+                    mman::mmap(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ,
+                        mman::MapFlags::MAP_PRIVATE,
+                        Some(&file),
+                        0,
+                    )
+                    .unwrap()
+                };
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
-                    assert!(arr.iter().all(|&x| x == 0));
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                assert!(arr.iter().all(|&x| x == 0));
 
-                    unsafe { mman::munmap(addr, LEN).unwrap() };
+                unsafe { mman::munmap(addr, LEN).unwrap() };
 
-                    drop(file);
+                drop(file);
 
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                0
+            }),
             0
         )
     }
@@ -948,43 +939,40 @@ mod tests {
     fn test_syscall_mmap_fd_read_memfd() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let fd = memfd_create(
-                        &CString::new("reldrv-test").unwrap(),
-                        MemFdCreateFlag::empty(),
+            trace(|| {
+                let fd = memfd_create(
+                    &CString::new("reldrv-test").unwrap(),
+                    MemFdCreateFlag::empty(),
+                )
+                .unwrap();
+
+                const LEN: usize = 4096 * 4;
+                unistd::write(fd.as_raw_fd(), &[42u8; LEN]).unwrap();
+
+                checkpoint_take();
+
+                let addr = unsafe {
+                    mman::mmap(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ,
+                        mman::MapFlags::MAP_PRIVATE,
+                        Some(&fd),
+                        0,
                     )
-                    .unwrap();
+                    .unwrap()
+                };
 
-                    const LEN: usize = 4096 * 4;
-                    unistd::write(fd.as_raw_fd(), &[42u8; LEN]).unwrap();
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
-                    checkpoint_take();
+                assert!(arr.iter().all(|&x| x == 42));
 
-                    let addr = unsafe {
-                        mman::mmap(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ,
-                            mman::MapFlags::MAP_PRIVATE,
-                            Some(&fd),
-                            0,
-                        )
-                        .unwrap()
-                    };
+                unsafe { mman::munmap(addr, LEN).unwrap() };
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                drop(fd);
 
-                    assert!(arr.iter().all(|&x| x == 42));
-
-                    unsafe { mman::munmap(addr, LEN).unwrap() };
-
-                    drop(fd);
-
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                0
+            }),
             0
         )
     }
@@ -995,47 +983,44 @@ mod tests {
         // TODO: incomplete implementation: changes to writable and shared mmap regions do not propagate to fds
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let fd = memfd_create(
-                        &CString::new("reldrv-test").unwrap(),
-                        MemFdCreateFlag::empty(),
+            trace(|| {
+                let fd = memfd_create(
+                    &CString::new("reldrv-test").unwrap(),
+                    MemFdCreateFlag::empty(),
+                )
+                .unwrap();
+
+                const LEN: usize = 4096 * 4;
+                unistd::write(fd.as_raw_fd(), &[0u8; LEN]).unwrap();
+
+                checkpoint_take();
+
+                let addr = unsafe {
+                    mman::mmap(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_SHARED,
+                        Some(&fd),
+                        0,
                     )
-                    .unwrap();
+                    .unwrap()
+                };
 
-                    const LEN: usize = 4096 * 4;
-                    unistd::write(fd.as_raw_fd(), &[0u8; LEN]).unwrap();
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
-                    checkpoint_take();
+                assert!(arr.iter().all(|&x| x == 0));
 
-                    let addr = unsafe {
-                        mman::mmap(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
-                            mman::MapFlags::MAP_SHARED,
-                            Some(&fd),
-                            0,
-                        )
-                        .unwrap()
-                    };
+                arr.fill(42);
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                assert!(arr.iter().all(|&x| x == 42));
 
-                    assert!(arr.iter().all(|&x| x == 0));
+                unsafe { mman::munmap(addr, LEN).unwrap() };
 
-                    arr.fill(42);
+                drop(fd);
 
-                    assert!(arr.iter().all(|&x| x == 42));
-
-                    unsafe { mman::munmap(addr, LEN).unwrap() };
-
-                    drop(fd);
-
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                0
+            }),
             0
         )
     }
@@ -1047,49 +1032,45 @@ mod tests {
     fn test_syscall_mremap_maymove() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    const LEN: usize = 4096 * 4;
-                    const NEW_LEN: usize = 4096 * 8;
+                const LEN: usize = 4096 * 4;
+                const NEW_LEN: usize = 4096 * 8;
 
-                    let addr = unsafe {
-                        mman::mmap::<OwnedFd>(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
-                            mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
-                            None,
-                            0,
-                        )
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
+                        None,
+                        0,
+                    )
+                    .unwrap()
+                };
+
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+
+                // ensure we can write the mmap-ped memory
+                arr.fill(42);
+
+                let addr_new = unsafe {
+                    mman::mremap(addr, LEN, NEW_LEN, mman::MRemapFlags::MREMAP_MAYMOVE, None)
                         .unwrap()
-                    };
+                };
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                let arr_new = unsafe { slice::from_raw_parts_mut(addr_new as *mut u8, NEW_LEN) };
 
-                    // ensure we can write the mmap-ped memory
-                    arr.fill(42);
+                // ensure we can read and write the mmap-ped memory
+                arr_new.fill(84);
+                arr_new.iter().all(|&x| x == 84);
 
-                    let addr_new = unsafe {
-                        mman::mremap(addr, LEN, NEW_LEN, mman::MRemapFlags::MREMAP_MAYMOVE, None)
-                            .unwrap()
-                    };
+                unsafe { mman::munmap(addr, LEN).unwrap() };
 
-                    let arr_new =
-                        unsafe { slice::from_raw_parts_mut(addr_new as *mut u8, NEW_LEN) };
-
-                    // ensure we can read and write the mmap-ped memory
-                    arr_new.fill(84);
-                    arr_new.iter().all(|&x| x == 84);
-
-                    unsafe { mman::munmap(addr, LEN).unwrap() };
-
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1099,48 +1080,44 @@ mod tests {
     fn test_syscall_mremap_may_not_move() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    const LEN: usize = 4096 * 4;
-                    const NEW_LEN: usize = 4096 * 2;
+                const LEN: usize = 4096 * 4;
+                const NEW_LEN: usize = 4096 * 2;
 
-                    let addr = unsafe {
-                        mman::mmap::<OwnedFd>(
-                            None,
-                            NonZeroUsize::new(LEN).unwrap(),
-                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
-                            mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
-                            None,
-                            0,
-                        )
-                        .unwrap()
-                    };
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new(LEN).unwrap(),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_ANONYMOUS | mman::MapFlags::MAP_PRIVATE,
+                        None,
+                        0,
+                    )
+                    .unwrap()
+                };
 
-                    let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
+                let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
-                    // ensure we can write the mmap-ped memory
-                    arr.fill(42);
+                // ensure we can write the mmap-ped memory
+                arr.fill(42);
 
-                    let addr_new = unsafe {
-                        mman::mremap(addr, LEN, NEW_LEN, mman::MRemapFlags::empty(), None).unwrap()
-                    };
+                let addr_new = unsafe {
+                    mman::mremap(addr, LEN, NEW_LEN, mman::MRemapFlags::empty(), None).unwrap()
+                };
 
-                    let arr_new =
-                        unsafe { slice::from_raw_parts_mut(addr_new as *mut u8, NEW_LEN) };
+                let arr_new = unsafe { slice::from_raw_parts_mut(addr_new as *mut u8, NEW_LEN) };
 
-                    // ensure we can read and write the mmap-ped memory
-                    arr_new.fill(84);
-                    arr_new.iter().all(|&x| x == 84);
+                // ensure we can read and write the mmap-ped memory
+                arr_new.fill(84);
+                arr_new.iter().all(|&x| x == 84);
 
-                    unsafe { mman::munmap(addr, NEW_LEN).unwrap() };
+                unsafe { mman::munmap(addr, NEW_LEN).unwrap() };
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1151,17 +1128,14 @@ mod tests {
     fn test_syscall_unsupported() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    let fd = File::open("/dev/zero").unwrap();
-                    let mut buf = [0u8; 16];
-                    uio::readv(fd, &mut [IoSliceMut::new(&mut buf)]).unwrap();
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                let fd = File::open("/dev/zero").unwrap();
+                let mut buf = [0u8; 16];
+                uio::readv(fd, &mut [IoSliceMut::new(&mut buf)]).unwrap();
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1171,15 +1145,12 @@ mod tests {
     fn test_rdtsc() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    let _tsc = unsafe { _rdtsc() };
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                let _tsc = unsafe { _rdtsc() };
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1189,22 +1160,19 @@ mod tests {
     fn test_rdtsc_loop() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let mut prev_tsc: u64 = 0;
-                    checkpoint_take();
+            trace(|| {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
 
-                    for _ in 0..1000 {
-                        let tsc = unsafe { _rdtsc() };
-                        assert!(tsc > prev_tsc);
-                        prev_tsc = tsc;
-                    }
+                for _ in 0..1000 {
+                    let tsc = unsafe { _rdtsc() };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1214,13 +1182,10 @@ mod tests {
     fn test_rdtsc_outside_protected_region() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    unsafe { _rdtsc() };
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                unsafe { _rdtsc() };
+                0
+            }),
             0
         )
     }
@@ -1230,17 +1195,14 @@ mod tests {
     fn test_rdtscp() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    let mut aux = MaybeUninit::uninit();
-                    let _tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-                    let _aux = unsafe { aux.assume_init() };
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                checkpoint_take();
+                let mut aux = MaybeUninit::uninit();
+                let _tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                let _aux = unsafe { aux.assume_init() };
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1250,23 +1212,20 @@ mod tests {
     fn test_rdtscp_loop() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let mut prev_tsc: u64 = 0;
-                    checkpoint_take();
+            trace(|| {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
 
-                    for _ in 0..1000 {
-                        let mut aux = MaybeUninit::uninit();
-                        let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-                        assert!(tsc > prev_tsc);
-                        prev_tsc = tsc;
-                    }
+                for _ in 0..1000 {
+                    let mut aux = MaybeUninit::uninit();
+                    let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1277,23 +1236,20 @@ mod tests {
     fn test_rdpid() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    let _processor_id: u64;
-                    unsafe {
-                        asm!(
-                            "rdpid rax",
-                            out("rax") _processor_id,
-                        );
-                    }
+                let _processor_id: u64;
+                unsafe {
+                    asm!(
+                        "rdpid rax",
+                        out("rax") _processor_id,
+                    );
+                }
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1303,14 +1259,11 @@ mod tests {
     fn test_rdtscp_outside_protected_region() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let mut aux = MaybeUninit::uninit();
-                    unsafe { __rdtscp(aux.as_mut_ptr()) };
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+            trace(|| {
+                let mut aux = MaybeUninit::uninit();
+                unsafe { __rdtscp(aux.as_mut_ptr()) };
+                0
+            }),
             0
         )
     }
@@ -1320,24 +1273,21 @@ mod tests {
     fn test_cpuid() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    unsafe {
-                        __cpuid_count(0, 0);
-                        __cpuid_count(1, 0);
-                        __cpuid_count(2, 0);
-                        __cpuid_count(3, 0);
-                        __cpuid_count(6, 0);
-                        __cpuid_count(7, 0);
-                        __cpuid_count(7, 1);
-                        __cpuid_count(7, 2);
-                    }
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default(),
-            ),
+            trace(|| {
+                checkpoint_take();
+                unsafe {
+                    __cpuid_count(0, 0);
+                    __cpuid_count(1, 0);
+                    __cpuid_count(2, 0);
+                    __cpuid_count(3, 0);
+                    __cpuid_count(6, 0);
+                    __cpuid_count(7, 0);
+                    __cpuid_count(7, 1);
+                    __cpuid_count(7, 2);
+                }
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1347,24 +1297,21 @@ mod tests {
     fn test_syscall_clock_gettime() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
-                    let mut t = MaybeUninit::<libc::timespec>::uninit();
+            trace(|| {
+                checkpoint_take();
+                let mut t = MaybeUninit::<libc::timespec>::uninit();
 
-                    unsafe {
-                        libc::syscall(
-                            libc::SYS_clock_gettime,
-                            libc::CLOCK_MONOTONIC,
-                            t.as_mut_ptr(),
-                        )
-                    };
+                unsafe {
+                    libc::syscall(
+                        libc::SYS_clock_gettime,
+                        libc::CLOCK_MONOTONIC,
+                        t.as_mut_ptr(),
+                    )
+                };
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1395,17 +1342,14 @@ mod tests {
     fn test_syscall_fork_in_protected_region() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    unsafe { fork().unwrap() };
+                unsafe { fork().unwrap() };
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1416,17 +1360,14 @@ mod tests {
     fn test_syscall_execve() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    checkpoint_take();
+            trace(|| {
+                checkpoint_take();
 
-                    Command::new("/usr/bin/true").exec();
+                Command::new("/usr/bin/true").exec();
 
-                    checkpoint_fini();
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                checkpoint_fini();
+                0
+            }),
             0
         )
     }
@@ -1436,13 +1377,12 @@ mod tests {
     fn test_register_preservation_after_checkpoint() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let result: u64;
+            trace(|| {
+                let result: u64;
 
-                    unsafe {
-                        asm!(
-                            "
+                unsafe {
+                    asm!(
+                        "
                             mov rdi, 12345
                             push rbx
                             push rdx
@@ -1516,21 +1456,19 @@ mod tests {
                             mov rax, 1
                             2:
                             ",
-                            out("rcx") _,
-                            out("r11") _,
-                            out("rdi") _,
-                            lateout("rax") result,
-                        )
-                    }
+                        out("rcx") _,
+                        out("r11") _,
+                        out("rdi") _,
+                        lateout("rax") result,
+                    )
+                }
 
-                    if result == 1 {
-                        return 1;
-                    }
+                if result == 1 {
+                    return 1;
+                }
 
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                0
+            }),
             0
         )
     }
@@ -1541,38 +1479,35 @@ mod tests {
     fn test_oom_handling() {
         setup();
         assert_eq!(
-            trace(
-                || {
-                    let size: usize = (procfs::Meminfo::new().unwrap().mem_free as f64 * 0.75) as _; // 75% free mem
-                    println!("size = {}", size);
-                    let addr = unsafe {
-                        mman::mmap::<OwnedFd>(
-                            None,
-                            NonZeroUsize::new_unchecked(size),
-                            mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
-                            mman::MapFlags::MAP_PRIVATE | mman::MapFlags::MAP_ANONYMOUS,
-                            None,
-                            0,
-                        )
-                        .map_err(|_| std::process::exit(1))
-                        .unwrap()
-                    };
+            trace(|| {
+                let size: usize = (procfs::Meminfo::new().unwrap().mem_free as f64 * 0.75) as _; // 75% free mem
+                println!("size = {}", size);
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new_unchecked(size),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_PRIVATE | mman::MapFlags::MAP_ANONYMOUS,
+                        None,
+                        0,
+                    )
+                    .map_err(|_| std::process::exit(1))
+                    .unwrap()
+                };
 
-                    let buf = unsafe { slice::from_raw_parts_mut(addr as *mut u8, size) };
+                let buf = unsafe { slice::from_raw_parts_mut(addr as *mut u8, size) };
 
-                    checkpoint_take();
+                checkpoint_take();
 
-                    for c in buf.chunks_mut(4096) {
-                        c[0] = 42;
-                    }
+                for c in buf.chunks_mut(4096) {
+                    c[0] = 42;
+                }
 
-                    checkpoint_fini();
-                    checkpoint_sync();
+                checkpoint_fini();
+                checkpoint_sync();
 
-                    0
-                },
-                CheckCoordinatorOptions::default()
-            ),
+                0
+            }),
             0
         )
     }

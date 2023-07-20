@@ -23,6 +23,8 @@ log-panics = { version = "2", features = ["with-backtrace"]}
 lazy-init = "*"
 perf-event2 = "0.6.3"
 thiserror = "1.0.43"
+human_bytes = "0.4.2"
+lazy_static = "1.4.0"
 
 [build-dependencies]
 cc = "1.0.78"

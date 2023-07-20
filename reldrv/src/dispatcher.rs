@@ -3,6 +3,7 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
+    check_coord::CheckCoordinator,
     error::Result,
     process::{dirty_pages::IgnoredPagesProvider, Process},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
@@ -13,6 +14,7 @@ use crate::{
         StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
         StandardSyscallHandler, SyscallHandlerExitAction,
     },
+    throttler::Throttler,
 };
 
 pub struct Dispatcher<'a> {
@@ -22,6 +24,7 @@ pub struct Dispatcher<'a> {
     signal_handlers: Vec<&'a (dyn SignalHandler + Sync)>,
     segment_event_handlers: Vec<&'a (dyn SegmentEventHandler + Sync)>,
     ignored_pages_providers: Vec<&'a (dyn IgnoredPagesProvider + Sync)>,
+    throttlers: Vec<&'a (dyn Throttler + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -33,6 +36,7 @@ impl<'a> Dispatcher<'a> {
             signal_handlers: Vec::new(),
             segment_event_handlers: Vec::new(),
             ignored_pages_providers: Vec::new(),
+            throttlers: Vec::new(),
         }
     }
 
@@ -62,11 +66,29 @@ impl<'a> Dispatcher<'a> {
         self.segment_event_handlers.push(handler)
     }
 
+    pub fn install_throttler(&mut self, throttler: &'a (dyn Throttler + Sync)) {
+        self.throttlers.push(throttler)
+    }
+
     pub fn install_ignored_pages_provider(
         &mut self,
         provider: &'a (dyn IgnoredPagesProvider + Sync),
     ) {
         self.ignored_pages_providers.push(provider)
+    }
+
+    pub fn dispatch_throttle(
+        &self,
+        nr_dirty_pages: usize,
+        check_coord: &CheckCoordinator,
+    ) -> Option<&'a (dyn Throttler + Sync)> {
+        for &handler in &self.throttlers {
+            if handler.should_throttle(nr_dirty_pages, check_coord) {
+                return Some(handler);
+            }
+        }
+
+        None
     }
 }
 
