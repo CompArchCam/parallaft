@@ -79,11 +79,10 @@ impl SignalHandler for CheckpointSizeLimiter {
 
 impl SegmentEventHandler for CheckpointSizeLimiter {
     fn handle_segment_created(&self, _segment: &Segment) -> Result<()> {
-        info!("SEGMENT CREATED");
-        self.fpt_fd.lock().as_mut().map(|fd| {
-            info!("Counter resetted");
-            fd.clear_fault().unwrap()
-        });
+        self.fpt_fd
+            .lock()
+            .as_mut()
+            .map(|fd| fd.clear_fault().unwrap());
 
         Ok(())
     }
