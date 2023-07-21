@@ -161,7 +161,7 @@ fn scale(count: perf_event::CountAndTime) -> u64 {
 }
 
 impl Statistics for CacheStatsCollector {
-    fn name(&self) -> &'static str {
+    fn class_name(&self) -> &'static str {
         "cache"
     }
 

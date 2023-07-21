@@ -6,11 +6,12 @@ pub mod dirty_pages;
 pub mod timing;
 
 pub trait Statistics {
-    fn name(&self) -> &'static str;
+    fn class_name(&self) -> &'static str;
 
     fn statistics(&self) -> Box<[(&'static str, Value)]>;
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Value {
     Float(f64),
     Int(u64),
@@ -34,11 +35,17 @@ impl<'a> StatisticsSet<'a> {
         Self { stats }
     }
 
-    pub fn all_statistics(&self) -> Box<[(&'static str, Value)]> {
+    pub fn all_statistics(&self) -> Box<[(String, Value)]> {
         let mut s = Vec::new();
 
-        for ss in &self.stats {
-            s.append(&mut ss.statistics().into_vec())
+        for &ss in &self.stats {
+            let mut stats_data = ss
+                .statistics()
+                .into_iter()
+                .map(|(stat_name, value)| (format!("{}.{}", ss.class_name(), stat_name), *value))
+                .collect();
+
+            s.append(&mut stats_data);
         }
 
         s.into_boxed_slice()

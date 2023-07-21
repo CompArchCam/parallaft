@@ -30,7 +30,7 @@ impl<'a> CounterCollector<'a> {
 }
 
 impl<'a> Statistics for CounterCollector<'a> {
-    fn name(&self) -> &'static str {
+    fn class_name(&self) -> &'static str {
         "counter"
     }
 

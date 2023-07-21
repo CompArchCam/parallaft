@@ -53,7 +53,7 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
 }
 
 impl Statistics for DirtyPageStatsCollector {
-    fn name(&self) -> &'static str {
+    fn class_name(&self) -> &'static str {
         "dirty_pages"
     }
 

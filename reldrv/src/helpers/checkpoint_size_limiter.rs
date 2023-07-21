@@ -111,7 +111,7 @@ impl ScheduleCheckpointReady for CheckpointSizeLimiter {
 }
 
 impl Statistics for CheckpointSizeLimiter {
-    fn name(&self) -> &'static str {
+    fn class_name(&self) -> &'static str {
         "checkpoint_size_limiter"
     }
 
