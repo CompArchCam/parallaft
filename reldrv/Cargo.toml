@@ -26,6 +26,7 @@ thiserror = "1.0.43"
 human_bytes = "0.4.2"
 lazy_static = "1.4.0"
 libfpt-rs = { path = "../libfpt-rs" }
+clap-num = "1.0.2"
 
 [build-dependencies]
 cc = "1.0.78"
@@ -38,4 +39,5 @@ tempfile = "3"
 debug = true
 
 [features]
-default = []
+default = ["intel_cat"]
+intel_cat = []

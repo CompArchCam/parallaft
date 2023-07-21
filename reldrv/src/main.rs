@@ -29,6 +29,7 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
 
 use clap::Parser;
+use clap_num::maybe_hex;
 
 use log::{info, warn};
 
@@ -70,6 +71,16 @@ struct CliArgs {
     /// Checker CPU set
     #[arg(short, long, use_value_delimiter = true)]
     checker_cpu_set: Vec<usize>,
+
+    #[cfg(feature = "intel_cat")]
+    /// Cache allocation masks for the main process. Intel only.
+    #[arg(long, value_parser=maybe_hex::<u32>)]
+    main_cache_mask: Option<u32>,
+
+    #[cfg(feature = "intel_cat")]
+    /// Cache allocation Mask for checker processes. Intel only.
+    #[arg(long, value_parser=maybe_hex::<u32>)]
+    checker_cache_mask: Option<u32>,
 
     /// Poll non-blocking waitpid instead of using blocking waitpid.
     #[arg(long)]
@@ -171,6 +182,8 @@ struct RelShellOptions {
     // affinity setter plugin options
     main_cpu_set: Vec<usize>,
     checker_cpu_set: Vec<usize>,
+    #[cfg(feature = "intel_cat")]
+    cache_masks: Option<(u32, u32)>,
 
     // checkpoint size limiter plugin options
     checkpoint_size_watermark: usize,
@@ -187,6 +200,7 @@ impl Default for RelShellOptions {
             memory_overhead_watermark: 0,
             main_cpu_set: Vec::new(),
             checker_cpu_set: Vec::new(),
+            cache_masks: None,
             checkpoint_size_watermark: 0,
         }
     }
@@ -264,7 +278,16 @@ fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let vdso_remover = VdsoRemover::new();
     vdso_remover.install(&mut disp);
 
+    #[cfg(not(feature = "intel_cat"))]
     let affinity_setter = AffinitySetter::new(&options.main_cpu_set, &options.checker_cpu_set);
+
+    #[cfg(feature = "intel_cat")]
+    let affinity_setter = AffinitySetter::new_with_cache_allocation(
+        &options.main_cpu_set,
+        &options.checker_cpu_set,
+        options.cache_masks,
+    );
+
     affinity_setter.install(&mut disp);
 
     let checkpoint_size_limiter = CheckpointSizeLimiter::new(options.checkpoint_size_watermark);
@@ -564,6 +587,12 @@ fn main() {
         cli.ignore_check_errors,
     );
 
+    assert!(
+        (cli.main_cache_mask.is_none() && cli.checker_cache_mask.is_none())
+            || (cli.main_cache_mask.is_some() && cli.checker_cache_mask.is_some()),
+        "You may only specify none of both of main_cache_mask and checker_cache_mask"
+    );
+
     let exit_status = run(
         Command::new(cli.command).args(cli.args),
         RelShellOptions {
@@ -576,6 +605,10 @@ fn main() {
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
             checkpoint_size_watermark: cli.checkpoint_size_watermark,
+            cache_masks: cli.main_cache_mask.and_then(|main_cache_mask| {
+                cli.checker_cache_mask
+                    .map(|checker_cache_mask| (main_cache_mask, checker_cache_mask))
+            }),
         },
     );
 

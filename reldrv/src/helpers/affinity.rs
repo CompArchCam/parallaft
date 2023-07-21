@@ -1,3 +1,7 @@
+use std::process::Command;
+
+use log::info;
+
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
@@ -8,13 +12,32 @@ use crate::{
 pub struct AffinitySetter<'a> {
     main_cpu_set: &'a [usize],
     checker_cpu_set: &'a [usize],
+
+    #[cfg(feature = "intel_cat")]
+    cache_masks: Option<(u32, u32)>,
 }
 
+#[allow(unused)]
 impl<'a> AffinitySetter<'a> {
     pub fn new(main_cpu_set: &'a [usize], checker_cpu_set: &'a [usize]) -> Self {
         Self {
             main_cpu_set,
             checker_cpu_set,
+            #[cfg(feature = "intel_cat")]
+            cache_masks: None,
+        }
+    }
+
+    #[cfg(feature = "intel_cat")]
+    pub fn new_with_cache_allocation(
+        main_cpu_set: &'a [usize],
+        checker_cpu_set: &'a [usize],
+        cache_masks: Option<(u32, u32)>,
+    ) -> Self {
+        Self {
+            main_cpu_set,
+            checker_cpu_set,
+            cache_masks,
         }
     }
 }
@@ -22,6 +45,37 @@ impl<'a> AffinitySetter<'a> {
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_main_init(&self, process: &Process) -> Result<()> {
         process.set_cpu_affinity(self.main_cpu_set)?;
+
+        #[cfg(feature = "intel_cat")]
+        if !self.main_cpu_set.is_empty() && !self.checker_cpu_set.is_empty() {
+            if let Some((main_mask, checker_mask)) = self.cache_masks {
+                let output = Command::new("pqos")
+                    .arg("-e")
+                    .arg(format!(
+                        "llc:1=0x{:x};llc:2=0x{:x}",
+                        main_mask, checker_mask
+                    ))
+                    .arg("-a")
+                    .arg(format!(
+                        "llc:1={};llc:2={}",
+                        self.main_cpu_set
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        self.checker_cpu_set
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ))
+                    .output()
+                    .expect("Failed to set cache allocation");
+
+                info!("pqos output: \n{}", String::from_utf8_lossy(&output.stdout));
+                assert!(output.status.success(), "Failed to set cache allocation")
+            }
+        }
 
         Ok(())
     }
