@@ -7,7 +7,7 @@ use nix::libc;
 use nix::sys::stat::Mode;
 use nix::unistd::{self, Pid};
 use nix::{fcntl, Result};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, RawFd};
 
 pub struct FptFd {
     fd: RawFd,
@@ -74,6 +74,12 @@ impl FptFd {
             )
             .map(|x| x as _)
         }
+    }
+}
+
+impl AsRawFd for FptFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
     }
 }
 
