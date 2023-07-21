@@ -72,6 +72,10 @@ struct CliArgs {
     #[arg(short, long, use_value_delimiter = true)]
     checker_cpu_set: Vec<usize>,
 
+    /// Shell CPU set
+    #[arg(short, long, use_value_delimiter = true)]
+    shell_cpu_set: Vec<usize>,
+
     #[cfg(feature = "intel_cat")]
     /// Cache allocation masks for the main process. Intel only.
     #[arg(long, value_parser=maybe_hex::<u32>)]
@@ -81,6 +85,11 @@ struct CliArgs {
     /// Cache allocation Mask for checker processes. Intel only.
     #[arg(long, value_parser=maybe_hex::<u32>)]
     checker_cache_mask: Option<u32>,
+
+    #[cfg(feature = "intel_cat")]
+    /// Cache allocation mask for the shell processes. Intel only.
+    #[arg(long, value_parser=maybe_hex::<u32>)]
+    shell_cache_mask: Option<u32>,
 
     /// Poll non-blocking waitpid instead of using blocking waitpid.
     #[arg(long)]
@@ -187,8 +196,9 @@ struct RelShellOptions {
     // affinity setter plugin options
     main_cpu_set: Vec<usize>,
     checker_cpu_set: Vec<usize>,
+    shell_cpu_set: Vec<usize>,
     #[cfg(feature = "intel_cat")]
-    cache_masks: Option<(u32, u32)>,
+    cache_masks: Option<(u32, u32, u32)>,
 
     // checkpoint size limiter plugin options
     checkpoint_size_watermark: usize,
@@ -205,6 +215,7 @@ impl Default for RelShellOptions {
             memory_overhead_watermark: 0,
             main_cpu_set: Vec::new(),
             checker_cpu_set: Vec::new(),
+            shell_cpu_set: Vec::new(),
             cache_masks: None,
             checkpoint_size_watermark: 0,
         }
@@ -290,6 +301,7 @@ fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let affinity_setter = AffinitySetter::new_with_cache_allocation(
         &options.main_cpu_set,
         &options.checker_cpu_set,
+        &options.shell_cpu_set,
         options.cache_masks,
     );
 
@@ -597,9 +609,9 @@ fn main() {
     );
 
     assert!(
-        (cli.main_cache_mask.is_none() && cli.checker_cache_mask.is_none())
-            || (cli.main_cache_mask.is_some() && cli.checker_cache_mask.is_some()),
-        "You may only specify none of both of main_cache_mask and checker_cache_mask"
+        (cli.main_cache_mask.is_none() && cli.checker_cache_mask.is_none() && cli.shell_cache_mask.is_none())
+            || (cli.main_cache_mask.is_some() && cli.checker_cache_mask.is_some() && cli.shell_cache_mask.is_some()),
+        "You may only specify none of all of main_cache_mask, checker_cache_mask, and shell_cache_mask"
     );
 
     let exit_status = run(
@@ -613,10 +625,14 @@ fn main() {
             memory_overhead_watermark: cli.max_memory_overhead,
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
+            shell_cpu_set: cli.shell_cpu_set,
             checkpoint_size_watermark: cli.checkpoint_size_watermark,
             cache_masks: cli.main_cache_mask.and_then(|main_cache_mask| {
-                cli.checker_cache_mask
-                    .map(|checker_cache_mask| (main_cache_mask, checker_cache_mask))
+                cli.checker_cache_mask.and_then(|checker_cache_mask| {
+                    cli.shell_cache_mask.map(|shell_cache_mask| {
+                        (main_cache_mask, checker_cache_mask, shell_cache_mask)
+                    })
+                })
             }),
         },
     );
