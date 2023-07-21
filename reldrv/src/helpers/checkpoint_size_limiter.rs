@@ -1,4 +1,7 @@
-use std::os::fd::AsRawFd;
+use std::{
+    os::fd::AsRawFd,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{
     check_coord::CheckCoordinator,
@@ -6,6 +9,7 @@ use crate::{
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
+    statistics::{self, Statistics},
     syscall_handlers::{HandlerContext, ProcessLifetimeHook},
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_FULL, TRAP_FPT_WATERMARK, TRAP_FPT_WATERMARK_USER};
@@ -17,6 +21,7 @@ use parking_lot::Mutex;
 pub struct CheckpointSizeLimiter {
     size_watermark: usize,
     fpt_fd: Mutex<Option<FptFd>>,
+    num_triggers: AtomicU64,
 }
 
 impl CheckpointSizeLimiter {
@@ -24,6 +29,7 @@ impl CheckpointSizeLimiter {
         Self {
             size_watermark,
             fpt_fd: Mutex::new(None),
+            num_triggers: AtomicU64::new(0),
         }
     }
 }
@@ -52,6 +58,8 @@ impl SignalHandler for CheckpointSizeLimiter {
             match siginfo.si_code {
                 TRAP_FPT_FULL | TRAP_FPT_WATERMARK | TRAP_FPT_WATERMARK_USER => {
                     info!("Trap: FPT");
+                    self.num_triggers.fetch_add(1, Ordering::SeqCst);
+
                     let mut fpt_fd_mg = self.fpt_fd.lock();
                     let fpt_fd = fpt_fd_mg.as_mut().unwrap();
 
@@ -99,6 +107,20 @@ impl ScheduleCheckpointReady for CheckpointSizeLimiter {
         *self.fpt_fd.lock() = Some(fd);
 
         Ok(())
+    }
+}
+
+impl Statistics for CheckpointSizeLimiter {
+    fn name(&self) -> &'static str {
+        "checkpoint_size_limiter"
+    }
+
+    fn statistics(&self) -> Box<[(&'static str, statistics::Value)]> {
+        vec![(
+            "num_triggers",
+            statistics::Value::Int(self.num_triggers.load(Ordering::SeqCst)),
+        )]
+        .into_boxed_slice()
     }
 }
 

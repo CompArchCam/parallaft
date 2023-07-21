@@ -287,6 +287,7 @@ fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
         &counter_stats,
         &cache_stats,
         &dirty_page_stats,
+        &checkpoint_size_limiter,
     ]);
 
     let memory_based_throttler = MemoryBasedThrottler::new(options.memory_overhead_watermark);
