@@ -43,25 +43,19 @@ pub fn page_diff(
         p1.read_vectored(remote_iov, &mut [local_iov_p1])?;
         p2.read_vectored(remote_iov, &mut [local_iov_p2])?;
 
-        trace!(
-            "page data p1@{:p}:\n{:?}",
-            remote_iov[0].as_ptr(),
-            &buf_p1[..remote_iov.len() * page_size].hex_dump()
-        );
-        trace!(
-            "page data p2@{:p}:\n{:?}",
-            remote_iov[0].as_ptr(),
-            &buf_p2[..remote_iov.len() * page_size].hex_dump()
-        );
-
         if buf_p1 != buf_p2 {
-            info!(
-                "Page data does not match: {:?}",
-                remote_iov
-                    .iter()
-                    .map(|i| i.as_ptr())
-                    .collect::<Vec<*const u8>>()
-            );
+            for ((page1, page2), r) in buf_p1
+                .chunks(page_size)
+                .zip(buf_p2.chunks(page_size))
+                .zip(remote_iov)
+            {
+                if page1 != page2 {
+                    info!("Page mismatch: {:?}", r.as_ptr());
+                    trace!("Page data 1:\n{:?}", page1.hex_dump());
+                    trace!("Page data 2:\n{:?}", page2.hex_dump());
+                }
+            }
+
             return Ok(false);
         }
     }

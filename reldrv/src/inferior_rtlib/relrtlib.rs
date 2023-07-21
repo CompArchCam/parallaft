@@ -6,9 +6,11 @@ use reverie_syscalls::{AddrMut, MemoryAccess};
 use syscalls::SyscallArgs;
 
 use crate::{
+    check_coord::CheckCoordinator,
     dispatcher::{Dispatcher, Installable},
     error::{Error, Result},
-    process::Process,
+    inferior_rtlib::ScheduleCheckpointReady,
+    process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
@@ -17,7 +19,9 @@ use crate::{
     },
 };
 
-const SYSNO_SET_COUNTER_ADDR: usize = CUSTOM_SYSNO_START + 1;
+use super::ScheduleCheckpoint;
+
+pub const SYSNO_SET_COUNTER_ADDR: usize = CUSTOM_SYSNO_START + 1;
 
 pub struct RelRtLib {
     period: u64,
@@ -114,6 +118,11 @@ impl CustomSyscallHandler for RelRtLib {
 
             self.perf_counter.lock().insert(counter).enable().unwrap();
 
+            context
+                .check_coord
+                .dispatcher
+                .handle_ready_to_schedule_checkpoint(context.check_coord)?;
+
             return Ok(SyscallHandlerExitAction::ContinueInferior);
         } else if sysno == SYSNO_CHECKPOINT_TAKE {
             if context.process.pid == context.check_coord.main.pid {
@@ -139,11 +148,8 @@ impl SignalHandler for RelRtLib {
             /* TRAP_PERF */
             {
                 info!("[PID {: >8}] Trap: Perf", context.process.pid);
-                let c = self.get_counter(context.process)?;
-                self.set_counter(context.process, -1_i64 as u64)?;
-                *self.saved_counter_value.lock() = c;
 
-                self.perf_counter.lock().as_mut().unwrap().disable()?;
+                self.schedule_checkpoint(context.check_coord).unwrap();
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
@@ -153,10 +159,42 @@ impl SignalHandler for RelRtLib {
     }
 }
 
+impl ScheduleCheckpoint for RelRtLib {
+    fn schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
+        let addr = self.counter_addr.read();
+
+        if addr.is_none() {
+            return Err(Error::NotSupported);
+        }
+
+        let process = &check_coord.main;
+
+        let c = self.get_counter(&process)?;
+        self.set_counter(&process, -1_i64 as u64)?;
+        *self.saved_counter_value.lock() = c;
+
+        self.perf_counter.lock().as_mut().unwrap().disable()?;
+
+        Ok(())
+    }
+}
+
+impl IgnoredPagesProvider for RelRtLib {
+    fn get_ignored_pages(&self) -> Box<[usize]> {
+        self.counter_addr
+            .read()
+            .map(|addr| vec![addr & (!((*PAGESIZE - 1) as usize))])
+            .unwrap_or(vec![])
+            .into_boxed_slice()
+    }
+}
+
 impl<'a> Installable<'a> for RelRtLib {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_segment_event_handler(self);
         dispatcher.install_custom_syscall_handler(self);
         dispatcher.install_signal_handler(self);
+        dispatcher.install_schedule_checkpoint(self);
+        dispatcher.install_ignored_pages_provider(self);
     }
 }

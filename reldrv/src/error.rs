@@ -17,6 +17,8 @@ pub enum Error {
     UnexpectedSyscall,
     #[error("Unexpected trap made by the inferior")]
     UnexpectedTrap,
+    #[error("Not supported")]
+    NotSupported,
 
     #[error("Other error")]
     Other,
@@ -26,3 +28,19 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub trait IgnoreNotSupportedErrorExt {
+    fn ignore_not_supported_error(self) -> Self;
+}
+
+impl IgnoreNotSupportedErrorExt for Result<()> {
+    fn ignore_not_supported_error(self) -> Self {
+        self.map_or_else(
+            |e| match e {
+                Error::NotSupported => Ok(()),
+                e => Err(e),
+            },
+            |x| Ok(x),
+        )
+    }
+}

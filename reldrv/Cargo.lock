@@ -64,9 +64,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.3.1"
+version = "2.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6776fc96284a0bb647b615056fc496d1fe1644a7ab01829818a6d91cae888b84"
+checksum = "630be753d4e58660abd17930c71b647fe46c27ea6b63cc59e1e3851406972e42"
 
 [[package]]
 name = "bumpalo"
@@ -116,7 +116,7 @@ version = "4.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76e21918af71fb4bcd813230cf549e33d14f73d0326b932b630ce2930332b131"
 dependencies = [
- "bitflags 2.3.1",
+ "bitflags 2.3.3",
  "clap_derive",
  "clap_lex",
  "is-terminal",
@@ -519,6 +519,14 @@ version = "0.2.140"
 source = "git+https://github.com/mbyzhang/libc.git?branch=ptrace-o-allow-tracer-thread-group#a558067ca1f89340da8080eea856339eb2ec03ea"
 
 [[package]]
+name = "libfpt-rs"
+version = "0.1.0"
+dependencies = [
+ "bitflags 1.3.2",
+ "nix 0.26.1",
+]
+
+[[package]]
 name = "link-cplusplus"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -712,7 +720,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "963b5dfa83fa6c28af556b19fc258be88823de8af982469747c6594f48a8b9ba"
 dependencies = [
- "bitflags 2.3.1",
+ "bitflags 2.3.3",
  "perf-event-open-sys2",
 ]
 
@@ -731,7 +739,7 @@ version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfb1d234ee8adf05a183012eccfd02847151029e6151174346660c87a939f181"
 dependencies = [
- "bitflags 2.3.1",
+ "bitflags 2.3.3",
  "c-enum",
  "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
  "memmap2",
@@ -835,6 +843,7 @@ dependencies = [
  "human_bytes",
  "lazy-init",
  "lazy_static",
+ "libfpt-rs",
  "log",
  "log-panics",
  "nix 0.26.1",

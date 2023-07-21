@@ -336,6 +336,8 @@ impl SegmentChain {
         checkpoint: Checkpoint,
         checker: Option<OwnedProcess>,
         on_segment_ready: impl FnOnce(&mut Segment, &Checkpoint) -> Result<bool>,
+        on_segment_created: impl FnOnce(&Segment) -> Result<()>,
+        on_segment_chain_closed: impl FnOnce(&Segment) -> Result<()>,
         on_cleanup_needed: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let checkpoint = Arc::new(checkpoint);
@@ -357,7 +359,16 @@ impl SegmentChain {
                 self.nr_segments.fetch_add(1, Ordering::SeqCst),
             );
             info!("New segment: {:?}", segment);
+            on_segment_created(&segment)?;
+
             self.inner.write().push_back(Arc::new(Mutex::new(segment)));
+        } else {
+            if let Some(last_segment) = self.inner.read().back() {
+                let last_segment = last_segment.lock();
+                on_segment_chain_closed(&last_segment)?;
+            } else {
+                return Err(Error::InvalidState);
+            }
         }
 
         if do_cleanup {
@@ -410,9 +421,19 @@ impl SegmentChain {
 
 #[allow(unused)]
 pub trait SegmentEventHandler {
+    fn handle_segment_created(&self, segment: &Segment) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_segment_chain_closed(&self, segment: &Segment) -> Result<()> {
+        Ok(())
+    }
+
     fn handle_segment_ready(
         &self,
         segment: &mut Segment,
         checkpoint_end_caller: CheckpointCaller,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        Ok(())
+    }
 }

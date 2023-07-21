@@ -35,6 +35,7 @@ use log::{info, warn};
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
+use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
@@ -128,6 +129,10 @@ struct CliArgs {
     #[arg(long, default_value_t = 0)]
     max_memory_overhead: usize,
 
+    /// Checkpoint size watermark in number of pages (0 = unlimited).
+    #[arg(long, default_value_t = 0)]
+    checkpoint_size_watermark: usize,
+
     /// Pause on panic (e.g. when errors are detected), instead of aborting.
     #[arg(long)]
     pause_on_panic: bool,
@@ -166,6 +171,9 @@ struct RelShellOptions {
     // affinity setter plugin options
     main_cpu_set: Vec<usize>,
     checker_cpu_set: Vec<usize>,
+
+    // checkpoint size limiter plugin options
+    checkpoint_size_watermark: usize,
 }
 
 impl Default for RelShellOptions {
@@ -179,6 +187,7 @@ impl Default for RelShellOptions {
             memory_overhead_watermark: 0,
             main_cpu_set: Vec::new(),
             checker_cpu_set: Vec::new(),
+            checkpoint_size_watermark: 0,
         }
     }
 }
@@ -191,6 +200,11 @@ impl RelShellOptions {
 
     pub fn with_max_nr_live_segments(mut self, max_nr_live_segments: usize) -> Self {
         self.max_nr_live_segments = max_nr_live_segments;
+        self
+    }
+
+    pub fn with_checkpoint_size_watermark(mut self, checkpoint_size_watermark: usize) -> Self {
+        self.checkpoint_size_watermark = checkpoint_size_watermark;
         self
     }
 }
@@ -252,6 +266,9 @@ fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
     let affinity_setter = AffinitySetter::new(&options.main_cpu_set, &options.checker_cpu_set);
     affinity_setter.install(&mut disp);
+
+    let checkpoint_size_limiter = CheckpointSizeLimiter::new(options.checkpoint_size_watermark);
+    checkpoint_size_limiter.install(&mut disp);
 
     let time_stats = TimingCollector::new();
     time_stats.install(&mut disp);
@@ -557,6 +574,7 @@ fn main() {
             memory_overhead_watermark: cli.max_memory_overhead,
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
+            checkpoint_size_watermark: cli.checkpoint_size_watermark,
         },
     );
 
@@ -565,6 +583,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::{inferior_rtlib::relrtlib::SYSNO_SET_COUNTER_ADDR, process::PAGESIZE};
 
     use super::*;
 
@@ -586,6 +606,7 @@ mod tests {
         ffi::CString,
         fs::File,
         io::IoSliceMut,
+        marker::PhantomPinned,
         mem::MaybeUninit,
         num::NonZeroUsize,
         os::fd::{AsRawFd, OwnedFd},
@@ -1510,5 +1531,118 @@ mod tests {
             }),
             0
         )
+    }
+
+    fn setup_trace_and_unwrap_with_options(
+        f: impl FnOnce() -> crate::error::Result<()>,
+        options: RelShellOptions,
+    ) {
+        setup();
+
+        assert_eq!(
+            trace_with_options(
+                || {
+                    match f() {
+                        Err(_) => 1,
+                        Ok(_) => 0,
+                    }
+                },
+                options
+            ),
+            0
+        );
+    }
+
+    struct RelRt {
+        counter_addr: *mut u64,
+        _marker: PhantomPinned,
+    }
+
+    impl RelRt {
+        pub fn new() -> Self {
+            let addr = unsafe {
+                mman::mmap::<OwnedFd>(
+                    None,
+                    NonZeroUsize::new_unchecked(*PAGESIZE as _),
+                    mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                    mman::MapFlags::MAP_PRIVATE | mman::MapFlags::MAP_ANONYMOUS,
+                    None,
+                    0,
+                )
+                .unwrap()
+            };
+
+            Self {
+                counter_addr: addr as _,
+                _marker: PhantomPinned,
+            }
+        }
+
+        pub fn enable(&mut self) {
+            unsafe { libc::syscall(SYSNO_SET_COUNTER_ADDR as _, self.counter_addr) };
+        }
+
+        pub fn try_yield(&mut self) {
+            unsafe {
+                asm!(
+                    "
+                        add dword ptr [{0}], 1
+                        jnc 1f
+                        mov rax, 0xff77
+                        syscall
+                        1:
+                    ",
+                    in(reg) self.counter_addr,
+                    out("rcx") _,
+                    out("r11") _,
+                    out("rax") _,
+                )
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_checkpoint_size_limiter() {
+        setup_trace_and_unwrap_with_options(
+            || {
+                let size = (*PAGESIZE * 256) as usize;
+
+                let addr = unsafe {
+                    mman::mmap::<OwnedFd>(
+                        None,
+                        NonZeroUsize::new_unchecked(size),
+                        mman::ProtFlags::PROT_READ | mman::ProtFlags::PROT_WRITE,
+                        mman::MapFlags::MAP_PRIVATE | mman::MapFlags::MAP_ANONYMOUS,
+                        None,
+                        0,
+                    )?
+                };
+
+                dbg!(addr);
+
+                let mut rt = RelRt::new();
+                rt.enable();
+
+                let buf = unsafe { slice::from_raw_parts_mut(addr as *mut u8, size) };
+
+                checkpoint_take();
+
+                for chunk in buf.chunks_mut(*PAGESIZE as usize) {
+                    rt.try_yield();
+                    chunk[0] = 0xde;
+                    chunk[1] = 0xad;
+                    chunk[2] = 0xbe;
+                    chunk[3] = 0xef;
+                }
+
+                unsafe { mman::munmap(addr, size)? };
+
+                Ok(())
+            },
+            RelShellOptions::new().with_checkpoint_size_watermark(16),
+        );
+
+        // TODO: assert that >= 256 / 16 = 16 checkpoints have been taken
     }
 }

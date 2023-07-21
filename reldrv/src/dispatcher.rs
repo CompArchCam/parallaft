@@ -4,7 +4,8 @@ use syscalls::SyscallArgs;
 
 use crate::{
     check_coord::CheckCoordinator,
-    error::Result,
+    error::{Error, Result},
+    inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, Process},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
@@ -17,6 +18,17 @@ use crate::{
     throttler::Throttler,
 };
 
+fn run_handler<T: ?Sized, R>(f: impl Fn(&T) -> Result<R>, handlers: &[&T]) -> Result<R> {
+    let mut ret: Result<R> = Err(Error::NotSupported);
+    for &handler in handlers {
+        ret = f(handler);
+        if let Err(Error::NotSupported) = ret {
+            continue;
+        }
+    }
+    ret
+}
+
 pub struct Dispatcher<'a> {
     process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
     standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
@@ -25,6 +37,8 @@ pub struct Dispatcher<'a> {
     segment_event_handlers: Vec<&'a (dyn SegmentEventHandler + Sync)>,
     ignored_pages_providers: Vec<&'a (dyn IgnoredPagesProvider + Sync)>,
     throttlers: Vec<&'a (dyn Throttler + Sync)>,
+    schedule_checkpoint: Vec<&'a (dyn ScheduleCheckpoint + Sync)>,
+    schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -37,6 +51,8 @@ impl<'a> Dispatcher<'a> {
             segment_event_handlers: Vec::new(),
             ignored_pages_providers: Vec::new(),
             throttlers: Vec::new(),
+            schedule_checkpoint: Vec::new(),
+            schedule_checkpoint_ready_handlers: Vec::new(),
         }
     }
 
@@ -75,6 +91,17 @@ impl<'a> Dispatcher<'a> {
         provider: &'a (dyn IgnoredPagesProvider + Sync),
     ) {
         self.ignored_pages_providers.push(provider)
+    }
+
+    pub fn install_schedule_checkpoint(&mut self, scheduler: &'a (dyn ScheduleCheckpoint + Sync)) {
+        self.schedule_checkpoint.push(scheduler)
+    }
+
+    pub fn install_schedule_checkpoint_ready_handler(
+        &mut self,
+        handler: &'a (dyn ScheduleCheckpointReady + Sync),
+    ) {
+        self.schedule_checkpoint_ready_handlers.push(handler)
     }
 
     pub fn dispatch_throttle(
@@ -330,6 +357,25 @@ impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
         }
 
         pages.into_boxed_slice()
+    }
+}
+
+impl<'a> ScheduleCheckpoint for Dispatcher<'a> {
+    fn schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
+        run_handler(
+            |s| s.schedule_checkpoint(check_coord),
+            &self.schedule_checkpoint,
+        )
+    }
+}
+
+impl<'a> ScheduleCheckpointReady for Dispatcher<'a> {
+    fn handle_ready_to_schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
+        for &handler in &self.schedule_checkpoint_ready_handlers {
+            handler.handle_ready_to_schedule_checkpoint(check_coord)?;
+        }
+
+        Ok(())
     }
 }
 

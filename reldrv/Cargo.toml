@@ -25,6 +25,7 @@ perf-event2 = "0.6.3"
 thiserror = "1.0.43"
 human_bytes = "0.4.2"
 lazy_static = "1.4.0"
+libfpt-rs = { path = "../libfpt-rs" }
 
 [build-dependencies]
 cc = "1.0.78"

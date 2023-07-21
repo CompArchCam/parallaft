@@ -113,6 +113,15 @@ impl Debug for OwnedProcess {
     }
 }
 
+impl Clone for Process {
+    fn clone(&self) -> Self {
+        Self {
+            pid: self.pid,
+            procfs: Lazy::new(),
+        }
+    }
+}
+
 impl Drop for OwnedProcess {
     fn drop(&mut self) {
         let result = kill(self.inner.pid, Signal::SIGKILL);

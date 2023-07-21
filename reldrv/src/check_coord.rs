@@ -42,7 +42,7 @@ pub struct CheckCoordinator<'disp> {
     throttling: Mutex<Option<&'disp (dyn Throttler + Sync)>>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     flags: CheckCoordinatorFlags,
-    dispatcher: &'disp Dispatcher<'disp>,
+    pub dispatcher: &'disp Dispatcher<'disp>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
 
@@ -354,6 +354,8 @@ impl<'disp> CheckCoordinator<'disp> {
                     Ok(false)
                 }
             },
+            |segment| self.dispatcher.handle_segment_created(segment),
+            |segment| self.dispatcher.handle_segment_chain_closed(segment),
             || self.cleanup_committed_segments(),
         )
     }
