@@ -335,6 +335,22 @@ impl<'a> SignalHandler for Dispatcher<'a> {
 }
 
 impl<'a> SegmentEventHandler for Dispatcher<'a> {
+    fn handle_segment_created(&self, segment: &Segment) -> Result<()> {
+        for handler in &self.segment_event_handlers {
+            handler.handle_segment_created(segment)?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_segment_chain_closed(&self, segment: &Segment) -> Result<()> {
+        for handler in &self.segment_event_handlers {
+            handler.handle_segment_chain_closed(segment)?;
+        }
+
+        Ok(())
+    }
+
     fn handle_segment_ready(
         &self,
         segment: &mut Segment,

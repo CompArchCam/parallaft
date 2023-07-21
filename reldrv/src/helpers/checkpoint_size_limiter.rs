@@ -8,11 +8,12 @@ use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
+    segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{self, Statistics},
     syscall_handlers::{HandlerContext, ProcessLifetimeHook},
 };
-use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_FULL, TRAP_FPT_WATERMARK, TRAP_FPT_WATERMARK_USER};
+use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
 use log::info;
 use nix::sys::{ptrace, signal::Signal};
 use parking_lot::Mutex;
@@ -56,14 +57,9 @@ impl SignalHandler for CheckpointSizeLimiter {
         if signal == Signal::SIGTRAP {
             let siginfo = ptrace::getsiginfo(context.process.pid)?;
             match siginfo.si_code {
-                TRAP_FPT_FULL | TRAP_FPT_WATERMARK | TRAP_FPT_WATERMARK_USER => {
+                TRAP_FPT_WATERMARK_USER => {
                     info!("Trap: FPT");
                     self.num_triggers.fetch_add(1, Ordering::SeqCst);
-
-                    let mut fpt_fd_mg = self.fpt_fd.lock();
-                    let fpt_fd = fpt_fd_mg.as_mut().unwrap();
-
-                    fpt_fd.clear_fault().unwrap();
 
                     context
                         .check_coord
@@ -78,6 +74,27 @@ impl SignalHandler for CheckpointSizeLimiter {
         }
 
         Ok(SignalHandlerExitAction::NextHandler)
+    }
+}
+
+impl SegmentEventHandler for CheckpointSizeLimiter {
+    fn handle_segment_created(&self, _segment: &Segment) -> Result<()> {
+        info!("SEGMENT CREATED");
+        self.fpt_fd.lock().as_mut().map(|fd| {
+            info!("Counter resetted");
+            fd.clear_fault().unwrap()
+        });
+
+        Ok(())
+    }
+
+    fn handle_segment_chain_closed(&self, _segment: &Segment) -> Result<()> {
+        self.fpt_fd
+            .lock()
+            .as_mut()
+            .map(|fd| fd.clear_fault().unwrap());
+
+        Ok(())
     }
 }
 
@@ -129,5 +146,6 @@ impl<'a> Installable<'a> for CheckpointSizeLimiter {
         dispatcher.install_process_lifetime_hook(self);
         dispatcher.install_signal_handler(self);
         dispatcher.install_schedule_checkpoint_ready_handler(self);
+        dispatcher.install_segment_event_handler(self);
     }
 }
