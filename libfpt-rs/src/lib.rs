@@ -14,14 +14,17 @@ pub struct FptFd {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct FptFlags: libc::c_int {
-        const ExcludeNonWritableVMA = 0b0001;
-        const SigTrapFull = 0b0010;
-        const SigTrapWatermark = 0b0100;
-        const SigTrapWatermarkUser = 0b1000;
+        const EXCLUDE_NON_WRITABLE_VMA = 0b0001;
+        const SIGTRAP_FULL = 0b0010;
+        const SIGTRAP_WATERMARK = 0b0100;
+        const SIGTRAP_WATERMARK_USER = 0b1000;
     }
 }
+
+pub const TRAP_FPT_FULL: libc::c_int = 0xff77;
+pub const TRAP_FPT_WATERMARK: libc::c_int = 0xff78;
+pub const TRAP_FPT_WATERMARK_USER: libc::c_int = 0xff79;
 
 impl FptFd {
     pub fn new(
