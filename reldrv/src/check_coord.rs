@@ -32,7 +32,7 @@ use crate::syscall_handlers::{
     HandlerContext, ProcessLifetimeHook, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
-use crate::throttler::Throttler;
+use crate::throttlers::Throttler;
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
 pub struct CheckCoordinator<'disp> {

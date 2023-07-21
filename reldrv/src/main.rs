@@ -9,7 +9,7 @@ mod segments;
 mod signal_handlers;
 mod statistics;
 mod syscall_handlers;
-mod throttler;
+mod throttlers;
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -57,8 +57,8 @@ use crate::syscall_handlers::rseq::RseqHandler;
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
 };
-use crate::throttler::memory::MemoryBasedThrottler;
-use crate::throttler::nr_segments::NrSegmentsBasedThrottler;
+use crate::throttlers::memory::MemoryBasedThrottler;
+use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]

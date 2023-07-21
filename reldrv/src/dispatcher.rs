@@ -15,7 +15,7 @@ use crate::{
         StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
         StandardSyscallHandler, SyscallHandlerExitAction,
     },
-    throttler::Throttler,
+    throttlers::Throttler,
 };
 
 fn run_handler<T: ?Sized, R>(f: impl Fn(&T) -> Result<R>, handlers: &[&T]) -> Result<R> {
