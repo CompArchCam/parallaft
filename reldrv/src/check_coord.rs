@@ -53,6 +53,7 @@ bitflags! {
         const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
         const DONT_FORK = 0b00100000;
         const IGNORE_CHECK_ERRORS = 0b01000000;
+        const NO_NR_DIRTY_PAGES_LOGGING = 0b10000000;
     }
 }
 
@@ -92,7 +93,14 @@ impl<'disp> CheckCoordinator<'disp> {
         if pid == self.main.pid {
             info!("Main called checkpoint");
 
-            let nr_dirty_pages = self.main.nr_dirty_pages()?;
+            let nr_dirty_pages = if self
+                .flags
+                .contains(CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING)
+            {
+                0
+            } else {
+                self.main.nr_dirty_pages()?
+            };
 
             assert!(
                 self.pending_sync.lock().is_none(),
