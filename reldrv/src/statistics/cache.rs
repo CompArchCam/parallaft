@@ -1,7 +1,7 @@
 use log::info;
 use nix::unistd::Pid;
 use parking_lot::Mutex;
-use perf_event::events::{Cache, CacheId, CacheOp, CacheResult};
+use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, Hardware};
 
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::error::Result;
@@ -20,6 +20,8 @@ struct CacheCounters {
     dtlb_load_misses: perf_event::Counter,
     dtlb_stores: perf_event::Counter,
     dtlb_store_misses: perf_event::Counter,
+
+    instructions: perf_event::Counter,
 }
 
 pub struct CacheStatsCollector {
@@ -98,6 +100,10 @@ impl CacheStatsCollector {
         .observe_pid(pid.as_raw())
         .build()?;
 
+        let instructions = perf_event::Builder::new(Hardware::INSTRUCTIONS)
+            .observe_pid(pid.as_raw())
+            .build()?;
+
         Ok(CacheCounters {
             ll_loads,
             ll_load_misses,
@@ -108,6 +114,8 @@ impl CacheStatsCollector {
             dtlb_load_misses,
             dtlb_stores,
             dtlb_store_misses,
+
+            instructions,
         })
     }
 }
@@ -126,6 +134,8 @@ impl ProcessLifetimeHook for CacheStatsCollector {
         counters.dtlb_load_misses.enable()?;
         counters.dtlb_stores.enable()?;
         counters.dtlb_store_misses.enable()?;
+
+        counters.instructions.enable()?;
 
         *group = Some(counters);
 
@@ -147,6 +157,8 @@ impl ProcessLifetimeHook for CacheStatsCollector {
         counters.dtlb_load_misses.disable()?;
         counters.dtlb_stores.disable()?;
         counters.dtlb_store_misses.disable()?;
+
+        counters.instructions.disable()?;
 
         Ok(())
     }
@@ -180,6 +192,8 @@ impl Statistics for CacheStatsCollector {
         let dtlb_stores = scale(counters.dtlb_stores.read_count_and_time().unwrap());
         let dtlb_store_misses = scale(counters.dtlb_store_misses.read_count_and_time().unwrap());
 
+        let instructions = scale(counters.instructions.read_count_and_time().unwrap());
+
         vec![
             ("llc_loads_u", Value::Int(ll_loads)),
             ("llc_load_misses_u", Value::Int(ll_load_misses)),
@@ -189,6 +203,7 @@ impl Statistics for CacheStatsCollector {
             ("dtlb_load_misses_u", Value::Int(dtlb_load_misses)),
             ("dtlb_stores_u", Value::Int(dtlb_stores)),
             ("dtlb_store_misses_u", Value::Int(dtlb_store_misses)),
+            ("instructions", Value::Int(instructions)),
         ]
         .into_boxed_slice()
     }
