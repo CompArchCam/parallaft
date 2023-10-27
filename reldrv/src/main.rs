@@ -119,7 +119,7 @@ struct CliArgs {
     /// Don't collect number of dirty pages information.
     /// Collecting them is expensive.
     #[arg(long)]
-    no_nr_dirty_lages_logging: bool,
+    no_nr_dirty_pages_logging: bool,
 
     /// Dump statistics.
     #[arg(long)]
@@ -614,7 +614,7 @@ fn main() {
     );
     check_coord_flags.set(
         CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING,
-        cli.no_nr_dirty_lages_logging,
+        cli.no_nr_dirty_pages_logging,
     );
 
     assert!(
