@@ -145,7 +145,7 @@ fn scale(count: perf_event::CountAndTime) -> u64 {
 
 impl Statistics for PerfStatsCollector {
     fn class_name(&self) -> &'static str {
-        "cache"
+        "perf"
     }
 
     fn statistics(&self) -> Box<[(&'static str, Value)]> {
