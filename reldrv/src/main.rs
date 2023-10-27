@@ -32,6 +32,7 @@ use clap::Parser;
 use clap_num::maybe_hex;
 
 use log::{info, warn};
+use statistics::perf::CounterKind;
 
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::dispatcher::{Dispatcher, Installable};
@@ -44,9 +45,9 @@ use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
-use crate::statistics::cache::CacheStatsCollector;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
+use crate::statistics::perf::PerfStatsCollector;
 use crate::statistics::timing::TimingCollector;
 use crate::statistics::StatisticsSet;
 use crate::syscall_handlers::clone::CloneHandler;
@@ -166,6 +167,10 @@ struct CliArgs {
     #[arg(long, default_value_t = 1000000000)]
     librelrt_checkpoint_period: u64,
 
+    /// Perf counters to sample during the inferior execution.
+    #[arg(long, use_value_delimiter = true)]
+    enabled_perf_counters: Vec<CounterKind>,
+
     command: String,
     args: Vec<String>,
 }
@@ -202,6 +207,9 @@ struct RelShellOptions {
 
     // checkpoint size limiter plugin options
     checkpoint_size_watermark: usize,
+
+    // perf counter plugin options
+    enabled_perf_counters: Vec<CounterKind>,
 }
 
 impl Default for RelShellOptions {
@@ -218,6 +226,7 @@ impl Default for RelShellOptions {
             shell_cpu_set: Vec::new(),
             cache_masks: None,
             checkpoint_size_watermark: 0,
+            enabled_perf_counters: Vec::new(),
         }
     }
 }
@@ -316,7 +325,7 @@ fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let counter_stats = CounterCollector::new(&time_stats);
     counter_stats.install(&mut disp);
 
-    let cache_stats = CacheStatsCollector::new();
+    let cache_stats = PerfStatsCollector::new(options.enabled_perf_counters);
     cache_stats.install(&mut disp);
 
     let dirty_page_stats = DirtyPageStatsCollector::new();
@@ -634,6 +643,7 @@ fn main() {
                     })
                 })
             }),
+            enabled_perf_counters: cli.enabled_perf_counters,
         },
     );
 

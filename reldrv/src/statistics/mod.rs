@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-pub mod cache;
 pub mod counter;
 pub mod dirty_pages;
+pub mod perf;
 pub mod timing;
 
 pub trait Statistics {
