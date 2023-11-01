@@ -3,8 +3,9 @@ use std::{
     mem::MaybeUninit,
 };
 
-use crate::common::{checkpoint_fini, checkpoint_take, setup, trace};
+use crate::common::{checkpoint_fini, checkpoint_take, setup, trace_with_options};
 
+use reldrv::RelShellOptions;
 use serial_test::serial;
 
 #[test]
@@ -12,12 +13,15 @@ use serial_test::serial;
 fn rdtsc() {
     setup();
     assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            let _tsc = unsafe { _rdtsc() };
-            checkpoint_fini();
-            0
-        }),
+        trace_with_options(
+            || {
+                checkpoint_take();
+                let _tsc = unsafe { _rdtsc() };
+                checkpoint_fini();
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }
@@ -27,19 +31,22 @@ fn rdtsc() {
 fn rdtsc_loop() {
     setup();
     assert_eq!(
-        trace(|| {
-            let mut prev_tsc: u64 = 0;
-            checkpoint_take();
+        trace_with_options(
+            || {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
 
-            for _ in 0..1000 {
-                let tsc = unsafe { _rdtsc() };
-                assert!(tsc > prev_tsc);
-                prev_tsc = tsc;
-            }
+                for _ in 0..1000 {
+                    let tsc = unsafe { _rdtsc() };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
 
-            checkpoint_fini();
-            0
-        }),
+                checkpoint_fini();
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }
@@ -49,10 +56,13 @@ fn rdtsc_loop() {
 fn rdtsc_outside_protected_region() {
     setup();
     assert_eq!(
-        trace(|| {
-            unsafe { _rdtsc() };
-            0
-        }),
+        trace_with_options(
+            || {
+                unsafe { _rdtsc() };
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }
@@ -62,14 +72,17 @@ fn rdtsc_outside_protected_region() {
 fn rdtscp() {
     setup();
     assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            let mut aux = MaybeUninit::uninit();
-            let _tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-            let _aux = unsafe { aux.assume_init() };
-            checkpoint_fini();
-            0
-        }),
+        trace_with_options(
+            || {
+                checkpoint_take();
+                let mut aux = MaybeUninit::uninit();
+                let _tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                let _aux = unsafe { aux.assume_init() };
+                checkpoint_fini();
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }
@@ -79,20 +92,23 @@ fn rdtscp() {
 fn rdtscp_loop() {
     setup();
     assert_eq!(
-        trace(|| {
-            let mut prev_tsc: u64 = 0;
-            checkpoint_take();
+        trace_with_options(
+            || {
+                let mut prev_tsc: u64 = 0;
+                checkpoint_take();
 
-            for _ in 0..1000 {
-                let mut aux = MaybeUninit::uninit();
-                let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-                assert!(tsc > prev_tsc);
-                prev_tsc = tsc;
-            }
+                for _ in 0..1000 {
+                    let mut aux = MaybeUninit::uninit();
+                    let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                    assert!(tsc > prev_tsc);
+                    prev_tsc = tsc;
+                }
 
-            checkpoint_fini();
-            0
-        }),
+                checkpoint_fini();
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }
@@ -102,11 +118,14 @@ fn rdtscp_loop() {
 fn rdtscp_outside_protected_region() {
     setup();
     assert_eq!(
-        trace(|| {
-            let mut aux = MaybeUninit::uninit();
-            unsafe { __rdtscp(aux.as_mut_ptr()) };
-            0
-        }),
+        trace_with_options(
+            || {
+                let mut aux = MaybeUninit::uninit();
+                unsafe { __rdtscp(aux.as_mut_ptr()) };
+                0
+            },
+            RelShellOptions::default()
+        ),
         0
     )
 }

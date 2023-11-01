@@ -5,8 +5,8 @@ use nix::{
     sys::signal::{raise, Signal},
     unistd::{fork, ForkResult},
 };
-use reldrv::parent_work;
 pub use reldrv::RelShellOptions;
+use reldrv::{parent_work, RunnerFlags};
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -35,7 +35,12 @@ pub fn trace_with_options(f: impl FnOnce() -> i32, options: RelShellOptions) -> 
 }
 
 pub fn trace(f: impl FnOnce() -> i32) -> i32 {
-    trace_with_options(f, Default::default())
+    let mut options = RelShellOptions::default();
+
+    options.runner_flags.insert(RunnerFlags::DONT_TRAP_CPUID);
+    options.runner_flags.insert(RunnerFlags::DONT_TRAP_RDTSC);
+
+    trace_with_options(f, options)
 }
 
 pub fn checkpoint_take() {
