@@ -51,6 +51,7 @@ pub fn checkpoint_fini() {
     unsafe { libc::syscall(0xff78) };
 }
 
+#[allow(unused)]
 pub fn checkpoint_sync() {
     unsafe { libc::syscall(0xff79) };
 }
