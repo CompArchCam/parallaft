@@ -765,16 +765,24 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Readv {
         fd: i32,
+        #[iovecs_may_written_with_len = len]
+        #[object_may_read]
         iov: Option<Addr<libc::iovec>>,
         len: usize,
     }
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Writev {
         fd: i32,
+        #[iovecs_may_read_with_len = len]
+        #[object_may_read]
         iov: Option<Addr<libc::iovec>>,
         len: usize,
     }
@@ -3607,9 +3615,10 @@ typed_syscall! {
     #[may_read_specified_only]
     #[may_write_specified_only]
     pub struct Getrandom {
+        // The buffer should never be NULL (None), or this represents an invalid call when passed
+        // to the kernel.  Nevertheless, we retain the ability here to represent that invalid call.
+
         #[buf_may_written_with_len = buflen]
-        /// The buffer should never be NULL (None), or this represents an invalid call when passed
-        /// to the kernel.  Nevertheless, we retain the ability here to represent that invalid call.
         buf: Option<AddrMut<u8>>,
         buflen: usize,
         flags: usize,

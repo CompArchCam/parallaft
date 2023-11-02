@@ -440,7 +440,7 @@ macro_rules! typed_syscall {
         [$($optional_entries:tt)*],
         [$($rawtail:ident,)*],
         #[path_ptr_may_read]
-        $(#[$meta:meta])*
+        $(#[$meta:tt])*
         $entry:ident: $t:ty,
         $($tail:tt)*
     ) => {
@@ -467,7 +467,7 @@ macro_rules! typed_syscall {
         [$($optional_entries:tt)*],
         [$($rawtail:ident,)*],
         #[object_may_read]
-        $(#[$meta:meta])*
+        $(#[$meta:tt])*
         $entry:ident: $t:ty,
         $($tail:tt)*
     ) => {
@@ -494,7 +494,7 @@ macro_rules! typed_syscall {
         [$($optional_entries:tt)*],
         [$($rawtail:ident,)*],
         #[buf_may_read_with_len = $len:ident]
-        $(#[$meta:meta])*
+        $(#[$meta:tt])*
         $entry:ident: $t:ty,
         $($tail:tt)*
     ) => {
@@ -502,6 +502,33 @@ macro_rules! typed_syscall {
             @accumulate_entries
             $prefix,
             [$($may_read_entries)* [may_read_buf_with_len, $entry, $len]],
+            [$($may_written_entries)*],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with iovecs_may_read_with_len attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[iovecs_may_read_with_len = $len:ident]
+        $(#[$meta:tt])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)* [may_read_iovecs_with_len, $entry, $len]],
             [$($may_written_entries)*],
             [$($req_entries)*],
             [$($optional_entries)*],
@@ -521,7 +548,7 @@ macro_rules! typed_syscall {
         [$($optional_entries:tt)*],
         [$($rawtail:ident,)*],
         #[object_may_written]
-        $(#[$meta:meta])*
+        $(#[$meta:tt])*
         $entry:ident: $t:ty,
         $($tail:tt)*
     ) => {
@@ -548,7 +575,7 @@ macro_rules! typed_syscall {
         [$($optional_entries:tt)*],
         [$($rawtail:ident,)*],
         #[buf_may_written_with_len = $len:ident]
-        $(#[$meta:meta])*
+        $(#[$meta:tt])*
         $entry:ident: $t:ty,
         $($tail:tt)*
     ) => {
@@ -557,6 +584,33 @@ macro_rules! typed_syscall {
             $prefix,
             [$($may_read_entries)*],
             [$($may_written_entries)* [may_write_buf_with_len, $entry, $len]],
+            [$($req_entries)*],
+            [$($optional_entries)*],
+            [$($rawtail,)*],
+            $(#[$meta])*
+            $entry: $t,
+            $($tail)*
+        }
+    };
+
+    // Munch a required entry with iovecs_may_written_with_len attribute
+    (@accumulate_entries
+        $prefix:tt,
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        [$($req_entries:tt)*],
+        [$($optional_entries:tt)*],
+        [$($rawtail:ident,)*],
+        #[iovecs_may_written_with_len = $len:ident]
+        $(#[$meta:tt])*
+        $entry:ident: $t:ty,
+        $($tail:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_entries
+            $prefix,
+            [$($may_read_entries)*],
+            [$($may_written_entries)* [may_write_iovecs_with_len, $entry, $len]],
             [$($req_entries)*],
             [$($optional_entries)*],
             [$($rawtail,)*],

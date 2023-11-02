@@ -91,6 +91,37 @@ impl<'a, M: MemoryAccess> RangesSyscallMayReadBuilder<'a, M> {
         self
     }
 
+    /// Add address ranges of iovecs that a syscall may read.
+    pub fn may_read_iovecs_with_len(
+        mut self,
+        iovecs: Option<Addr<'a, libc::iovec>>,
+        len: usize,
+    ) -> Self {
+        if self.error.is_some() {
+            return self;
+        }
+
+        if let Some(iovecs) = iovecs {
+            let mut reader = self.memory.reader(iovecs);
+            for _ in 0..len {
+                match reader.read_value() {
+                    Ok(iovec) => {
+                        if let Some(base) = Addr::from_ptr(iovec.iov_base as *const u8) {
+                            self.ranges
+                                .push(unsafe { AddrSlice::from_raw_parts(base, iovec.iov_len) });
+                        }
+                    }
+                    Err(_) => {
+                        self.set_error();
+                        return self;
+                    }
+                }
+            }
+        }
+
+        self
+    }
+
     /// Build the address ranges.
     pub fn build(self) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
         match self.error {
@@ -112,7 +143,7 @@ pub trait SyscallMayWrite<'a, M: MemoryAccess> {
 pub struct RangesSyscallMayWriteBuilder<'a, M: MemoryAccess> {
     ranges: Vec<AddrSliceMut<'a, u8>>,
     error: Option<Errno>,
-    _memory: &'a M,
+    memory: &'a M,
 }
 
 impl<'a, M: MemoryAccess> RangesSyscallMayWriteBuilder<'a, M> {
@@ -121,7 +152,7 @@ impl<'a, M: MemoryAccess> RangesSyscallMayWriteBuilder<'a, M> {
         Self {
             ranges: vec![],
             error: None,
-            _memory: memory,
+            memory,
         }
     }
 
@@ -158,6 +189,37 @@ impl<'a, M: MemoryAccess> RangesSyscallMayWriteBuilder<'a, M> {
             self.ranges
                 .push(unsafe { obj.into().into_addr_slice_mut().as_addr_slice_mut_u8() })
         }
+        self
+    }
+
+    /// Add address ranges of iovecs that a syscall may write.
+    pub fn may_write_iovecs_with_len(
+        mut self,
+        iovecs: Option<Addr<'a, libc::iovec>>,
+        len: usize,
+    ) -> Self {
+        if self.error.is_some() {
+            return self;
+        }
+
+        if let Some(iovecs) = iovecs {
+            let mut reader = self.memory.reader(iovecs);
+            for _ in 0..len {
+                match reader.read_value() {
+                    Ok(iovec) => {
+                        if let Some(base) = AddrMut::from_ptr(iovec.iov_base as *mut u8) {
+                            self.ranges
+                                .push(unsafe { AddrSliceMut::from_raw_parts(base, iovec.iov_len) });
+                        }
+                    }
+                    Err(_) => {
+                        self.set_error();
+                        return self;
+                    }
+                }
+            }
+        }
+
         self
     }
 
