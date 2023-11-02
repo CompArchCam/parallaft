@@ -1560,7 +1560,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Times -> libc::clock_t {
+        #[object_may_written]
         buf: Option<AddrMut<libc::tms>>,
     }
 }
