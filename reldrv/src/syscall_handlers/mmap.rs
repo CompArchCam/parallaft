@@ -129,17 +129,21 @@ impl StandardSyscallHandler for MmapHandler {
 
                     if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
                         // rewrite only if mmap has succeeded
-                        let mmap = mmap
-                            .with_addr(Addr::from_raw(saved_syscall.ret_val as _))
-                            .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
+                        if !mmap.flags().contains(MapFlags::MAP_FIXED)
+                            && !mmap.flags().contains(MapFlags::MAP_FIXED_NOREPLACE)
+                        {
+                            let mmap = mmap
+                                .with_addr(Addr::from_raw(saved_syscall.ret_val as _))
+                                .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
 
-                        let (new_sysno, new_args) = mmap.into_parts();
-                        active_segment
-                            .checker()
-                            .unwrap()
-                            .modify_registers_with(|regs| {
-                                regs.with_sysno(new_sysno).with_syscall_args(new_args)
-                            })?;
+                            let (new_sysno, new_args) = mmap.into_parts();
+                            active_segment
+                                .checker()
+                                .unwrap()
+                                .modify_registers_with(|regs| {
+                                    regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                                })?;
+                        }
                     }
 
                     Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
