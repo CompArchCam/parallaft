@@ -1184,7 +1184,10 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Uname {
+        #[object_may_written]
         buf: Option<AddrMut<libc::utsname>>,
     }
 }
@@ -3108,6 +3111,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct SetRobustList {
         // FIXME: This should be pointer to `robust_list_head`.
         head: Option<AddrMut<libc::c_void>>,
