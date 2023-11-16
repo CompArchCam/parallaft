@@ -1,4 +1,4 @@
-use std::{arch::asm};
+use std::arch::asm;
 
 use crate::common::{checkpoint_fini, checkpoint_take, setup, trace};
 
