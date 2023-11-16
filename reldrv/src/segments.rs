@@ -298,7 +298,11 @@ impl SegmentChain {
     /// Clean up committed segments. Returns a tuple indicating if any segment has errors
     /// unless `ignore_errors` is set, as well as the number of active segments after the cleanup.
     /// Erroneous segments will not be cleaned up unless `ignore_errors` is set.
-    pub fn cleanup_committed_segments(&self, ignore_errors: bool) -> (bool, usize) {
+    pub fn cleanup_committed_segments(
+        &self,
+        ignore_errors: bool,
+        on_segment_removed: impl Fn(&Segment) -> Result<()>,
+    ) -> Result<(bool, usize)> {
         let mut segments = self.inner.write();
         loop {
             let mut should_break = true;
@@ -307,8 +311,9 @@ impl SegmentChain {
                 let front = front.lock();
                 if let SegmentStatus::Checked { has_errors, .. } = front.status {
                     if !ignore_errors && has_errors {
-                        return (true, segments.len());
+                        return Ok((true, segments.len()));
                     }
+                    on_segment_removed(&front)?;
                     mem::drop(front);
                     segments.pop_front();
                     should_break = false;
@@ -319,7 +324,7 @@ impl SegmentChain {
             }
         }
 
-        (false, segments.len())
+        Ok((false, segments.len()))
     }
 
     pub fn get_active_segment_with<R>(
@@ -434,6 +439,14 @@ pub trait SegmentEventHandler {
         segment: &mut Segment,
         checkpoint_end_caller: CheckpointCaller,
     ) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_segment_checked(&self, segment: &Segment) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_segment_removed(&self, segment: &Segment) -> Result<()> {
         Ok(())
     }
 }

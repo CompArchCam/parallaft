@@ -220,6 +220,7 @@ impl<'disp> CheckCoordinator<'disp> {
 
                     match segment.check(&self.dispatcher.get_ignored_pages()) {
                         Ok((result, nr_dirty_pages)) => {
+                            self.dispatcher.handle_segment_checked(&segment).unwrap();
                             outer_nr_dirty_pages = Some(nr_dirty_pages);
 
                             if !result {
@@ -294,7 +295,11 @@ impl<'disp> CheckCoordinator<'disp> {
             .flags
             .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS);
 
-        let (_, new_len) = self.segments.cleanup_committed_segments(ignore_errors);
+        let (_, new_len) = self
+            .segments
+            .cleanup_committed_segments(ignore_errors, |segment| {
+                self.dispatcher.handle_segment_removed(segment)
+            })?;
 
         let mut pending_sync = self.pending_sync.lock();
 
