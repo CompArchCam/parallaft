@@ -25,6 +25,7 @@ bitflags! {
 pub const TRAP_FPT_FULL: libc::c_int = 0xff77;
 pub const TRAP_FPT_WATERMARK: libc::c_int = 0xff78;
 pub const TRAP_FPT_WATERMARK_USER: libc::c_int = 0xff79;
+pub const FPT_DEV: &'static str = "/dev/fpt";
 
 impl FptFd {
     pub fn new(
@@ -33,7 +34,7 @@ impl FptFd {
         flags: FptFlags,
         watermark: Option<usize>,
     ) -> Result<Self> {
-        let fd = fcntl::open("/dev/fpt", OFlag::O_RDONLY, Mode::empty())?;
+        let fd = fcntl::open(FPT_DEV, OFlag::O_RDONLY, Mode::empty())?;
 
         unsafe {
             ioctl::fptioc_attach_process(
