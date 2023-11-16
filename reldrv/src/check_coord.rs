@@ -89,6 +89,7 @@ impl<'disp> CheckCoordinator<'disp> {
     ) -> Result<()>
     where
         's: 'scope,
+        's: 'disp,
     {
         if pid == self.main.pid {
             info!("Main called checkpoint");
@@ -173,7 +174,11 @@ impl<'disp> CheckCoordinator<'disp> {
                     )
                 };
 
-                self.dispatcher.handle_checker_init(&checker);
+                self.dispatcher.handle_checker_init(&HandlerContext {
+                    process: &checker,
+                    check_coord: self,
+                    scope,
+                });
 
                 if !self
                     .flags
@@ -248,7 +253,14 @@ impl<'disp> CheckCoordinator<'disp> {
                         }
                     }
                     self.dispatcher
-                        .handle_checker_fini(&Process::new(pid), outer_nr_dirty_pages) // TODO: process may have terminated
+                        .handle_checker_fini(
+                            outer_nr_dirty_pages,
+                            &HandlerContext {
+                                process: &Process::new(pid),
+                                check_coord: self,
+                                scope,
+                            },
+                        ) // TODO: process may have terminated
                         .unwrap(); // TODO: error handling
 
                     drop(segment);

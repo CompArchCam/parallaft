@@ -19,7 +19,7 @@ use nix::{
         signal::{kill, Signal},
         wait::{waitpid, WaitStatus},
     },
-    unistd::Pid,
+    unistd::{getpid, Pid},
 };
 
 lazy_static! {
@@ -38,6 +38,10 @@ impl Process {
             pid,
             procfs: Lazy::new(),
         }
+    }
+
+    pub fn shell() -> Self {
+        Process::new(getpid())
     }
 
     pub fn procfs(&self) -> Result<&procfs::process::Process> {

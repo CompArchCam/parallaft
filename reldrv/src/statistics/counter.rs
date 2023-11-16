@@ -6,8 +6,7 @@ use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
     syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
-        SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE,
+        HandlerContext, ProcessLifetimeHook, StandardSyscallHandler, SyscallHandlerExitAction,
     },
 };
 
@@ -65,25 +64,17 @@ impl<'a> StandardSyscallHandler for CounterCollector<'a> {
     }
 }
 
-impl<'a> CustomSyscallHandler for CounterCollector<'a> {
-    fn handle_custom_syscall_entry(
-        &self,
-        sysno: usize,
-        _args: syscalls::SyscallArgs,
-        context: &HandlerContext,
-    ) -> Result<SyscallHandlerExitAction> {
-        if context.process.pid == context.check_coord.main.pid
-            && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
-        {
-            self.checkpoint_count.fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(SyscallHandlerExitAction::NextHandler)
+impl<'a> ProcessLifetimeHook for CounterCollector<'a> {
+    fn handle_all_fini(&self, context: &HandlerContext) -> Result<()> {
+        let epoch = context.check_coord.epoch();
+        self.checkpoint_count.store(epoch as _, Ordering::SeqCst);
+        Ok(())
     }
 }
 
 impl<'a, 'c> Installable<'a> for CounterCollector<'c> {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_custom_syscall_handler(self);
+        dispatcher.install_process_lifetime_hook(self);
     }
 }

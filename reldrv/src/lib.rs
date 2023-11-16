@@ -237,12 +237,18 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
     let inferior = OwnedProcess::new(child_pid);
 
-    disp.handle_main_init(&inferior).unwrap();
     let mut exit_status = None;
 
     let check_coord = CheckCoordinator::new(inferior, options.check_coord_flags, &disp);
 
     std::thread::scope(|scope| {
+        disp.handle_main_init(&HandlerContext {
+            process: &check_coord.main,
+            check_coord: &check_coord,
+            scope,
+        })
+        .unwrap();
+
         check_coord.main.resume().unwrap();
 
         let mut main_finished = false;
@@ -268,7 +274,15 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                     if pid == check_coord.main.pid {
                         main_finished = true;
 
-                        disp.handle_main_fini(status).unwrap();
+                        disp.handle_main_fini(
+                            status,
+                            &HandlerContext {
+                                process: &check_coord.main,
+                                check_coord: &check_coord,
+                                scope,
+                            },
+                        )
+                        .unwrap();
 
                         exit_status = Some(status);
 
@@ -412,7 +426,12 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
             }
         }
 
-        disp.handle_all_fini().unwrap();
+        disp.handle_all_fini(&HandlerContext {
+            process: &check_coord.main,
+            check_coord: &check_coord,
+            scope,
+        })
+        .unwrap();
 
         if options.runner_flags.contains(RunnerFlags::DUMP_STATS) || options.stats_output.is_some()
         {

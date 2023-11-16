@@ -6,7 +6,7 @@ use crate::{
     check_coord::CheckCoordinator,
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::{dirty_pages::IgnoredPagesProvider, Process},
+    process::dirty_pages::IgnoredPagesProvider,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
@@ -121,11 +121,11 @@ impl<'a> Dispatcher<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
-    generate_event_handler!(process_lifetime_hooks, handle_main_init, process: &Process);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_init, process: &Process);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_fini, process: &Process, handle_checker_fini: Option<usize>);
-    generate_event_handler!(process_lifetime_hooks, handle_all_fini);
-    generate_event_handler!(process_lifetime_hooks, handle_main_fini, ret_val: i32);
+    generate_event_handler!(process_lifetime_hooks, handle_main_init, context: &HandlerContext);
+    generate_event_handler!(process_lifetime_hooks, handle_checker_init, context: &HandlerContext);
+    generate_event_handler!(process_lifetime_hooks, handle_checker_fini, nr_dirty_pages: Option<usize>, context: &HandlerContext);
+    generate_event_handler!(process_lifetime_hooks, handle_all_fini, context: &HandlerContext);
+    generate_event_handler!(process_lifetime_hooks, handle_main_fini, ret_val: i32, context: &HandlerContext);
 }
 
 impl<'a> StandardSyscallHandler for Dispatcher<'a> {

@@ -1,13 +1,12 @@
 use std::process::Command;
 
 use log::info;
-use nix::unistd::getpid;
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
     process::Process,
-    syscall_handlers::ProcessLifetimeHook,
+    syscall_handlers::{HandlerContext, ProcessLifetimeHook},
 };
 
 pub struct AffinitySetter<'a> {
@@ -52,10 +51,10 @@ impl<'a> AffinitySetter<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
-    fn handle_main_init(&self, process: &Process) -> Result<()> {
-        Process::new(getpid()).set_cpu_affinity(self.shell_cpu_set)?;
+    fn handle_main_init(&self, context: &HandlerContext) -> Result<()> {
+        Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
-        process.set_cpu_affinity(self.main_cpu_set)?;
+        context.process.set_cpu_affinity(self.main_cpu_set)?;
 
         #[cfg(feature = "intel_cat")]
         if !self.main_cpu_set.is_empty()
@@ -99,8 +98,8 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         Ok(())
     }
 
-    fn handle_checker_init(&self, process: &Process) -> Result<()> {
-        process.set_cpu_affinity(self.checker_cpu_set)?;
+    fn handle_checker_init(&self, context: &HandlerContext) -> Result<()> {
+        context.process.set_cpu_affinity(self.checker_cpu_set)?;
 
         Ok(())
     }

@@ -36,7 +36,7 @@ impl CheckpointSizeLimiter {
 }
 
 impl ProcessLifetimeHook for CheckpointSizeLimiter {
-    fn handle_main_fini(&self, _ret_val: i32) -> Result<()> {
+    fn handle_main_fini(&self, _ret_val: i32, _context: &HandlerContext) -> Result<()> {
         if self.size_watermark == 0 {
             return Ok(());
         }

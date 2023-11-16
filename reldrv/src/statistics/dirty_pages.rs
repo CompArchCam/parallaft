@@ -1,8 +1,8 @@
 use parking_lot::Mutex;
 
 use crate::dispatcher::Dispatcher;
-use crate::process::Process;
-use crate::syscall_handlers::ProcessLifetimeHook;
+
+use crate::syscall_handlers::{HandlerContext, ProcessLifetimeHook};
 use crate::{dispatcher::Installable, error::Result};
 
 use super::{Statistics, Value};
@@ -43,7 +43,11 @@ impl DirtyPageStatsCollector {
 }
 
 impl ProcessLifetimeHook for DirtyPageStatsCollector {
-    fn handle_checker_fini(&self, _process: &Process, nr_dirty_pages: Option<usize>) -> Result<()> {
+    fn handle_checker_fini(
+        &self,
+        nr_dirty_pages: Option<usize>,
+        _context: &HandlerContext,
+    ) -> Result<()> {
         if let Some(nr_dirty_pages) = nr_dirty_pages {
             self.avg.update(nr_dirty_pages as _);
         }

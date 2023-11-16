@@ -7,7 +7,8 @@ use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, Hardware};
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::error::Result;
 use crate::statistics::Statistics;
-use crate::{process::Process, syscall_handlers::ProcessLifetimeHook};
+use crate::syscall_handlers::HandlerContext;
+use crate::syscall_handlers::ProcessLifetimeHook;
 
 use super::Value;
 
@@ -103,7 +104,8 @@ impl PerfStatsCollector {
 }
 
 impl ProcessLifetimeHook for PerfStatsCollector {
-    fn handle_main_init(&self, process: &Process) -> Result<()> {
+    fn handle_main_init(&self, context: &HandlerContext) -> Result<()> {
+        let process = context.process;
         let mut group = self.counters.lock();
         let mut counters = self
             .counter_kinds
@@ -123,7 +125,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
         Ok(())
     }
 
-    fn handle_main_fini(&self, _ret_val: i32) -> Result<()> {
+    fn handle_main_fini(&self, _ret_val: i32, _context: &HandlerContext) -> Result<()> {
         let mut group = self.counters.lock();
 
         group
