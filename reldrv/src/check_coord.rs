@@ -136,6 +136,8 @@ impl<'disp> CheckCoordinator<'disp> {
                     self.main.clear_dirty_page_bits()?;
                 }
 
+                self.dispatcher.handle_checkpoint_created_pre(pid)?;
+
                 if !is_last_checkpoint_finalizing {
                     let mut throttling = self.throttling.lock();
 
@@ -237,6 +239,8 @@ impl<'disp> CheckCoordinator<'disp> {
                             } else {
                                 info!("Check passed");
                             }
+
+                            segment.mark_as_checked(!result).unwrap();
                         }
                         Err(e) => {
                             error!("Failed to check: {:?}", e);
@@ -400,6 +404,7 @@ impl<'disp> CheckCoordinator<'disp> {
     ) -> Result<()>
     where
         's: 'scope,
+        's: 'disp,
     {
         let syscall = reverie_syscalls::Syscall::from_raw(sysno, args);
         let process = Process::new(pid);
@@ -407,6 +412,7 @@ impl<'disp> CheckCoordinator<'disp> {
         let handler_context = HandlerContext {
             process: &process,
             check_coord: self,
+            scope,
         };
 
         let mut skip_ptrace_syscall = false;
@@ -588,6 +594,7 @@ impl<'disp> CheckCoordinator<'disp> {
     ) -> Result<()>
     where
         's: 'scope,
+        's: 'disp,
     {
         let mut process = Process::new(pid);
         let mut skip_ptrace_syscall = false;
@@ -595,6 +602,7 @@ impl<'disp> CheckCoordinator<'disp> {
         let handler_context = HandlerContext {
             process: &process,
             check_coord: self,
+            scope,
         };
 
         let last_syscall = self
@@ -693,6 +701,7 @@ impl<'disp> CheckCoordinator<'disp> {
                     }
                     SyscallExitAction::Checkpoint => todo!("take a full checkpoint"),
                     SyscallExitAction::Custom => {
+                        // dbg!(&saved_syscall);
                         assert_eq!(ret_val, saved_syscall.ret_val);
 
                         let result = self.dispatcher.handle_standard_syscall_exit_checker(
@@ -736,9 +745,16 @@ impl<'disp> CheckCoordinator<'disp> {
         Ok(())
     }
 
-    pub fn handle_signal(&self, pid: Pid, sig: Signal) -> Result<()> {
-        info!("[PID {: >8}] Signal: {:}", pid, sig);
-
+    pub fn handle_signal<'s, 'scope, 'env>(
+        &'s self,
+        pid: Pid,
+        sig: Signal,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+    {
         let process = Process::new(pid);
 
         let result = self.dispatcher.handle_signal(
@@ -746,14 +762,20 @@ impl<'disp> CheckCoordinator<'disp> {
             &HandlerContext {
                 process: &process,
                 check_coord: self,
+                scope,
             },
         )?;
 
         match result {
+            SignalHandlerExitAction::SkipPtraceSyscall => (),
             SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
                 ptrace::syscall(pid, None)?;
             }
-            _ => {
+            SignalHandlerExitAction::NextHandler => {
+                info!("[PID {: >8}] Signal: {:}", pid, sig);
+                ptrace::syscall(pid, sig)?;
+            }
+            SignalHandlerExitAction::ContinueInferior => {
                 ptrace::syscall(pid, sig)?;
             }
         }

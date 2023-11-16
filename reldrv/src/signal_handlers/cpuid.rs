@@ -1,42 +1,36 @@
-use std::{
-    arch::x86_64::{CpuidResult, __cpuid_count},
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::arch::x86_64::{CpuidResult, __cpuid_count};
 
 use log::info;
 use nix::sys::signal::Signal;
 use reverie_syscalls::{Addr, MemoryAccess, Syscall};
-use syscalls::{syscall_args, SyscallArgs, Sysno};
+use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::{Error, Result},
     segments::SavedTrapEvent,
-    syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
-    },
+    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 use super::{SignalHandler, SignalHandlerExitAction};
 
-pub struct CpuidHandler {
-    init_done: AtomicBool,
-}
+pub struct CpuidHandler;
 
 impl CpuidHandler {
     pub fn new() -> Self {
-        Self {
-            init_done: AtomicBool::new(false),
-        }
+        Self {}
     }
 }
 
 impl SignalHandler for CpuidHandler {
-    fn handle_signal(
-        &self,
+    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+        &'s self,
         signal: Signal,
-        context: &HandlerContext,
-    ) -> Result<SignalHandlerExitAction> {
+        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'c: 'scope,
+    {
         let process = context.process;
 
         if signal == Signal::SIGSEGV {
@@ -99,41 +93,22 @@ impl SignalHandler for CpuidHandler {
 impl StandardSyscallHandler for CpuidHandler {
     fn handle_standard_syscall_exit(
         &self,
-        _ret_val: isize,
+        ret_val: isize,
         syscall: &Syscall,
-        _context: &HandlerContext,
-    ) -> Result<SyscallHandlerExitAction> {
-        if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) {
-            // arch_prctl cpuid is cleared after every execve
-            self.init_done.store(false, Ordering::SeqCst);
-        }
-
-        Ok(SyscallHandlerExitAction::NextHandler)
-    }
-}
-
-impl CustomSyscallHandler for CpuidHandler {
-    fn handle_custom_syscall_entry(
-        &self,
-        _sysno: usize,
-        _args: SyscallArgs,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if context.check_coord.main.pid == context.process.pid
-            && self
-                .init_done
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
+        if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) && ret_val == 0 {
+            // arch_prctl cpuid is cleared after every execve
             let ret = context.process.syscall_direct(
                 Sysno::arch_prctl,
                 syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
                 true,
                 false,
+                true,
             )?;
             assert_eq!(ret, 0);
             info!("Cpuid init done");
-        };
+        }
 
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -142,7 +117,6 @@ impl CustomSyscallHandler for CpuidHandler {
 impl<'a> Installable<'a> for CpuidHandler {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_signal_handler(self);
-        dispatcher.install_custom_syscall_handler(self);
         dispatcher.install_standard_syscall_handler(self);
     }
 }

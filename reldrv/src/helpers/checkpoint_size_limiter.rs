@@ -49,11 +49,14 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
 }
 
 impl SignalHandler for CheckpointSizeLimiter {
-    fn handle_signal(
-        &self,
+    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+        &'s self,
         signal: Signal,
-        context: &HandlerContext,
-    ) -> Result<SignalHandlerExitAction> {
+        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'c: 'scope,
+    {
         if signal == Signal::SIGTRAP {
             let siginfo = ptrace::getsiginfo(context.process.pid)?;
             match siginfo.si_code {

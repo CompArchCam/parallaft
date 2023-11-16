@@ -16,14 +16,20 @@ pub enum SignalHandlerExitAction {
 
     /// Suppress the signal and continue the inferior
     SuppressSignalAndContinueInferior,
+
+    /// Skip ptrace syscall.
+    SkipPtraceSyscall,
 }
 
 pub trait SignalHandler {
-    fn handle_signal(
-        &self,
+    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+        &'s self,
         _signal: Signal,
-        _context: &HandlerContext,
-    ) -> Result<SignalHandlerExitAction> {
+        _context: &HandlerContext<'p, 'c, 'scope, 'env>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'c: 'scope,
+    {
         Ok(SignalHandlerExitAction::NextHandler)
     }
 }

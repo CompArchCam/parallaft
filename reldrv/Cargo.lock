@@ -32,7 +32,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
 dependencies = [
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
 ]
 
 [[package]]
@@ -50,7 +50,7 @@ dependencies = [
  "addr2line",
  "cc",
  "cfg-if",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "miniz_oxide",
  "object",
  "rustc-demangle",
@@ -276,7 +276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
 dependencies = [
  "errno-dragonfly",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "winapi",
 ]
 
@@ -287,7 +287,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bcfec3a70f97c962c307b2d2c56e358cf1d00b558d74262b5f929ee8cc7e73a"
 dependencies = [
  "errno-dragonfly",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "windows-sys 0.48.0",
 ]
 
@@ -298,7 +298,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
 dependencies = [
  "cc",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
 ]
 
 [[package]]
@@ -319,6 +319,33 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
+
+[[package]]
+name = "foreign-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d737d9aa519fb7b749cbc3b962edcf310a8dd1f4b67c91c4f83975dbdd17d965"
+dependencies = [
+ "foreign-types-macros",
+ "foreign-types-shared",
+]
+
+[[package]]
+name = "foreign-types-macros"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a5c6c585bc94aaf2c7b51dd4c2ba22680844aba4c687be581871a6f518c5742"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.25",
+]
+
+[[package]]
+name = "foreign-types-shared"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "futures"
@@ -479,7 +506,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09270fd4fa1111bc614ed2246c7ef56239a3063d5be0d1ec3b589c505d400aeb"
 dependencies = [
  "hermit-abi",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "windows-sys 0.45.0",
 ]
 
@@ -519,13 +546,13 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "libc"
 version = "0.2.140"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99227334921fae1a979cf0bfdfcc6b3e5ce376ef57e16fb6fb3ea2ed6095f80c"
+source = "git+https://github.com/mbyzhang/libc.git?branch=ptrace-o-allow-tracer-thread-group#a558067ca1f89340da8080eea856339eb2ec03ea"
 
 [[package]]
 name = "libc"
-version = "0.2.140"
-source = "git+https://github.com/mbyzhang/libc.git?branch=ptrace-o-allow-tracer-thread-group#a558067ca1f89340da8080eea856339eb2ec03ea"
+version = "0.2.150"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89d92a4743f9a61002fae18374ed11e7973f530cb3a3255fb354818118b2203c"
 
 [[package]]
 name = "libfpt-rs"
@@ -593,11 +620,11 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "memmap2"
-version = "0.6.2"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d28bba84adfe6646737845bc5ebbfa2c08424eb1c37e94a1fd2a82adb56a872"
+checksum = "deaba38d7abf1d4cca21cc89e932e542ba2b9258664d2a9ef0e61512039c9375"
 dependencies = [
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
 ]
 
 [[package]]
@@ -636,7 +663,7 @@ dependencies = [
  "autocfg",
  "bitflags 1.3.2",
  "cfg-if",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "memoffset 0.6.5",
  "pin-utils",
 ]
@@ -648,7 +675,7 @@ source = "git+https://github.com/mbyzhang/nix.git?branch=ptrace-get-rseq-configu
 dependencies = [
  "bitflags 1.3.2",
  "cfg-if",
- "libc 0.2.140 (git+https://github.com/mbyzhang/libc.git?branch=ptrace-o-allow-tracer-thread-group)",
+ "libc 0.2.140",
  "memoffset 0.8.0",
  "pin-utils",
  "static_assertions",
@@ -711,7 +738,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9069cbb9f99e3a5083476ccb29ceb1de18b9118cafa53e90c9551235de2b9521"
 dependencies = [
  "cfg-if",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "redox_syscall 0.2.16",
  "smallvec",
  "windows-sys 0.45.0",
@@ -739,18 +766,18 @@ version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83659418a76adf99b97b487d6e4e73ea33e5d5dffb006fdd4aec8033995aaad3"
 dependencies = [
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
 ]
 
 [[package]]
 name = "perf-event2"
-version = "0.6.3"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfb1d234ee8adf05a183012eccfd02847151029e6151174346660c87a939f181"
+checksum = "5e25284c4a86df3bccd1818dee1fe9390424fce73a58fe2f19957f2cc5de8b28"
 dependencies = [
  "bitflags 2.3.3",
  "c-enum",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "memmap2",
  "perf-event-data",
  "perf-event-open-sys2",
@@ -767,6 +794,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26072860ba924cbfa98ea39c8c19b4dd6a4a25423dbdf219c1eca91aa0cf6964"
 
 [[package]]
 name = "pretty-hex"
@@ -866,6 +899,7 @@ dependencies = [
  "syscalls",
  "tempfile",
  "thiserror",
+ "unwind",
 ]
 
 [[package]]
@@ -881,7 +915,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
  "derive_more",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "nix 0.25.1",
  "paste",
  "reverie-memory",
@@ -913,7 +947,7 @@ dependencies = [
  "bitflags 1.3.2",
  "errno 0.2.8",
  "io-lifetimes",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "linux-raw-sys 0.1.4",
  "windows-sys 0.45.0",
 ]
@@ -927,7 +961,7 @@ dependencies = [
  "bitflags 1.3.2",
  "errno 0.3.1",
  "io-lifetimes",
- "libc 0.2.140 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.150",
  "linux-raw-sys 0.3.4",
  "windows-sys 0.45.0",
 ]
@@ -1119,6 +1153,27 @@ name = "unicode-width"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0edd1e5b14653f783770bce4a4dabb4a5108a5370a5f5d8cfe8710c361f6c8b"
+
+[[package]]
+name = "unwind"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0e0da3c8d6b71dbaf219188cc0e7f9ca3943f3263ca479920338d92d7ea5e07"
+dependencies = [
+ "foreign-types",
+ "libc 0.2.150",
+ "unwind-sys",
+]
+
+[[package]]
+name = "unwind-sys"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d554005b247de226d124a523cae6cd6a4348277071258296dda837cf760e02e7"
+dependencies = [
+ "libc 0.2.150",
+ "pkg-config",
+]
 
 [[package]]
 name = "wasm-bindgen"

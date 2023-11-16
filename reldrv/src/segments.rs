@@ -1,18 +1,21 @@
 use std::arch::x86_64::CpuidResult;
 use std::collections::LinkedList;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::{mem, ptr};
 
-use log::info;
+use log::{error, info};
 use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock};
 
 use crate::error::{Error, Result};
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
+
+pub type SegmentId = u32;
 
 #[derive(Debug)]
 pub enum CheckpointKind {
@@ -153,10 +156,36 @@ pub enum SavedTrapEvent {
 pub struct Segment {
     pub checkpoint_start: Arc<Checkpoint>,
     pub status: SegmentStatus,
-    pub nr: u32,
+    pub nr: SegmentId,
     pub syscall_log: LinkedList<SavedSyscall>,
     pub ongoing_syscall: Option<SavedIncompleteSyscall>,
     pub trap_event_log: LinkedList<SavedTrapEvent>,
+}
+
+impl Hash for Segment {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.nr.hash(state);
+    }
+}
+
+impl PartialEq for Segment {
+    fn eq(&self, other: &Self) -> bool {
+        self.nr == other.nr
+    }
+}
+
+impl Eq for Segment {}
+
+impl PartialOrd for Segment {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.nr.partial_cmp(&other.nr)
+    }
+}
+
+impl Ord for Segment {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.nr.cmp(&other.nr)
+    }
 }
 
 #[allow(unused)]
@@ -182,7 +211,7 @@ impl Segment {
         self.status.mark_as_ready(checkpoint_end)
     }
 
-    /// Compare dirty memory of the checker process and the reference process and mark the segment status as checked.
+    /// Compare dirty memory of the checker process and the reference process without marking the segment status as checked.
     /// This should be called after the checker process invokes the checkpoint syscall.
     pub fn check(&mut self, ignored_pages: &[usize]) -> Result<(bool, usize)> {
         if let SegmentStatus::ReadyToCheck {
@@ -190,9 +219,25 @@ impl Segment {
             checkpoint_end,
         } = &self.status
         {
-            let (result, nr_dirty_pages) = checker
+            let (mut result, nr_dirty_pages) = checker
                 .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages)?;
-            self.mark_as_checked(!result).unwrap();
+
+            let checker_regs = checker.read_registers()?;
+            let reference_registers = checkpoint_end.reference().unwrap().read_registers()?;
+
+            if checker_regs.inner != reference_registers.inner {
+                error!("Register differs");
+                info!("Checker registers: {:#?}", checker_regs);
+                info!("Reference registers: {:#?}", reference_registers);
+
+                info!("Checker backtrace");
+                checker.unwind().unwrap();
+
+                info!("Checkpoint backtrace");
+                checkpoint_end.reference().unwrap().unwind().unwrap();
+
+                result = false;
+            }
 
             Ok((result, nr_dirty_pages))
         } else {
@@ -447,6 +492,10 @@ pub trait SegmentEventHandler {
     }
 
     fn handle_segment_removed(&self, segment: &Segment) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_checkpoint_created_pre(&self, main_pid: Pid) -> Result<()> {
         Ok(())
     }
 }

@@ -3,6 +3,7 @@ mod memory;
 mod registers;
 mod stats;
 mod syscall;
+mod unwind;
 
 use crate::error::{Error, Result};
 use lazy_init::Lazy;

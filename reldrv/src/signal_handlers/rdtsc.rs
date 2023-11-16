@@ -6,14 +6,14 @@ use std::{
 
 use log::info;
 use nix::{libc, sys::signal::Signal};
-use reverie_syscalls::{Addr, MemoryAccess};
-use syscalls::{syscall_args, SyscallArgs, Sysno};
+use reverie_syscalls::{Addr, MemoryAccess, Syscall};
+use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::{Error, Result},
     segments::SavedTrapEvent,
-    syscall_handlers::{CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction},
+    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 use super::{SignalHandler, SignalHandlerExitAction};
@@ -31,11 +31,14 @@ impl RdtscHandler {
 }
 
 impl SignalHandler for RdtscHandler {
-    fn handle_signal(
-        &self,
+    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+        &'s self,
         signal: Signal,
-        context: &HandlerContext,
-    ) -> Result<SignalHandlerExitAction> {
+        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'c: 'scope,
+    {
         let process = context.process;
 
         let get_rdtsc = || unsafe { _rdtsc() };
@@ -131,14 +134,15 @@ impl SignalHandler for RdtscHandler {
     }
 }
 
-impl CustomSyscallHandler for RdtscHandler {
-    fn handle_custom_syscall_entry(
+impl StandardSyscallHandler for RdtscHandler {
+    fn handle_standard_syscall_exit(
         &self,
-        _sysno: usize,
-        _args: SyscallArgs,
+        ret_val: isize,
+        syscall: &reverie_syscalls::Syscall,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if context.check_coord.main.pid == context.process.pid
+        if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_))
+            && ret_val == 0
             && self
                 .init_done
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -147,8 +151,9 @@ impl CustomSyscallHandler for RdtscHandler {
             let ret = context.process.syscall_direct(
                 Sysno::prctl,
                 syscall_args!(libc::PR_SET_TSC as _, libc::PR_TSC_SIGSEGV as _),
-                true,
                 false,
+                false,
+                true,
             )?;
             assert_eq!(ret, 0);
             info!("Rdtsc init done");
@@ -161,6 +166,6 @@ impl CustomSyscallHandler for RdtscHandler {
 impl<'a> Installable<'a> for RdtscHandler {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_signal_handler(self);
-        dispatcher.install_custom_syscall_handler(self);
+        dispatcher.install_standard_syscall_handler(self);
     }
 }

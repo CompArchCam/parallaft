@@ -1,4 +1,4 @@
-use nix::sys::signal::Signal;
+use nix::{sys::signal::Signal, unistd::Pid};
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
@@ -284,11 +284,14 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
 }
 
 impl<'a> SignalHandler for Dispatcher<'a> {
-    fn handle_signal(
-        &self,
+    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+        &'s self,
         signal: Signal,
-        context: &HandlerContext,
-    ) -> Result<SignalHandlerExitAction> {
+        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'c: 'scope,
+    {
         for handler in &self.signal_handlers {
             let ret = handler.handle_signal(signal, context)?;
 
@@ -307,6 +310,7 @@ impl<'a> SegmentEventHandler for Dispatcher<'a> {
     generate_event_handler!(segment_event_handlers, handle_segment_ready, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller);
     generate_event_handler!(segment_event_handlers, handle_segment_checked, segment: &Segment);
     generate_event_handler!(segment_event_handlers, handle_segment_removed, segment: &Segment);
+    generate_event_handler!(segment_event_handlers, handle_checkpoint_created_pre, main_pid: Pid);
 }
 
 impl<'a> IgnoredPagesProvider for Dispatcher<'a> {

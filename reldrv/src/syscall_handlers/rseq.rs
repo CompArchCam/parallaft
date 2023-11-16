@@ -42,6 +42,7 @@ impl RseqHandler {
                 ),
                 true,
                 false,
+                false,
             )?;
             assert_eq!(ret, 0);
             info!("rseq unregistered");

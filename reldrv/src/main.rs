@@ -116,13 +116,17 @@ struct CliArgs {
     #[arg(long)]
     pause_on_panic: bool,
 
-    /// librelrt Checkpoint period in number of instructions.
+    /// Checkpoint period in number of instructions. Used by librelrt and PMU-based segmentor.
     #[arg(long, default_value_t = 1000000000)]
-    librelrt_checkpoint_period: u64,
+    checkpoint_period: u64,
 
     /// Perf counters to sample during the inferior execution.
     #[arg(long, use_value_delimiter = true)]
     enabled_perf_counters: Vec<CounterKind>,
+
+    /// Automatic segmentation based precise PMU interrupts. Conflicts with relrtlibs.
+    #[arg(short, long)]
+    pmu_segmentation: bool,
 
     command: String,
     args: Vec<String>,
@@ -215,7 +219,7 @@ fn main() {
             runner_flags,
             check_coord_flags,
             stats_output: cli.stats_output,
-            librelrt_checkpoint_period: cli.librelrt_checkpoint_period,
+            checkpoint_period: cli.checkpoint_period,
             max_nr_live_segments: cli.max_nr_live_segments,
             memory_overhead_watermark: cli.max_memory_overhead,
             main_cpu_set: cli.main_cpu_set,
@@ -230,6 +234,7 @@ fn main() {
                 })
             }),
             enabled_perf_counters: cli.enabled_perf_counters,
+            pmu_segmentation: cli.pmu_segmentation,
         },
     );
 

@@ -5,6 +5,8 @@ pub mod mmap;
 pub mod replicate;
 pub mod rseq;
 
+use std::thread::Scope;
+
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
@@ -20,11 +22,12 @@ pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
-pub struct HandlerContext<'a, 'b, 'c> {
-    pub process: &'a Process,
+pub struct HandlerContext<'p, 's, 'scope, 'env> {
+    pub process: &'p Process,
     // active_segment: Option<&'a mut Segment>,
     // is_main: bool,
-    pub check_coord: &'b CheckCoordinator<'c>,
+    pub check_coord: &'s CheckCoordinator<'s>,
+    pub scope: &'scope Scope<'scope, 'env>,
 }
 
 #[allow(unused)]

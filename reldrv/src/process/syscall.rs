@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 use nix::{
     sched::CloneFlags,
     sys::{
@@ -7,10 +9,11 @@ use nix::{
     },
     unistd::Pid,
 };
+
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use super::{registers::Registers, Process};
-use crate::error::Result;
+use crate::{error::Result, process::PAGESIZE};
 
 impl Process {
     pub fn syscall_direct(
@@ -19,38 +22,78 @@ impl Process {
         args: SyscallArgs,
         mut restart_parent_old_syscall: bool,
         mut restart_child_old_syscall: bool,
+        force_instr_insertion: bool,
     ) -> Result<i64> {
-        let is_syscall_exit = match ptrace::getsyscallinfo(self.pid)?.op {
-            SyscallInfoOp::Entry { .. } => false,
+        // save the old states
+        let (saved_regs, saved_sigmask) = Self::save_state(self.pid)?;
+        let mut saved_instr = None;
+
+        let mut op = ptrace::getsyscallinfo(self.pid)?.op;
+        if force_instr_insertion {
+            op = SyscallInfoOp::None;
+        }
+
+        match op {
+            SyscallInfoOp::Entry { .. } => (),
             SyscallInfoOp::Exit { .. } => {
                 // never restart old syscalls on exit
                 restart_child_old_syscall = false;
                 restart_parent_old_syscall = false;
-                true
+
+                // handle syscall exit
+                assert_eq!(self.instr_at(saved_regs.rip as usize - 2, 2), 0x050f); // syscall
+
+                self.write_registers(saved_regs.with_offsetted_rip(-2))?; // jump back to previous syscall
+                ptrace::syscall(self.pid, None)?;
+
+                assert!(matches!(
+                    waitpid(self.pid, None)?,
+                    WaitStatus::PtraceSyscall(_)
+                ));
+
+                assert!(matches!(
+                    ptrace::getsyscallinfo(self.pid)?.op,
+                    SyscallInfoOp::Entry { .. }
+                ));
+            }
+            SyscallInfoOp::None => {
+                // insert an ad-hoc syscall instruction
+                restart_child_old_syscall = false;
+                restart_parent_old_syscall = false;
+
+                let addr = saved_regs.rip & (!(*PAGESIZE - 1));
+                let orig_instr = self.instr_at(addr as usize, 2) as u16;
+
+                saved_instr = Some((addr, orig_instr));
+
+                // dbg!(saved_instr);
+
+                // info!("Addr {:p}", addr as *const u8);
+                // self.dump_memory_maps().unwrap();
+
+                let orig_word = ptrace::read(self.pid, addr as *mut c_void).unwrap() as u64;
+
+                let new_word = (orig_word & (!0xffff)) | 0x050f;
+
+                unsafe { ptrace::write(self.pid, addr as *mut c_void, new_word as *mut c_void) }
+                    .unwrap();
+
+                self.write_registers(saved_regs.with_rip(addr))?;
+
+                ptrace::syscall(self.pid, None)?;
+
+                assert!(matches!(
+                    waitpid(self.pid, None)?,
+                    WaitStatus::PtraceSyscall(_)
+                ));
+
+                assert!(matches!(
+                    ptrace::getsyscallinfo(self.pid)?.op,
+                    SyscallInfoOp::Entry { .. }
+                ));
             }
             _ => panic!(),
         };
-
-        // save the old states
-        let (saved_regs, saved_sigmask) = Self::save_state(self.pid)?;
-
-        // handle syscall exit
-        if is_syscall_exit {
-            assert_eq!(self.instr_at(saved_regs.rip as usize - 2, 2), 0x050f); // syscall
-
-            self.write_registers(saved_regs.with_offsetted_rip(-2))?; // jump back to previous syscall
-            ptrace::syscall(self.pid, None)?;
-
-            assert!(matches!(
-                waitpid(self.pid, None)?,
-                WaitStatus::PtraceSyscall(_)
-            ));
-
-            assert!(matches!(
-                ptrace::getsyscallinfo(self.pid)?.op,
-                SyscallInfoOp::Entry { .. }
-            ));
-        }
 
         // prepare the injected syscall number and arguments
         self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args))?;
@@ -95,6 +138,7 @@ impl Process {
             saved_regs,
             saved_sigmask,
             restart_parent_old_syscall,
+            saved_instr,
         )?;
 
         if let Some(child_pid) = child_pid {
@@ -108,6 +152,7 @@ impl Process {
                 saved_regs,
                 saved_sigmask,
                 restart_child_old_syscall,
+                saved_instr,
             )?;
         }
 
@@ -128,6 +173,7 @@ impl Process {
             syscall_args!(clone_flags, 0, 0, 0, 0),
             restart_parent_old_syscall,
             restart_child_old_syscall,
+            false,
         )?;
 
         if child_pid <= 0 {
@@ -150,15 +196,19 @@ impl Process {
         saved_regs: Registers,
         saved_sigmask: u64,
         restart_old_syscall: bool,
+        saved_instr: Option<(u64, u16)>,
     ) -> Result<()> {
+        let process = Process::new(pid);
         let mut saved_regs = saved_regs;
 
         if restart_old_syscall {
+            if saved_instr.is_some() {
+                panic!()
+            }
+
             // jump back to the previous instruction
             if cfg!(target_arch = "x86_64") {
-                let last_instr =
-                    (ptrace::read(pid, (saved_regs.inner.rip - 2) as _)? as u64) & 0xffff;
-                assert_eq!(last_instr, 0x050f); // syscall
+                assert_eq!(process.instr_at((saved_regs.inner.rip - 2) as _, 2), 0x050f); // syscall
                 saved_regs.inner.rip -= 2;
                 saved_regs.inner.rax = saved_regs.inner.orig_rax;
             } else {
@@ -167,7 +217,17 @@ impl Process {
         }
 
         // restore the registers
-        Process::new(pid).write_registers(saved_regs)?;
+        process.write_registers(saved_regs)?;
+
+        if let Some((orig_addr, orig_instr)) = saved_instr {
+            // restore previously-rewritten instrs
+            let orig_word = ptrace::read(pid, orig_addr as *mut c_void).unwrap() as u64;
+
+            let new_word = (orig_word & (!0xffff)) | orig_instr as u64;
+
+            unsafe { ptrace::write(pid, orig_addr as *mut c_void, new_word as *mut c_void) }
+                .unwrap();
+        }
 
         if restart_old_syscall {
             // execute the original syscall
@@ -276,7 +336,7 @@ mod tests {
 
         // inject a getuid syscall
         let uid2 = process
-            .syscall_direct(Sysno::getuid, syscall_args!(), true, true)
+            .syscall_direct(Sysno::getuid, syscall_args!(), true, true, false)
             .unwrap();
 
         assert_eq!(uid.as_raw(), uid2 as u32);
@@ -360,7 +420,7 @@ mod tests {
 
         // inject a getuid syscall
         let uid2 = process
-            .syscall_direct(Sysno::getuid, syscall_args!(), true, true)
+            .syscall_direct(Sysno::getuid, syscall_args!(), true, true, false)
             .unwrap();
         assert_eq!(uid.as_raw(), uid2 as u32);
 

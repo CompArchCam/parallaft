@@ -33,6 +33,7 @@ use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
+use crate::inferior_rtlib::pmu::PmuSegmentor;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
@@ -68,9 +69,7 @@ pub struct RelShellOptions {
     pub runner_flags: RunnerFlags,
     pub check_coord_flags: CheckCoordinatorFlags,
     pub stats_output: Option<PathBuf>,
-
-    // librelrt plugin options
-    pub librelrt_checkpoint_period: u64,
+    pub checkpoint_period: u64,
 
     // nr segments based throttler plugin options
     pub max_nr_live_segments: usize,
@@ -90,6 +89,9 @@ pub struct RelShellOptions {
 
     // perf counter plugin options
     pub enabled_perf_counters: Vec<CounterKind>,
+
+    // enable automatic segmentation based on precise PMU interrupts
+    pub pmu_segmentation: bool,
 }
 
 impl Default for RelShellOptions {
@@ -98,7 +100,7 @@ impl Default for RelShellOptions {
             runner_flags: RunnerFlags::empty(),
             check_coord_flags: CheckCoordinatorFlags::empty(),
             stats_output: None,
-            librelrt_checkpoint_period: 0,
+            checkpoint_period: 0,
             max_nr_live_segments: 0,
             memory_overhead_watermark: 0,
             main_cpu_set: Vec::new(),
@@ -107,6 +109,7 @@ impl Default for RelShellOptions {
             cache_masks: None,
             checkpoint_size_watermark: 0,
             enabled_perf_counters: Vec::new(),
+            pmu_segmentation: false,
         }
     }
 }
@@ -175,10 +178,15 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     }
 
     let legacy_rtlib_handler = LegacyInferiorRtLib::new();
-    legacy_rtlib_handler.install(&mut disp);
+    let relrtlib_handler = RelRtLib::new(options.checkpoint_period);
+    let pmu_segmentor = PmuSegmentor::new(options.checkpoint_period);
 
-    let relrtlib_handler = RelRtLib::new(options.librelrt_checkpoint_period);
-    relrtlib_handler.install(&mut disp);
+    if options.pmu_segmentation {
+        pmu_segmentor.install(&mut disp);
+    } else {
+        legacy_rtlib_handler.install(&mut disp);
+        relrtlib_handler.install(&mut disp);
+    }
 
     let vdso_remover = VdsoRemover::new();
     vdso_remover.install(&mut disp);
@@ -253,7 +261,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
             match status {
                 WaitStatus::Stopped(pid, sig) => {
-                    check_coord.handle_signal(pid, sig).unwrap();
+                    check_coord.handle_signal(pid, sig, scope).unwrap();
                 }
                 WaitStatus::Exited(pid, status) => {
                     info!("Child {} exited", pid);
@@ -296,6 +304,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                                     &HandlerContext {
                                         process: &process,
                                         check_coord: &check_coord,
+                                        scope,
                                     },
                                 )
                                 .unwrap();
@@ -359,6 +368,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                                 &HandlerContext {
                                     process: &process,
                                     check_coord: &check_coord,
+                                    scope,
                                 },
                             )
                             .unwrap();

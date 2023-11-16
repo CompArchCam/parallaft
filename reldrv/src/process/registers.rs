@@ -142,6 +142,12 @@ impl Registers {
         self
     }
 
+    pub fn with_rip(mut self, rip: u64) -> Self {
+        self.rip = rip;
+
+        self
+    }
+
     #[cfg(target_arch = "x86_64")]
     pub fn with_cpuid_result(mut self, cpuid_result: CpuidResult) -> Self {
         self.rax = cpuid_result.eax as _;
@@ -154,6 +160,12 @@ impl Registers {
 
     pub fn cpuid_leaf_subleaf(&self) -> (u32, u32) {
         (self.rax as _, self.rcx as _)
+    }
+
+    pub fn with_resume_flag_cleared(mut self) -> Self {
+        self.eflags = !(1 << 16) & self.eflags;
+
+        self
     }
 }
 
