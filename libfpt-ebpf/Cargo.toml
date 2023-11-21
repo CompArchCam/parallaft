@@ -1,0 +1,15 @@
+[package]
+name = "libfpt-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+libbpf-rs = { path = "/home/peter/libbpf-rs/libbpf-rs" }
+libc = "0.2"
+plain = "0.2"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"]}
+clap = { version = "4.0.32", default-features = false, features = ["std", "derive", "help", "usage"] }
+
+[build-dependencies]
+libbpf-cargo = { path = "/home/peter/libbpf-rs/libbpf-cargo" }
