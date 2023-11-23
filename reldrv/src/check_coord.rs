@@ -19,7 +19,7 @@ use parking_lot::{Mutex, RwLock};
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo, Sysno};
 
 use crate::dispatcher::Dispatcher;
-use crate::error::{Error, Result};
+use crate::error::{Error, EventFlags, Result};
 use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::{OwnedProcess, Process, ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::saved_syscall::{
@@ -494,13 +494,13 @@ impl<'disp> CheckCoordinator<'disp> {
                     &handler_context,
                 )?;
 
+                if active_segment.ongoing_syscall.is_some() {
+                    return Err(Error::UnexpectedSyscall(EventFlags::empty()));
+                }
+
                 match result {
                     StandardSyscallEntryMainHandlerExitAction::NextHandler => {
                         // Main syscall entry, record memory read by the syscall
-                        if active_segment.ongoing_syscall.is_some() {
-                            return Err(Error::UnexpectedSyscall);
-                        }
-
                         let may_read = syscall.may_read(&process).ok().map(|slices| {
                             slices
                                 .iter()
@@ -551,19 +551,11 @@ impl<'disp> CheckCoordinator<'disp> {
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                         saved_incomplete_syscall,
                     ) => {
-                        if active_segment.ongoing_syscall.is_some() {
-                            return Err(Error::UnexpectedSyscall);
-                        }
-
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                     }
                     StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                         saved_incomplete_syscall,
                     ) => {
-                        if active_segment.ongoing_syscall.is_some() {
-                            return Err(Error::UnexpectedSyscall);
-                        }
-
                         active_segment.ongoing_syscall = Some(saved_incomplete_syscall);
                         drop(active_segment);
                         drop(segments);
@@ -598,8 +590,7 @@ impl<'disp> CheckCoordinator<'disp> {
                                 }
                             }
                         } else {
-                            println!("aaaa");
-                            return Err(Error::UnexpectedSyscall);
+                            return Err(Error::UnexpectedSyscall(EventFlags::IS_EXCESS));
                         }
 
                         active_segment
@@ -645,7 +636,7 @@ impl<'disp> CheckCoordinator<'disp> {
             .last_syscall
             .lock()
             .remove(&pid)
-            .ok_or(Error::UnexpectedSyscall)?;
+            .ok_or(Error::UnexpectedSyscall(EventFlags::IS_INVALID))?;
 
         let handler_context = HandlerContext {
             process: &process,
@@ -674,7 +665,7 @@ impl<'disp> CheckCoordinator<'disp> {
                 let saved_incomplete_syscall = active_segment
                     .ongoing_syscall
                     .take()
-                    .ok_or(Error::UnexpectedSyscall)?;
+                    .ok_or(Error::UnexpectedSyscall(EventFlags::IS_INVALID))?;
 
                 let (sysno, args) = saved_incomplete_syscall.syscall.into_parts();
 
@@ -720,7 +711,7 @@ impl<'disp> CheckCoordinator<'disp> {
                 let saved_syscall = active_segment
                     .syscall_log
                     .pop_front()
-                    .ok_or(Error::UnexpectedSyscall)?;
+                    .ok_or(Error::UnexpectedSyscall(EventFlags::IS_INVALID))?;
 
                 let (sysno, args) = saved_syscall.syscall.into_parts();
 

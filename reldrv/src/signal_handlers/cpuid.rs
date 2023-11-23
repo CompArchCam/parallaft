@@ -7,7 +7,7 @@ use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
-    error::{Error, Result},
+    error::{Error, EventFlags, Result},
     segments::SavedTrapEvent,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
@@ -66,13 +66,13 @@ impl SignalHandler for CpuidHandler {
                                 let event = segment
                                     .trap_event_log
                                     .pop_front()
-                                    .ok_or(Error::UnexpectedTrap)?;
+                                    .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
 
                                 if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
                                     assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
                                     Ok(cpuid)
                                 } else {
-                                    panic!("Unexpected trap event");
+                                    Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
                                 }
                             }
                         },

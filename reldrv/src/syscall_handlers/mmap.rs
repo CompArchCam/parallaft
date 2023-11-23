@@ -3,7 +3,7 @@ use reverie_syscalls::{Addr, AddrMut, MapFlags, Syscall, SyscallInfo};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
-    error::{Error, Result},
+    error::{Error, EventFlags, Result},
     saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
     },
@@ -120,11 +120,11 @@ impl StandardSyscallHandler for MmapHandler {
                     let saved_syscall = active_segment
                         .syscall_log
                         .front()
-                        .ok_or(Error::UnexpectedSyscall)?;
+                        .ok_or(Error::UnexpectedSyscall(EventFlags::IS_EXCESS))?;
 
                     if saved_syscall.syscall != syscall {
                         error!("Mmap syscall mismatch");
-                        return Err(Error::UnexpectedSyscall);
+                        return Err(Error::UnexpectedSyscall(EventFlags::IS_INCORRECT));
                     }
 
                     if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
@@ -153,11 +153,11 @@ impl StandardSyscallHandler for MmapHandler {
                 let saved_syscall = active_segment
                     .syscall_log
                     .front()
-                    .ok_or(Error::UnexpectedSyscall)?;
+                    .ok_or(Error::UnexpectedSyscall(EventFlags::IS_EXCESS))?;
 
                 if saved_syscall.syscall != syscall {
                     info!("Mremap syscall mismatch");
-                    return Err(Error::UnexpectedSyscall);
+                    return Err(Error::UnexpectedSyscall(EventFlags::IS_INCORRECT));
                 }
 
                 // rewrite only if mmap has succeeded

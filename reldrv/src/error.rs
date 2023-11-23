@@ -1,4 +1,18 @@
+use bitflags::bitflags;
 use procfs::ProcError;
+
+bitflags! {
+    pub struct EventFlags: u32 {
+        /// Inferior made an excess syscall (possibly due to skidding).
+        const IS_EXCESS = 0b001;
+
+        /// Inferior made a incorrect syscall.
+        const IS_INCORRECT = 0b100;
+
+        /// Ptrace gives an unexpected event.
+        const IS_INVALID = 0b100;
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -14,9 +28,9 @@ pub enum Error {
     #[error("Invalid state")]
     InvalidState,
     #[error("Unexpected syscall made by the inferior")]
-    UnexpectedSyscall,
+    UnexpectedSyscall(EventFlags),
     #[error("Unexpected trap made by the inferior")]
-    UnexpectedTrap,
+    UnexpectedTrap(EventFlags),
     #[error("Not supported")]
     NotSupported,
 
@@ -25,6 +39,16 @@ pub enum Error {
 
     #[error("Errno returned to user")]
     ReturnedToUser(nix::errno::Errno, String),
+}
+
+impl Error {
+    pub fn is_potentially_caused_by_skids(&self) -> bool {
+        match self {
+            Error::UnexpectedSyscall(flags) if flags.contains(EventFlags::IS_EXCESS) => true,
+            Error::UnexpectedTrap(flags) if flags.contains(EventFlags::IS_EXCESS) => true,
+            _ => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

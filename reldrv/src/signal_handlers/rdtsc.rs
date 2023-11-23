@@ -11,7 +11,7 @@ use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Dispatcher, Installable},
-    error::{Error, Result},
+    error::{Error, EventFlags, Result},
     segments::SavedTrapEvent,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
@@ -72,13 +72,12 @@ impl SignalHandler for RdtscHandler {
                             let event = segment
                                 .trap_event_log
                                 .pop_front()
-                                .ok_or(Error::UnexpectedTrap)?;
+                                .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
 
                             if let SavedTrapEvent::Rdtsc(tsc) = event {
                                 Ok(tsc)
                             } else {
-                                Err(Error::UnexpectedTrap)?;
-                                unreachable!();
+                                Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
                             }
                         }
                     })
@@ -109,13 +108,12 @@ impl SignalHandler for RdtscHandler {
                                 let event = segment
                                     .trap_event_log
                                     .pop_front()
-                                    .ok_or(Error::UnexpectedTrap)?;
+                                    .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
 
                                 if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
                                     Ok((tsc, aux))
                                 } else {
-                                    Err(Error::UnexpectedTrap)?;
-                                    unreachable!();
+                                    Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
                                 }
                             }
                         },
