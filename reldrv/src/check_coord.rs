@@ -598,6 +598,7 @@ impl<'disp> CheckCoordinator<'disp> {
                                 }
                             }
                         } else {
+                            println!("aaaa");
                             return Err(Error::UnexpectedSyscall);
                         }
 
@@ -821,6 +822,10 @@ impl<'disp> CheckCoordinator<'disp> {
             }
             SignalHandlerExitAction::ContinueInferior => {
                 ptrace::syscall(pid, sig)?;
+            }
+            SignalHandlerExitAction::Checkpoint => {
+                drop(segments);
+                self.handle_checkpoint(pid, false, false, CheckpointCaller::Shell, scope)?;
             }
         }
 

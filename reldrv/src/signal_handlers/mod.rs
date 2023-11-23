@@ -19,6 +19,9 @@ pub enum SignalHandlerExitAction {
 
     /// Skip ptrace syscall.
     SkipPtraceSyscall,
+
+    /// Checkpoint.
+    Checkpoint,
 }
 
 pub trait SignalHandler {

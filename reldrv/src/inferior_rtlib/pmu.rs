@@ -16,14 +16,14 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Dispatcher, Installable},
     error::Result,
-    segments::{CheckpointCaller, Segment, SegmentEventHandler},
+    segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 use super::ScheduleCheckpoint;
 
-const MAX_SKID: u64 = 128;
+const MAX_SKID: u64 = 256;
 const PERF_EVENT_RAW_BRANCH_RETIRED: u64 = 0xbbc4; // branches retired excluding far branches
 
 struct SegmentInfo {
@@ -50,6 +50,7 @@ pub struct PmuSegmentor {
     main_state: Mutex<Option<MainState>>,
 }
 
+#[derive(Debug)]
 enum MainState {
     Idle,
     CountingInstructions {
@@ -140,7 +141,7 @@ impl SegmentEventHandler for PmuSegmentor {
                 instr_irq.reset().unwrap();
                 instr_irq.enable().unwrap();
             }
-            _ => panic!("Invalid state"),
+            _ => panic!("Invalid main state: {:?}", main_state.as_mut()),
         }
 
         Ok(())
@@ -268,8 +269,10 @@ impl SignalHandler for PmuSegmentor {
                                 condbr_counter,
                                 breakpoint: self.breakpoint(context.process.pid, segment_info.ip),
                             }
-                        } else {
+                        } else if diff == 0 {
                             CheckerState::Done
+                        } else {
+                            panic!("Skid detected");
                         }
                     }
                     CheckerState::Stepping {
@@ -290,12 +293,14 @@ impl SignalHandler for PmuSegmentor {
                                 condbr_counter,
                                 breakpoint,
                             }
-                        } else {
+                        } else if diff == 0 {
                             context
                                 .process
                                 .modify_registers_with(|r| r.with_resume_flag_cleared())
                                 .unwrap();
                             CheckerState::Done
+                        } else {
+                            panic!("Unexpected breakpoint skid");
                         }
                     }
                     CheckerState::Done => panic!("Invalid state"),
@@ -311,17 +316,7 @@ impl SignalHandler for PmuSegmentor {
             }
 
             if take_checkpoint {
-                context
-                    .check_coord
-                    .handle_checkpoint(
-                        context.process.pid,
-                        false,
-                        false,
-                        CheckpointCaller::Shell,
-                        context.scope,
-                    )
-                    .unwrap();
-                return Ok(SignalHandlerExitAction::SkipPtraceSyscall);
+                return Ok(SignalHandlerExitAction::Checkpoint);
             } else {
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
