@@ -96,10 +96,6 @@ struct CliArgs {
     #[arg(long)]
     log_output: Option<PathBuf>,
 
-    /// Checkpoint frequency to pass to the main process.
-    #[arg(long, default_value_t = 1)]
-    checkpoint_freq: u32,
-
     /// Maximum number of live segments (0 = unlimited).
     #[arg(long, default_value_t = 8)]
     max_nr_live_segments: usize,
