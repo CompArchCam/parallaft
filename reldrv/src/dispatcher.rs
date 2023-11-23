@@ -6,14 +6,14 @@ use crate::{
     check_coord::CheckCoordinator,
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::dirty_pages::IgnoredPagesProvider,
+    process::{dirty_pages::IgnoredPagesProvider, ProcessLifetimeHook, ProcessLifetimeHookContext},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::{CheckpointCaller, Segment, SegmentEventHandler},
+    segments::{CheckpointCaller, Segment, SegmentChain, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, ProcessLifetimeHook,
-        StandardSyscallEntryCheckerHandlerExitAction, StandardSyscallEntryMainHandlerExitAction,
-        StandardSyscallHandler, SyscallHandlerExitAction,
+        CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
+        StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+        SyscallHandlerExitAction,
     },
     throttlers::Throttler,
 };
@@ -108,10 +108,11 @@ impl<'a> Dispatcher<'a> {
     pub fn dispatch_throttle(
         &self,
         nr_dirty_pages: usize,
+        segments: &SegmentChain,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
         for &handler in &self.throttlers {
-            if handler.should_throttle(nr_dirty_pages, check_coord) {
+            if handler.should_throttle(nr_dirty_pages, segments, check_coord) {
                 return Some(handler);
             }
         }
@@ -121,11 +122,11 @@ impl<'a> Dispatcher<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
-    generate_event_handler!(process_lifetime_hooks, handle_main_init, context: &HandlerContext);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_init, context: &HandlerContext);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_fini, nr_dirty_pages: Option<usize>, context: &HandlerContext);
-    generate_event_handler!(process_lifetime_hooks, handle_all_fini, context: &HandlerContext);
-    generate_event_handler!(process_lifetime_hooks, handle_main_fini, ret_val: i32, context: &HandlerContext);
+    generate_event_handler!(process_lifetime_hooks, handle_main_init, context: &ProcessLifetimeHookContext);
+    generate_event_handler!(process_lifetime_hooks, handle_checker_init, context: &ProcessLifetimeHookContext);
+    generate_event_handler!(process_lifetime_hooks, handle_checker_fini, nr_dirty_pages: Option<usize>, context: &ProcessLifetimeHookContext);
+    generate_event_handler!(process_lifetime_hooks, handle_all_fini, context: &ProcessLifetimeHookContext);
+    generate_event_handler!(process_lifetime_hooks, handle_main_fini, ret_val: i32, context: &ProcessLifetimeHookContext);
 }
 
 impl<'a> StandardSyscallHandler for Dispatcher<'a> {
@@ -284,13 +285,13 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
 }
 
 impl<'a> SignalHandler for Dispatcher<'a> {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         for handler in &self.signal_handlers {
             let ret = handler.handle_signal(signal, context)?;

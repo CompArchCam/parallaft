@@ -31,13 +31,13 @@ impl RdtscHandler {
 }
 
 impl SignalHandler for RdtscHandler {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         let process = context.process;
 
@@ -60,9 +60,8 @@ impl SignalHandler for RdtscHandler {
 
                 // rdtsc
                 let tsc = context
-                    .check_coord
                     .segments
-                    .get_active_segment_with::<Result<u64>>(process.pid, |segment, is_main| {
+                    .lookup_segment_with::<Result<u64>>(process.pid, |mut segment, is_main| {
                         if is_main {
                             let tsc = get_rdtsc();
                             // add to the log
@@ -93,11 +92,10 @@ impl SignalHandler for RdtscHandler {
 
                 // rdtscp
                 let (tsc, aux) = context
-                    .check_coord
                     .segments
-                    .get_active_segment_with::<Result<(u64, u32)>>(
+                    .lookup_segment_with::<Result<(u64, u32)>>(
                         process.pid,
-                        |segment, is_main| {
+                        |mut segment, is_main| {
                             if is_main {
                                 let (tsc, aux) = get_rdtscp();
 

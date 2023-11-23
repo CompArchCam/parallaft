@@ -35,6 +35,8 @@ use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::pmu::PmuSegmentor;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
+use crate::process::ProcessLifetimeHook;
+use crate::process::ProcessLifetimeHookContext;
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
 use crate::signal_handlers::cpuid::CpuidHandler;
@@ -50,9 +52,7 @@ use crate::syscall_handlers::exit::ExitHandler;
 use crate::syscall_handlers::mmap::MmapHandler;
 use crate::syscall_handlers::replicate::ReplicatedSyscallHandler;
 use crate::syscall_handlers::rseq::RseqHandler;
-use crate::syscall_handlers::{
-    CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, SyscallHandlerExitAction,
-};
+use crate::syscall_handlers::{CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction};
 use crate::throttlers::memory::MemoryBasedThrottler;
 use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
@@ -242,12 +242,13 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let check_coord = CheckCoordinator::new(inferior, options.check_coord_flags, &disp);
 
     std::thread::scope(|scope| {
-        disp.handle_main_init(&HandlerContext {
+        let process_lifetime_hook_ctx = ProcessLifetimeHookContext {
             process: &check_coord.main,
             check_coord: &check_coord,
             scope,
-        })
-        .unwrap();
+        };
+
+        disp.handle_main_init(&process_lifetime_hook_ctx).unwrap();
 
         check_coord.main.resume().unwrap();
 
@@ -274,15 +275,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                     if pid == check_coord.main.pid {
                         main_finished = true;
 
-                        disp.handle_main_fini(
-                            status,
-                            &HandlerContext {
-                                process: &check_coord.main,
-                                check_coord: &check_coord,
-                                scope,
-                            },
-                        )
-                        .unwrap();
+                        disp.handle_main_fini(status, &process_lifetime_hook_ctx)
+                            .unwrap();
 
                         exit_status = Some(status);
 
@@ -317,6 +311,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                                     regs.syscall_args(),
                                     &HandlerContext {
                                         process: &process,
+                                        segments: &check_coord.segments.read(),
                                         check_coord: &check_coord,
                                         scope,
                                     },
@@ -381,6 +376,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                                 regs.syscall_ret_val(),
                                 &HandlerContext {
                                     process: &process,
+                                    segments: &check_coord.segments.read(),
                                     check_coord: &check_coord,
                                     scope,
                                 },
@@ -406,7 +402,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
                         check_coord
                             .segments
-                            .get_active_segment_with(pid, |segment, is_main| {
+                            .read()
+                            .lookup_segment_with(pid, |segment, is_main| {
                                 if is_main {
                                     panic!("Inferior unexpectedly killed by SIGKILL");
                                 } else {
@@ -426,12 +423,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
             }
         }
 
-        disp.handle_all_fini(&HandlerContext {
-            process: &check_coord.main,
-            check_coord: &check_coord,
-            scope,
-        })
-        .unwrap();
+        disp.handle_all_fini(&process_lifetime_hook_ctx).unwrap();
 
         if options.runner_flags.contains(RunnerFlags::DUMP_STATS) || options.stats_output.is_some()
         {

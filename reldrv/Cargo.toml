@@ -3,11 +3,6 @@ name = "reldrv"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[patch."https://github.com/rust-lang/libc"]
-libc = { git = "https://github.com/mbyzhang/libc.git", branch = "ptrace-o-allow-tracer-thread-group" }
-
 [dependencies]
 clap = { version = "4.1.1", features = ["derive"] }
 env_logger = "0.10.0"
@@ -15,7 +10,6 @@ log = "0.4.17"
 nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-get-rseq-configuration" }
 procfs = { git = "https://github.com/mbyzhang/procfs.git" }
 pretty-hex = "0.3.0"
-parking_lot = "0.12.1"
 bitflags = "1.3.2"
 reverie-syscalls = { path = "../reverie-syscalls" }
 syscalls = "*"
@@ -28,6 +22,7 @@ lazy_static = "1.4.0"
 libfpt-rs = { path = "../libfpt-rs" }
 clap-num = "1.0.2"
 unwind = { version = "0.4.1", features = ["ptrace"] }
+parking_lot = "0.12.1"
 
 [build-dependencies]
 cc = "1.0.78"

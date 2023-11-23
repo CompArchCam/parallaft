@@ -9,9 +9,8 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
-    syscall_handlers::{
-        HandlerContext, ProcessLifetimeHook, StandardSyscallHandler, SyscallHandlerExitAction,
-    },
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 use super::{Statistics, Value};
@@ -96,13 +95,13 @@ impl StandardSyscallHandler for TimingCollector {
 }
 
 impl ProcessLifetimeHook for TimingCollector {
-    fn handle_main_init(&self, _context: &HandlerContext) -> Result<()> {
+    fn handle_main_init(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
         *self.start_time.lock() = Some(Instant::now());
 
         Ok(())
     }
 
-    fn handle_main_fini(&self, ret_val: i32, _context: &HandlerContext) -> Result<()> {
+    fn handle_main_fini(&self, ret_val: i32, _context: &ProcessLifetimeHookContext) -> Result<()> {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.main_wall_time.lock() = Some(elapsed);
         *self.exit_status.lock() = Some(ret_val);
@@ -110,7 +109,7 @@ impl ProcessLifetimeHook for TimingCollector {
         Ok(())
     }
 
-    fn handle_all_fini(&self, _context: &HandlerContext) -> Result<()> {
+    fn handle_all_fini(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.all_wall_time.lock() = Some(elapsed);
 

@@ -5,9 +5,8 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
-    syscall_handlers::{
-        HandlerContext, ProcessLifetimeHook, StandardSyscallHandler, SyscallHandlerExitAction,
-    },
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 use super::{timing::TimingCollector, Statistics, Value};
@@ -65,7 +64,7 @@ impl<'a> StandardSyscallHandler for CounterCollector<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for CounterCollector<'a> {
-    fn handle_all_fini(&self, context: &HandlerContext) -> Result<()> {
+    fn handle_all_fini(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
         let epoch = context.check_coord.epoch();
         self.checkpoint_count.store(epoch as _, Ordering::SeqCst);
         Ok(())

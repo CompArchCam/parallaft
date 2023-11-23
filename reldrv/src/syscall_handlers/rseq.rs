@@ -9,12 +9,11 @@ use syscalls::SyscallArgs;
 use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
-    process::Process,
+    process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
 };
 
 use super::{
-    CustomSyscallHandler, HandlerContext, ProcessLifetimeHook, StandardSyscallHandler,
-    SyscallHandlerExitAction,
+    CustomSyscallHandler, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
 };
 
 pub struct RseqHandler {
@@ -103,7 +102,7 @@ impl CustomSyscallHandler for RseqHandler {
 }
 
 impl ProcessLifetimeHook for RseqHandler {
-    fn handle_main_init(&self, context: &HandlerContext) -> Result<()> {
+    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
         let rseq_config = ptrace::get_rseq_configuration(context.process.pid)
             .ok()
             .and_then(|c| {

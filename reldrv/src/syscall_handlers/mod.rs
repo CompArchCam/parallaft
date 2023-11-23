@@ -15,18 +15,19 @@ use crate::{
     error::Result,
     process::Process,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::Segment,
+    segments::{Segment, SegmentChain},
 };
 
 pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
-pub struct HandlerContext<'p, 's, 'scope, 'env> {
+pub struct HandlerContext<'p, 'segs, 'disp, 'scope, 'env> {
     pub process: &'p Process,
     // active_segment: Option<&'a mut Segment>,
     // is_main: bool,
-    pub check_coord: &'s CheckCoordinator<'s>,
+    pub segments: &'segs SegmentChain,
+    pub check_coord: &'disp CheckCoordinator<'disp>,
     pub scope: &'scope Scope<'scope, 'env>,
 }
 
@@ -149,37 +150,5 @@ pub trait CustomSyscallHandler {
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
-    }
-}
-
-#[allow(unused_variables)]
-pub trait ProcessLifetimeHook {
-    /// Called after spawning the main process
-    fn handle_main_init(&self, context: &HandlerContext) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called after spawning a checker process
-    fn handle_checker_init(&self, context: &HandlerContext) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called before killing a checker process
-    fn handle_checker_fini(
-        &self,
-        nr_dirty_pages: Option<usize>,
-        context: &HandlerContext,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called after all subprocesses exit
-    fn handle_all_fini(&self, context: &HandlerContext) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called after main exits
-    fn handle_main_fini(&self, ret_val: i32, context: &HandlerContext) -> Result<()> {
-        Ok(())
     }
 }

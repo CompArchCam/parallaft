@@ -137,13 +137,13 @@ impl CustomSyscallHandler for RelRtLib {
 }
 
 impl SignalHandler for RelRtLib {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         if signal == Signal::SIGTRAP {
             let siginfo = ptrace::getsiginfo(context.process.pid)?;

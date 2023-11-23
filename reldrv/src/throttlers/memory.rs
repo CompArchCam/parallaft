@@ -30,13 +30,17 @@ impl MemoryBasedThrottler {
 }
 
 impl Throttler for MemoryBasedThrottler {
-    fn should_throttle(&self, nr_dirty_pages: usize, check_coord: &CheckCoordinator) -> bool {
+    fn should_throttle(
+        &self,
+        nr_dirty_pages: usize,
+        segments: &SegmentChain,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         if self.memory_overhead_watermark == 0 {
             return false;
         }
 
-        let memory_overhead =
-            Self::get_potential_memory_overhead(nr_dirty_pages, &check_coord.segments);
+        let memory_overhead = Self::get_potential_memory_overhead(nr_dirty_pages, segments);
 
         info!(
             "Potential memory overhead: {}",
@@ -46,8 +50,8 @@ impl Throttler for MemoryBasedThrottler {
         memory_overhead > self.memory_overhead_watermark
     }
 
-    fn should_unthrottle(&self, check_coord: &CheckCoordinator) -> bool {
-        let memory_overhead = Self::get_potential_memory_overhead(0, &check_coord.segments);
+    fn should_unthrottle(&self, segments: &SegmentChain, _check_coord: &CheckCoordinator) -> bool {
+        let memory_overhead = Self::get_potential_memory_overhead(0, segments);
 
         memory_overhead <= self.memory_overhead_watermark
     }

@@ -172,13 +172,13 @@ impl StandardSyscallHandler for PmuSegmentor {
 }
 
 impl SignalHandler for PmuSegmentor {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<crate::signal_handlers::SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         if signal == Signal::SIGTRAP && ptrace::getsiginfo(context.process.pid)?.si_code == 0x6
         /* TRAP_PERF */
@@ -215,7 +215,7 @@ impl SignalHandler for PmuSegmentor {
                         let condbrs = condbr_counter.read().unwrap();
                         debug!("Main conditional branches executed = {}", condbrs);
 
-                        if let Some(segment) = context.check_coord.segments.get_last_segment() {
+                        if let Some(segment) = context.segments.last_segment() {
                             let segment = segment.lock();
                             let checker_pid = segment.checker().unwrap().pid;
 

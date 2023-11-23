@@ -23,13 +23,13 @@ impl CpuidHandler {
 }
 
 impl SignalHandler for CpuidHandler {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         let process = context.process;
 
@@ -47,11 +47,10 @@ impl SignalHandler for CpuidHandler {
 
                 // cpuid
                 let cpuid = context
-                    .check_coord
                     .segments
-                    .get_active_segment_with::<Result<CpuidResult>>(
+                    .lookup_segment_with::<Result<CpuidResult>>(
                         process.pid,
-                        |segment, is_main| {
+                        |mut segment, is_main| {
                             if is_main {
                                 let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
                                 let cpuid = get_cpuid();

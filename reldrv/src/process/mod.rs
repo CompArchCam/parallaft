@@ -5,11 +5,14 @@ mod stats;
 mod syscall;
 mod unwind;
 
-use crate::error::{Error, Result};
+use crate::{
+    check_coord::CheckCoordinator,
+    error::{Error, Result},
+};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
-use std::fmt::Debug;
 use std::ops::Deref;
+use std::{fmt::Debug, thread::Scope};
 
 use nix::{
     errno::Errno,
@@ -139,5 +142,43 @@ impl Drop for OwnedProcess {
                 panic!("Failed to kill process {:?}: {:?}", self.inner.pid, err);
             }
         }
+    }
+}
+
+pub struct ProcessLifetimeHookContext<'p, 'disp, 'scope, 'env> {
+    pub process: &'p Process,
+    pub check_coord: &'disp CheckCoordinator<'disp>,
+    pub scope: &'scope Scope<'scope, 'env>,
+}
+
+#[allow(unused_variables)]
+pub trait ProcessLifetimeHook {
+    /// Called after spawning the main process
+    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after spawning a checker process
+    fn handle_checker_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called before killing a checker process
+    fn handle_checker_fini(
+        &self,
+        nr_dirty_pages: Option<usize>,
+        context: &ProcessLifetimeHookContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after all subprocesses exit
+    fn handle_all_fini(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after main exits
+    fn handle_main_fini(&self, ret_val: i32, context: &ProcessLifetimeHookContext) -> Result<()> {
+        Ok(())
     }
 }

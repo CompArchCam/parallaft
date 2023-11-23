@@ -8,10 +8,11 @@ use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{self, Statistics},
-    syscall_handlers::{HandlerContext, ProcessLifetimeHook},
+    syscall_handlers::HandlerContext,
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
 use log::info;
@@ -36,7 +37,7 @@ impl CheckpointSizeLimiter {
 }
 
 impl ProcessLifetimeHook for CheckpointSizeLimiter {
-    fn handle_main_fini(&self, _ret_val: i32, _context: &HandlerContext) -> Result<()> {
+    fn handle_main_fini(&self, _ret_val: i32, _context: &ProcessLifetimeHookContext) -> Result<()> {
         if self.size_watermark == 0 {
             return Ok(());
         }
@@ -49,13 +50,13 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
 }
 
 impl SignalHandler for CheckpointSizeLimiter {
-    fn handle_signal<'s, 'p, 'c, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'c, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
     ) -> Result<SignalHandlerExitAction>
     where
-        'c: 'scope,
+        'disp: 'scope,
     {
         if signal == Signal::SIGTRAP {
             let siginfo = ptrace::getsiginfo(context.process.pid)?;

@@ -7,6 +7,7 @@ use super::Throttler;
 use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Dispatcher, Installable},
+    segments::SegmentChain,
 };
 
 pub struct NrSegmentsBasedThrottler {
@@ -22,12 +23,17 @@ impl NrSegmentsBasedThrottler {
 }
 
 impl Throttler for NrSegmentsBasedThrottler {
-    fn should_throttle(&self, _nr_dirty_pages: usize, check_coord: &CheckCoordinator) -> bool {
+    fn should_throttle(
+        &self,
+        _nr_dirty_pages: usize,
+        segments: &SegmentChain,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         if self.max_nr_live_segments == 0 {
             return false;
         }
 
-        if check_coord.segments.nr_live_segments() >= self.max_nr_live_segments - 1 {
+        if segments.nr_live_segments() >= self.max_nr_live_segments - 1 {
             info!("Throttling due to too many live segments");
             true
         } else {
@@ -35,8 +41,8 @@ impl Throttler for NrSegmentsBasedThrottler {
         }
     }
 
-    fn should_unthrottle(&self, check_coord: &CheckCoordinator) -> bool {
-        if check_coord.segments.nr_live_segments() < self.max_nr_live_segments {
+    fn should_unthrottle(&self, segments: &SegmentChain, _check_coord: &CheckCoordinator) -> bool {
+        if segments.nr_live_segments() < self.max_nr_live_segments {
             true
         } else {
             false

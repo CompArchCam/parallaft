@@ -6,7 +6,7 @@ use crate::{
     dispatcher::{Dispatcher, Installable},
     error::Result,
     process::Process,
-    syscall_handlers::{HandlerContext, ProcessLifetimeHook},
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
 };
 
 pub struct AffinitySetter<'a> {
@@ -51,7 +51,7 @@ impl<'a> AffinitySetter<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
-    fn handle_main_init(&self, context: &HandlerContext) -> Result<()> {
+    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         context.process.set_cpu_affinity(self.main_cpu_set)?;
@@ -98,7 +98,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         Ok(())
     }
 
-    fn handle_checker_init(&self, context: &HandlerContext) -> Result<()> {
+    fn handle_checker_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
         context.process.set_cpu_affinity(self.checker_cpu_set)?;
 
         Ok(())
