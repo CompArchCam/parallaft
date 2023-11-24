@@ -12,7 +12,7 @@ use clap_num::maybe_hex;
 
 use reldrv::{
     check_coord::CheckCoordinatorFlags, parent_work, statistics::perf::CounterKind,
-    RelShellOptions, RunnerFlags,
+    DirtyPageAddressTrackerType, RelShellOptions, RunnerFlags,
 };
 
 #[derive(Parser, Debug)]
@@ -124,6 +124,10 @@ struct CliArgs {
     #[arg(short, long)]
     pmu_segmentation: bool,
 
+    /// Dirty page tracker to use
+    #[arg(long, default_value = "soft-dirty")]
+    dirty_page_tracker: DirtyPageAddressTrackerType,
+
     command: String,
     args: Vec<String>,
 }
@@ -189,10 +193,6 @@ fn main() {
         CheckCoordinatorFlags::DONT_RUN_CHECKER,
         cli.dont_run_checker,
     );
-    check_coord_flags.set(
-        CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY,
-        cli.dont_clear_soft_dirty,
-    );
     check_coord_flags.set(CheckCoordinatorFlags::DONT_FORK, cli.dont_fork);
     check_coord_flags.set(
         CheckCoordinatorFlags::IGNORE_CHECK_ERRORS,
@@ -231,6 +231,8 @@ fn main() {
             }),
             enabled_perf_counters: cli.enabled_perf_counters,
             pmu_segmentation: cli.pmu_segmentation,
+            dirty_page_tracker: cli.dirty_page_tracker,
+            dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
         },
     );
 

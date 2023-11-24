@@ -11,12 +11,24 @@ use log::{error, info};
 use nix::unistd::Pid;
 use parking_lot::{Mutex, MutexGuard};
 
+use crate::check_coord::ProcessRole;
+use crate::dirty_page_trackers::{
+    DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
+};
 use crate::error::{Error, Result};
+use crate::process::dirty_pages::{filter_writable_addresses, merge_page_addresses, page_diff};
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
 
 pub type EpochId = u32;
 pub type SegmentId = u32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckFailReason {
+    MemoryMapMismatch,
+    MemoryMismatch,
+    RegisterMismatch,
+}
 
 #[derive(Debug)]
 pub enum CheckpointKind {
@@ -161,6 +173,8 @@ pub struct Segment {
     pub syscall_log: LinkedList<SavedSyscall>,
     pub ongoing_syscall: Option<SavedIncompleteSyscall>,
     pub trap_event_log: LinkedList<SavedTrapEvent>,
+    pub dirty_page_addresses_main: Vec<usize>,
+    pub dirty_page_addresses_checker: Vec<usize>,
 }
 
 impl Hash for Segment {
@@ -199,6 +213,8 @@ impl Segment {
             syscall_log: LinkedList::new(),
             ongoing_syscall: None,
             trap_event_log: LinkedList::new(),
+            dirty_page_addresses_main: Vec::new(),
+            dirty_page_addresses_checker: Vec::new(),
         }
     }
 
@@ -214,17 +230,85 @@ impl Segment {
 
     /// Compare dirty memory of the checker process and the reference process without marking the segment status as checked.
     /// This should be called after the checker process invokes the checkpoint syscall.
-    pub fn check(&mut self, ignored_pages: &[usize]) -> Result<(bool, usize)> {
+    pub fn check(
+        &mut self,
+        main_pid: Pid,
+        ignored_pages: &[usize],
+        dirty_page_tracker: &(dyn DirtyPageAddressTracker + Sync),
+    ) -> Result<(std::result::Result<(), CheckFailReason>, usize)> {
         if let SegmentStatus::ReadyToCheck {
             checker,
             checkpoint_end,
         } = &self.status
         {
-            let (mut result, nr_dirty_pages) = checker
-                .dirty_page_delta_against(checkpoint_end.reference().unwrap(), ignored_pages)?;
+            let ctx = DirtyPageAddressTrackerContext {
+                segment: self,
+                main_pid,
+            };
 
-            let checker_regs = checker.read_registers()?;
-            let reference_registers = checkpoint_end.reference().unwrap().read_registers()?;
+            let p1 = checker.deref();
+            let p2 = checkpoint_end.reference().unwrap().deref();
+
+            let (dpa_main, dpa_main_flags) =
+                dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Main, &ctx)?;
+
+            let dpa_main = dpa_main
+                .as_ref()
+                .as_ref()
+                .into_iter()
+                .map(|&x| x)
+                .collect::<Vec<usize>>();
+
+            let (dpa_checker, dpa_checker_flags) = dirty_page_tracker.take_dirty_pages_addresses(
+                self.nr,
+                ProcessRole::Checker,
+                &ctx,
+            )?;
+
+            let dpa_checker = dpa_checker
+                .as_ref()
+                .as_ref()
+                .into_iter()
+                .map(|&x| x)
+                .collect::<Vec<usize>>();
+
+            self.dirty_page_addresses_main = dpa_main;
+            self.dirty_page_addresses_checker = dpa_checker;
+
+            let mut dpa_merged = merge_page_addresses(
+                &self.dirty_page_addresses_checker,
+                &self.dirty_page_addresses_main,
+                ignored_pages,
+            );
+            let mut nr_dirty_pages = dpa_merged.len();
+
+            let p1_writable_ranges = p1.get_writable_ranges()?;
+            let p2_writable_ranges = p2.get_writable_ranges()?;
+
+            if p1_writable_ranges != p2_writable_ranges {
+                error!(
+                    "Memory map differs for epoch {}",
+                    self.checkpoint_start.epoch
+                );
+                return Ok((Err(CheckFailReason::MemoryMapMismatch), nr_dirty_pages));
+            }
+
+            if !dpa_main_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
+                || !dpa_checker_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
+            {
+                dpa_merged = filter_writable_addresses(dpa_merged, &p1_writable_ranges);
+                nr_dirty_pages = dpa_merged.len();
+            }
+
+            info!("Comparing {} dirty pages", nr_dirty_pages);
+
+            if !page_diff(p1, p2, &dpa_merged)? {
+                error!("Memory differs for epoch {}", self.checkpoint_start.epoch);
+                return Ok((Err(CheckFailReason::MemoryMismatch), nr_dirty_pages));
+            }
+
+            let checker_regs = p1.read_registers()?;
+            let reference_registers = p2.read_registers()?;
 
             if checker_regs.inner != reference_registers.inner {
                 error!("Register differs for epoch {}", self.checkpoint_start.epoch);
@@ -237,10 +321,10 @@ impl Segment {
                 info!("Checkpoint backtrace");
                 checkpoint_end.reference().unwrap().unwind().unwrap();
 
-                result = false;
+                return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
             }
 
-            Ok((result, nr_dirty_pages))
+            Ok((Ok(()), nr_dirty_pages))
         } else {
             Err(Error::InvalidState)
         }
@@ -260,9 +344,16 @@ impl Segment {
         }
     }
 
-    /// Get the reference process, it it exists.
-    pub fn reference<'a>(&'a self) -> Option<&'a Process> {
+    /// Get the reference process at the start of the segment, it it exists.
+    pub fn reference_start<'a>(&'a self) -> Option<&'a Process> {
         self.checkpoint_start.reference().map(|r| r.deref())
+    }
+
+    /// Get the reference process at the end of the segment, it it exists.
+    pub fn reference_end<'a>(&'a self) -> Option<&'a Process> {
+        self.status
+            .checkpoint_end()
+            .and_then(|c| c.reference().map(|r| r.deref()))
     }
 
     pub fn nr_dirty_pages(&self) -> Option<usize> {
@@ -467,6 +558,17 @@ impl SegmentChain {
         None
     }
 
+    pub fn lookup_segment_main_mg(&self) -> Option<MutexGuard<Segment>> {
+        if let Some(last_segment) = self.list.back() {
+            let last_segment_locked = last_segment.lock();
+            if matches!(last_segment_locked.status, SegmentStatus::New { .. }) {
+                return Some(last_segment_locked);
+            }
+        }
+
+        None
+    }
+
     pub fn lookup_segment_arc(&self, pid: Pid) -> Option<(Arc<Mutex<Segment>>, bool)> {
         if pid == self.main_pid {
             if let Some(last_segment) = self.list.back() {
@@ -597,7 +699,11 @@ pub trait SegmentEventHandler {
         Ok(())
     }
 
-    fn handle_checkpoint_created_pre(&self, main_pid: Pid) -> Result<()> {
+    fn handle_checkpoint_created_pre(
+        &self,
+        main_pid: Pid,
+        last_segment_id: Option<SegmentId>,
+    ) -> Result<()> {
         Ok(())
     }
 }

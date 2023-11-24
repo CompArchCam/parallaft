@@ -27,6 +27,8 @@ pub enum Error {
 
     #[error("Invalid state")]
     InvalidState,
+    #[error("Not handled")]
+    NotHandled,
     #[error("Unexpected syscall made by the inferior")]
     UnexpectedSyscall(EventFlags),
     #[error("Unexpected trap made by the inferior")]

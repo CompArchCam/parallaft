@@ -35,6 +35,12 @@ use crate::syscall_handlers::{
 use crate::throttlers::Throttler;
 use reverie_syscalls::may_rw::{SyscallMayRead, SyscallMayWrite};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProcessRole {
+    Main,
+    Checker,
+}
+
 pub struct CheckCoordinator<'disp> {
     pub segments: Arc<RwLock<SegmentChain>>,
     pub main: Arc<OwnedProcess>,
@@ -47,10 +53,10 @@ pub struct CheckCoordinator<'disp> {
 }
 
 bitflags! {
+    #[derive(Default)]
     pub struct CheckCoordinatorFlags: u32 {
         const NO_MEM_CHECK = 0b00000010;
         const DONT_RUN_CHECKER = 0b00000100;
-        const DONT_CLEAR_SOFT_DIRTY = 0b00001000;
         const DONT_FORK = 0b00100000;
         const IGNORE_CHECK_ERRORS = 0b01000000;
         const NO_NR_DIRTY_PAGES_LOGGING = 0b10000000;
@@ -132,14 +138,10 @@ impl<'disp> CheckCoordinator<'disp> {
                     )?
                     .as_owned();
 
-                if !self
-                    .flags
-                    .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
-                {
-                    self.main.clear_dirty_page_bits()?;
-                }
-
-                self.dispatcher.handle_checkpoint_created_pre(pid)?;
+                self.dispatcher.handle_checkpoint_created_pre(
+                    pid,
+                    segments.lookup_segment_main_mg().map(|s| s.nr),
+                )?;
 
                 if !is_last_checkpoint_finalizing {
                     let mut throttling = self.throttling.lock();
@@ -184,13 +186,6 @@ impl<'disp> CheckCoordinator<'disp> {
                         scope,
                     });
 
-                if !self
-                    .flags
-                    .contains(CheckCoordinatorFlags::DONT_CLEAR_SOFT_DIRTY)
-                {
-                    checker.clear_dirty_page_bits();
-                }
-
                 info!("New checkpoint: {:?}", checkpoint);
                 segments.with_upgraded(|segments_mut| {
                     self.add_checkpoint(segments_mut, checkpoint, Some(checker))
@@ -206,6 +201,12 @@ impl<'disp> CheckCoordinator<'disp> {
                             restart_old_syscall,
                         )?
                         .as_owned();
+
+                    self.dispatcher.handle_checkpoint_created_pre(
+                        pid,
+                        segments.lookup_segment_main_mg().map(|s| s.nr),
+                    )?;
+
                     self.main.resume()?;
                     let checkpoint =
                         Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
@@ -245,12 +246,16 @@ impl<'disp> CheckCoordinator<'disp> {
 
                         let mut outer_nr_dirty_pages = None;
 
-                        match segment.check(&self.dispatcher.get_ignored_pages()) {
+                        match segment.check(
+                            self.main.pid,
+                            &self.dispatcher.get_ignored_pages(),
+                            self.dispatcher,
+                        ) {
                             Ok((result, nr_dirty_pages)) => {
                                 self.dispatcher.handle_segment_checked(&segment).unwrap();
                                 outer_nr_dirty_pages = Some(nr_dirty_pages);
 
-                                if !result {
+                                if result.is_err() {
                                     if self
                                         .flags
                                         .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
@@ -265,7 +270,7 @@ impl<'disp> CheckCoordinator<'disp> {
                                     info!("Check passed");
                                 }
 
-                                segment.mark_as_checked(!result).unwrap();
+                                segment.mark_as_checked(result.is_err()).unwrap();
                             }
                             Err(e) => {
                                 error!("Failed to check: {:?}", e);

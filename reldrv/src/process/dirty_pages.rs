@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     io::{IoSlice, IoSliceMut},
+    ops::Range,
     slice,
 };
 
@@ -15,33 +16,61 @@ use crate::process::Process;
 
 use super::PAGESIZE;
 
-pub fn page_diff(
-    p1: &impl MemoryAccess,
-    p2: &impl MemoryAccess,
-    pages_p1: &[usize],
-    pages_p2: &[usize],
-) -> Result<bool> {
-    let mut pages: HashSet<usize> = HashSet::new();
-    pages.extend(pages_p1.iter());
-    pages.extend(pages_p2.iter());
+const PAGE_DIFF_BLOCK_SIZE: usize = 64;
 
-    let block_size = 128;
+pub fn merge_page_addresses(
+    page_addresses_p1: &[usize],
+    page_addresses_p2: &[usize],
+    ignored_pages: &[usize],
+) -> HashSet<usize> {
+    let mut pages: HashSet<usize> = HashSet::new();
+    pages.extend(page_addresses_p1);
+    pages.extend(page_addresses_p2);
+
+    let pages = pages
+        .difference(
+            &ignored_pages
+                .into_iter()
+                .map(|&x| x)
+                .collect::<HashSet<usize>>(),
+        )
+        .cloned()
+        .collect::<HashSet<usize>>();
+
+    pages
+}
+
+pub fn filter_writable_addresses(
+    mut addresses: HashSet<usize>,
+    writable_regions: &[Range<usize>],
+) -> HashSet<usize> {
+    addresses.retain(|a| writable_regions.into_iter().any(|r| r.contains(a)));
+    addresses
+}
+
+/// Compare the given pages of two proce¸sses memory.
+/// Returns if the pages are equal, and the number of pages compared.
+pub fn page_diff<'a>(
+    p1_memory: &impl MemoryAccess,
+    p2_memory: &impl MemoryAccess,
+    page_addresses: &HashSet<usize>,
+) -> Result<bool> {
     let page_size = *PAGESIZE as usize;
 
-    let mut buf_p1 = vec![0_u8; block_size * page_size];
-    let mut buf_p2 = vec![0_u8; block_size * page_size];
+    let mut buf_p1 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
+    let mut buf_p2 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
 
-    let remote_iovs: Vec<IoSlice> = pages
+    let remote_iovs: Vec<IoSlice> = page_addresses
         .into_iter()
-        .map(|p| IoSlice::new(unsafe { slice::from_raw_parts(p as _, page_size) }))
+        .map(|&p| IoSlice::new(unsafe { slice::from_raw_parts(p as _, page_size) }))
         .collect();
 
-    for remote_iov in remote_iovs.chunks(block_size) {
+    for remote_iov in remote_iovs.chunks(PAGE_DIFF_BLOCK_SIZE) {
         let local_iov_p1 = IoSliceMut::new(&mut buf_p1[..remote_iov.len() * page_size]);
         let local_iov_p2 = IoSliceMut::new(&mut buf_p2[..remote_iov.len() * page_size]);
 
-        p1.read_vectored(remote_iov, &mut [local_iov_p1])?;
-        p2.read_vectored(remote_iov, &mut [local_iov_p2])?;
+        p1_memory.read_vectored(remote_iov, &mut [local_iov_p1])?;
+        p2_memory.read_vectored(remote_iov, &mut [local_iov_p2])?;
 
         if buf_p1 != buf_p2 {
             for ((page1, page2), r) in buf_p1
@@ -65,30 +94,25 @@ pub fn page_diff(
 
 #[allow(unused)]
 impl Process {
-    pub fn dirty_page_delta_against(
-        &self,
-        other: &Process,
-        ignored_pages: &[usize],
-    ) -> Result<(bool, usize)> {
-        let dirty_pages_myself: Vec<usize> = self
-            .get_dirty_pages()?
-            .into_iter()
-            .filter(|addr| !ignored_pages.contains(addr))
-            .collect();
+    // pub fn dirty_page_delta_against(
+    //     &self,
+    //     other: &Process,
+    //     ignored_pages: &[usize],
+    // ) -> Result<(bool, usize)> {
+    //     let dirty_pages_myself: Vec<usize> = self.get_dirty_pages()?.into_iter().collect();
 
-        let dirty_pages_other: Vec<usize> = other
-            .get_dirty_pages()?
-            .into_iter()
-            .filter(|addr| !ignored_pages.contains(addr))
-            .collect();
+    //     let dirty_pages_other: Vec<usize> = other.get_dirty_pages()?.into_iter().collect();
 
-        info!("{} dirty pages", dirty_pages_myself.len());
+    //     info!("{} dirty pages", dirty_pages_myself.len());
 
-        Ok((
-            page_diff(self, other, &dirty_pages_myself, &dirty_pages_other)?,
-            dirty_pages_myself.len(),
-        ))
-    }
+    //     page_diff(
+    //         self,
+    //         other,
+    //         &dirty_pages_myself,
+    //         &dirty_pages_other,
+    //         ignored_pages,
+    //     )
+    // }
 
     pub fn get_dirty_pages(&self) -> Result<Vec<usize>> {
         let maps = self.procfs()?.maps()?;
@@ -139,6 +163,40 @@ impl Process {
         self.procfs()?.clear_refs(4)?;
 
         Ok(())
+    }
+
+    pub fn get_writable_ranges(&self) -> Result<Box<[Range<usize>]>> {
+        let mut ranges = Vec::new();
+
+        for map in self.procfs()?.maps()? {
+            if map.perms.contains(MMPermissions::WRITE) {
+                ranges.push(Range {
+                    start: map.address.0 as usize,
+                    end: map.address.1 as usize,
+                })
+            }
+        }
+
+        // stitch consecutive ranges
+        if ranges.is_empty() {
+            return Ok(Vec::new().into_boxed_slice());
+        }
+
+        let mut result = Vec::new();
+        let mut current_range = ranges[0].clone();
+
+        for next_range in ranges.iter().skip(1) {
+            if current_range.end == next_range.start {
+                current_range = current_range.start..next_range.end;
+            } else {
+                result.push(current_range.clone());
+                current_range = next_range.clone();
+            }
+        }
+
+        result.push(current_range);
+
+        Ok(result.into_boxed_slice())
     }
 
     pub fn dump_memory_maps(&self) -> Result<()> {

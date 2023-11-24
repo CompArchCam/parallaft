@@ -3,12 +3,15 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
-    check_coord::CheckCoordinator,
+    check_coord::{CheckCoordinator, ProcessRole},
+    dirty_page_trackers::{
+        DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
+    },
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, ProcessLifetimeHook, ProcessLifetimeHookContext},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::{CheckpointCaller, Segment, SegmentChain, SegmentEventHandler},
+    segments::{CheckpointCaller, Segment, SegmentChain, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
@@ -30,6 +33,14 @@ macro_rules! generate_event_handler {
     };
 }
 
+macro_rules! generate_event_handler_option {
+    ($handler_option:ident, fn $name:ident $( < $( $gen:tt ),+ > )? (&self, $( $arg_name:ident : $arg_ty:ty ),* $(,)? ) $( -> $ret_ty:ty )? ) => {
+        fn $name $( < $( $gen ),+ > )? ( &self, $( $arg_name : $arg_ty ),* ) $( -> $ret_ty )? {
+            self.$handler_option.ok_or($crate::error::Error::NotHandled)?.$name($( $arg_name ),*)
+        }
+    };
+}
+
 pub struct Dispatcher<'a> {
     process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
     standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
@@ -40,6 +51,7 @@ pub struct Dispatcher<'a> {
     throttlers: Vec<&'a (dyn Throttler + Sync)>,
     schedule_checkpoint: Vec<&'a (dyn ScheduleCheckpoint + Sync)>,
     schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
+    dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -54,6 +66,7 @@ impl<'a> Dispatcher<'a> {
             throttlers: Vec::new(),
             schedule_checkpoint: Vec::new(),
             schedule_checkpoint_ready_handlers: Vec::new(),
+            dirty_page_tracker: None,
         }
     }
 
@@ -118,6 +131,13 @@ impl<'a> Dispatcher<'a> {
         }
 
         None
+    }
+
+    pub fn install_dirty_page_tracker(
+        &mut self,
+        tracker: &'a (dyn DirtyPageAddressTracker + Sync),
+    ) {
+        self.dirty_page_tracker = Some(tracker);
     }
 }
 
@@ -311,7 +331,7 @@ impl<'a> SegmentEventHandler for Dispatcher<'a> {
     generate_event_handler!(segment_event_handlers, handle_segment_ready, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller);
     generate_event_handler!(segment_event_handlers, handle_segment_checked, segment: &Segment);
     generate_event_handler!(segment_event_handlers, handle_segment_removed, segment: &Segment);
-    generate_event_handler!(segment_event_handlers, handle_checkpoint_created_pre, main_pid: Pid);
+    generate_event_handler!(segment_event_handlers, handle_checkpoint_created_pre, main_pid: Pid, last_segment_id: Option<SegmentId>);
 }
 
 impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
@@ -332,6 +352,17 @@ impl<'a> ScheduleCheckpoint for Dispatcher<'a> {
 
 impl<'a> ScheduleCheckpointReady for Dispatcher<'a> {
     generate_event_handler!(schedule_checkpoint_ready_handlers, handle_ready_to_schedule_checkpoint, check_coord: &CheckCoordinator);
+}
+
+impl<'a> DirtyPageAddressTracker for Dispatcher<'a> {
+    generate_event_handler_option!(dirty_page_tracker,
+        fn take_dirty_pages_addresses<'b>(
+            &self,
+            segment_id: SegmentId,
+            role: ProcessRole,
+            ctx: &DirtyPageAddressTrackerContext<'b>,
+        ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>
+    );
 }
 
 pub trait Installable<'a>

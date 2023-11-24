@@ -16,7 +16,7 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Dispatcher, Installable},
     error::Result,
-    segments::{Segment, SegmentEventHandler},
+    segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
@@ -128,7 +128,11 @@ impl SegmentEventHandler for PmuSegmentor {
         Ok(())
     }
 
-    fn handle_checkpoint_created_pre(&self, _main_pid: Pid) -> Result<()> {
+    fn handle_checkpoint_created_pre(
+        &self,
+        _main_pid: Pid,
+        _last_segment_id: Option<SegmentId>,
+    ) -> Result<()> {
         let mut main_state = self.main_state.lock();
 
         match main_state.as_mut().unwrap() {

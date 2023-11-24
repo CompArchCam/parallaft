@@ -1,4 +1,5 @@
 pub mod check_coord;
+pub mod dirty_page_trackers;
 pub mod dispatcher;
 pub mod error;
 pub mod helpers;
@@ -27,7 +28,11 @@ use nix::unistd::Pid;
 use log::{info, warn};
 use statistics::perf::CounterKind;
 
+use clap::ValueEnum;
+
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
+use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
+use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
@@ -57,6 +62,7 @@ use crate::throttlers::memory::MemoryBasedThrottler;
 use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
 bitflags! {
+    #[derive(Default)]
     pub struct RunnerFlags: u32 {
         const POLL_WAITPID = 0b00000001;
         const DUMP_STATS = 0b00000010;
@@ -65,6 +71,14 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum DirtyPageAddressTrackerType {
+    #[default]
+    SoftDirty,
+    Fpt,
+}
+
+#[derive(Debug, Default)]
 pub struct RelShellOptions {
     pub runner_flags: RunnerFlags,
     pub check_coord_flags: CheckCoordinatorFlags,
@@ -92,26 +106,12 @@ pub struct RelShellOptions {
 
     // enable automatic segmentation based on precise PMU interrupts
     pub pmu_segmentation: bool,
-}
 
-impl Default for RelShellOptions {
-    fn default() -> Self {
-        Self {
-            runner_flags: RunnerFlags::empty(),
-            check_coord_flags: CheckCoordinatorFlags::empty(),
-            stats_output: None,
-            checkpoint_period: 0,
-            max_nr_live_segments: 0,
-            memory_overhead_watermark: 0,
-            main_cpu_set: Vec::new(),
-            checker_cpu_set: Vec::new(),
-            shell_cpu_set: Vec::new(),
-            cache_masks: None,
-            checkpoint_size_watermark: 0,
-            enabled_perf_counters: Vec::new(),
-            pmu_segmentation: false,
-        }
-    }
+    // dirty page tracker backend to use
+    pub dirty_page_tracker: DirtyPageAddressTrackerType,
+
+    // soft dirty page tracker options
+    pub dont_clear_soft_dirty: bool,
 }
 
 #[allow(unused)]
@@ -232,6 +232,14 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
     let nr_segment_based_throttler = NrSegmentsBasedThrottler::new(options.max_nr_live_segments);
     nr_segment_based_throttler.install(&mut disp);
+
+    let soft_dirty_page_tracker = SoftDirtyPageTracker::new(options.dont_clear_soft_dirty);
+    let fpt_dirty_page_tracker = FptDirtyPageTracker::new();
+
+    match options.dirty_page_tracker {
+        DirtyPageAddressTrackerType::SoftDirty => soft_dirty_page_tracker.install(&mut disp),
+        DirtyPageAddressTrackerType::Fpt => fpt_dirty_page_tracker.install(&mut disp),
+    }
 
     info!("Child process tracing started");
 
