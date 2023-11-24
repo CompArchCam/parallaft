@@ -150,11 +150,11 @@ impl FptFd {
         }
     }
 
-    pub fn new_buffer(&self) -> Result<()> {
+    pub fn new_buffer(&mut self) -> Result<()> {
         unsafe { ioctl::fptioc_new_buffer(self.fd).map(|_| ()) }
     }
 
-    pub fn take_record(&self) -> Result<FptRecord> {
+    pub fn take_record(&mut self) -> Result<FptRecord> {
         let record = FptRecord::new(self)?;
         self.new_buffer()?;
         Ok(record)
