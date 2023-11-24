@@ -54,6 +54,9 @@ impl Drop for FptRecord {
     }
 }
 
+unsafe impl Send for FptRecord {}
+unsafe impl Sync for FptRecord {}
+
 pub struct FptFd {
     fd: RawFd,
 }
