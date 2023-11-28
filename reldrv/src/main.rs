@@ -128,6 +128,10 @@ struct CliArgs {
     #[arg(long, default_value = "soft-dirty")]
     dirty_page_tracker: DirtyPageAddressTrackerType,
 
+    /// Enable on-demand fork (ODF)
+    #[arg(long)]
+    odf: bool,
+
     command: String,
     args: Vec<String>,
 }
@@ -233,6 +237,7 @@ fn main() {
             pmu_segmentation: cli.pmu_segmentation,
             dirty_page_tracker: cli.dirty_page_tracker,
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
+            enable_odf: cli.odf,
         },
     );
 

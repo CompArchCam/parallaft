@@ -36,6 +36,7 @@ use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
+use crate::helpers::odf::OdfEnabler;
 use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::pmu::PmuSegmentor;
@@ -112,6 +113,9 @@ pub struct RelShellOptions {
 
     // soft dirty page tracker options
     pub dont_clear_soft_dirty: bool,
+
+    // odf enabler options
+    pub enable_odf: bool,
 }
 
 #[allow(unused)]
@@ -190,6 +194,12 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
     let vdso_remover = VdsoRemover::new();
     vdso_remover.install(&mut disp);
+
+    let odf_enabler = OdfEnabler::new();
+
+    if options.enable_odf {
+        odf_enabler.install(&mut disp);
+    }
 
     #[cfg(not(feature = "intel_cat"))]
     let affinity_setter = AffinitySetter::new(&options.main_cpu_set, &options.checker_cpu_set);
