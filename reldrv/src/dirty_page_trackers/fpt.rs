@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use libfpt_rs::{FptFd, FptFlags, FptRecord};
 use nix::unistd::Pid;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 
 use crate::{
     check_coord::ProcessRole,
@@ -14,7 +13,7 @@ use crate::{
 
 use super::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
 
-const FPT_BUFFER_SIZE: usize = 1024 * 1024; // 1M entries (8MB buffer)
+const FPT_BUFFER_SIZE: usize = 512; // 512 entries (4KB buffer)
 const FPT_FLAGS: FptFlags = FptFlags::ALLOW_REALLOC;
 const MSG_FPT_INIT_FAILED: &'static str = "Failed to initialise FPT dirty page tracker";
 
@@ -59,7 +58,10 @@ impl SegmentEventHandler for FptDirtyPageTracker {
     ) -> Result<()> {
         let mut fd = self.fd_main.lock();
         let fd_mut = fd.get_or_insert_with(|| {
-            FptFd::new(main_pid, FPT_BUFFER_SIZE, FPT_FLAGS, None).expect(MSG_FPT_INIT_FAILED)
+            let mut fd_inner =
+                FptFd::new(main_pid, FPT_BUFFER_SIZE, FPT_FLAGS, None).expect(MSG_FPT_INIT_FAILED);
+            fd_inner.enable().unwrap();
+            fd_inner
         });
 
         if let Some(last_segment_id) = last_segment_id {
@@ -70,7 +72,6 @@ impl SegmentEventHandler for FptDirtyPageTracker {
         }
 
         fd_mut.clear_fault()?;
-        fd_mut.enable()?;
 
         Ok(())
     }
@@ -98,6 +99,9 @@ impl SegmentEventHandler for FptDirtyPageTracker {
         let mut fd = fd_map
             .remove(&segment.nr)
             .expect("fpt: segment number doesn't exist in fd_map");
+
+        drop(fd_map);
+
         fd.disable()?;
 
         let record = fd.take_record()?;
