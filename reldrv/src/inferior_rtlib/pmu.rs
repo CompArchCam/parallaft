@@ -53,17 +53,15 @@ pub struct PmuSegmentor {
 #[derive(Debug)]
 enum MainState {
     Idle,
-    CountingInstructions {
+    CountingBranches {
         instr_irq: Counter,
         condbr_counter: Counter,
-    },
-    CountingBranches {
-        condbr_irq: Counter,
-        condbr_counter: Counter, // required because the counter that generates interrupt may be stale
     },
 }
 
 impl PmuSegmentor {
+    const SIGVAL_MAGIC: usize = 0xdeadbeef;
+
     pub fn new(period: u64) -> Self {
         Self {
             period,
@@ -136,7 +134,7 @@ impl SegmentEventHandler for PmuSegmentor {
         let mut main_state = self.main_state.lock();
 
         match main_state.as_mut().unwrap() {
-            MainState::CountingInstructions {
+            MainState::CountingBranches {
                 ref mut condbr_counter,
                 ref mut instr_irq,
             } => {
@@ -163,7 +161,7 @@ impl StandardSyscallHandler for PmuSegmentor {
             Syscall::Execve(_) | Syscall::Execveat(_) if ret_val == 0 => {
                 assert_eq!(context.process.pid, context.check_coord.main.pid);
 
-                *self.main_state.lock() = Some(MainState::CountingInstructions {
+                *self.main_state.lock() = Some(MainState::CountingBranches {
                     instr_irq: self.instr_counter(context.process.pid, self.period),
                     condbr_counter: self.condbr_counter(context.process.pid),
                 });
@@ -185,144 +183,146 @@ impl SignalHandler for PmuSegmentor {
     where
         'disp: 'scope,
     {
-        if signal == Signal::SIGTRAP && ptrace::getsiginfo(context.process.pid)?.si_code == 0x6
-        /* TRAP_PERF */
-        {
-            let ip = context.process.read_registers().unwrap().rip;
+        if signal == Signal::SIGTRAP {
+            let siginfo = ptrace::getsiginfo(context.process.pid)?;
+            if siginfo.si_code == 0x6
+                || (siginfo.si_code == -1
+                    && unsafe { siginfo.si_value().sival_ptr }
+                        == Self::SIGVAL_MAGIC as *mut nix::libc::c_void)
+            /* TRAP_PERF */
+            {
+                let ip = context.process.read_registers().unwrap().rip;
 
-            let mut take_checkpoint = false;
+                let mut take_checkpoint = false;
 
-            debug!(
-                "[PID {: >8}] Trap: Perf @ IP = {:p}",
-                context.process.pid, ip as *const u8
-            );
+                debug!(
+                    "[PID {: >8}] Trap: Perf @ IP = {:p}",
+                    context.process.pid, ip as *const u8
+                );
 
-            if context.process.pid == context.check_coord.main.pid {
-                let mut state = self.main_state.lock();
+                if context.process.pid == context.check_coord.main.pid {
+                    let mut state = self.main_state.lock();
 
-                let next_state = match state.take().unwrap() {
-                    MainState::CountingInstructions {
-                        mut instr_irq,
-                        condbr_counter,
-                    } => {
-                        instr_irq.disable().unwrap();
+                    let next_state = match state.take().unwrap() {
                         MainState::CountingBranches {
-                            condbr_irq: self.condbr_irq(context.process.pid, 4096),
-                            condbr_counter,
-                        }
-                    }
-                    MainState::CountingBranches {
-                        mut condbr_irq,
-                        mut condbr_counter,
-                    } => {
-                        condbr_irq.disable().unwrap();
-                        condbr_counter.disable().unwrap();
-                        let condbrs = condbr_counter.read().unwrap();
-                        debug!("Main conditional branches executed = {}", condbrs);
+                            mut instr_irq,
+                            mut condbr_counter,
+                        } => {
+                            instr_irq.disable().unwrap();
+                            condbr_counter.disable().unwrap();
+                            let condbrs = condbr_counter.read().unwrap();
+                            debug!("Main conditional branches executed = {}", condbrs);
 
-                        if let Some(segment) = context.segments.last_segment() {
-                            let segment = segment.lock();
-                            let checker_pid = segment.checker().unwrap().pid;
+                            if let Some(segment) = context.segments.last_segment() {
+                                let segment = segment.lock();
+                                let checker_pid = segment.checker().unwrap().pid;
 
-                            let mut segment_info_map = self.segment_info_map.lock();
-                            segment_info_map.insert(
-                                checker_pid,
-                                SegmentInfo {
-                                    condbrs,
-                                    ip,
-                                    state: Some(CheckerState::CountingBranches {
-                                        condbr_irq: self
-                                            .condbr_irq(checker_pid, condbrs - MAX_SKID),
-                                        condbr_counter: self.condbr_counter(checker_pid),
-                                    }),
-                                },
-                            );
-                        };
+                                let mut segment_info_map = self.segment_info_map.lock();
+                                segment_info_map.insert(
+                                    checker_pid,
+                                    SegmentInfo {
+                                        condbrs,
+                                        ip,
+                                        state: Some(CheckerState::CountingBranches {
+                                            condbr_irq: self
+                                                .condbr_irq(checker_pid, condbrs - MAX_SKID),
+                                            condbr_counter: self.condbr_counter(checker_pid),
+                                        }),
+                                    },
+                                );
+                            };
 
-                        take_checkpoint = true;
+                            take_checkpoint = true;
 
-                        MainState::CountingInstructions {
-                            instr_irq: self.instr_counter(context.process.pid, self.period),
-                            condbr_counter: self.condbr_counter(context.process.pid),
-                        }
-                    }
-                    MainState::Idle => panic!("Invalid state"),
-                };
-
-                *state = Some(next_state);
-            } else {
-                let mut segment_info_map = self.segment_info_map.lock();
-                let segment_info = segment_info_map.get_mut(&context.process.pid).unwrap();
-
-                let next_state = match segment_info.state.take().unwrap() {
-                    CheckerState::CountingBranches {
-                        mut condbr_irq,
-                        mut condbr_counter,
-                    } => {
-                        condbr_irq.disable().unwrap();
-                        let condbrs = condbr_counter.read().unwrap();
-                        let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
-
-                        debug!(
-                            "Checker conditional branches executed = {} (diff = {})",
-                            condbrs, diff
-                        );
-
-                        if diff > 0 {
-                            CheckerState::Stepping {
-                                condbr_counter,
-                                breakpoint: self.breakpoint(context.process.pid, segment_info.ip),
-                            }
-                        } else if diff == 0 {
-                            CheckerState::Done
-                        } else {
-                            panic!("Skid detected");
-                        }
-                    }
-                    CheckerState::Stepping {
-                        mut condbr_counter,
-                        breakpoint,
-                    } => {
-                        debug!("Breakpoint hit");
-
-                        let condbrs = condbr_counter.read().unwrap();
-                        let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
-                        debug!(
-                            "Checker conditional branches executed = {} (diff = {})",
-                            condbrs, diff
-                        );
-
-                        if diff > 0 {
-                            CheckerState::Stepping {
-                                condbr_counter,
-                                breakpoint,
-                            }
-                        } else if diff == 0 {
                             context
-                                .process
-                                .modify_registers_with(|r| r.with_resume_flag_cleared())
-                                .unwrap();
-                            CheckerState::Done
-                        } else {
-                            panic!("Unexpected breakpoint skid");
+                                .check_coord
+                                .main
+                                .modify_registers_with(|r| r.with_resume_flag_cleared())?;
+
+                            MainState::CountingBranches {
+                                instr_irq: self.instr_counter(context.process.pid, self.period),
+                                condbr_counter: self.condbr_counter(context.process.pid),
+                            }
                         }
+                        MainState::Idle => panic!("Invalid state"), // TODO: handle schedule_checkpoint request
+                    };
+
+                    *state = Some(next_state);
+                } else {
+                    let mut segment_info_map = self.segment_info_map.lock();
+                    let segment_info = segment_info_map.get_mut(&context.process.pid).unwrap();
+
+                    let next_state = match segment_info.state.take().unwrap() {
+                        CheckerState::CountingBranches {
+                            mut condbr_irq,
+                            mut condbr_counter,
+                        } => {
+                            condbr_irq.disable().unwrap();
+                            let condbrs = condbr_counter.read().unwrap();
+                            let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
+
+                            debug!(
+                                "Checker conditional branches executed = {} (diff = {})",
+                                condbrs, diff
+                            );
+
+                            if diff > 0 {
+                                CheckerState::Stepping {
+                                    condbr_counter,
+                                    breakpoint: self
+                                        .breakpoint(context.process.pid, segment_info.ip),
+                                }
+                            } else if diff == 0 {
+                                CheckerState::Done
+                            } else {
+                                panic!("Skid detected");
+                            }
+                        }
+                        CheckerState::Stepping {
+                            mut condbr_counter,
+                            breakpoint,
+                        } => {
+                            debug!("Breakpoint hit");
+
+                            let condbrs = condbr_counter.read().unwrap();
+                            let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
+                            debug!(
+                                "Checker conditional branches executed = {} (diff = {})",
+                                condbrs, diff
+                            );
+
+                            if diff > 0 {
+                                CheckerState::Stepping {
+                                    condbr_counter,
+                                    breakpoint,
+                                }
+                            } else if diff == 0 {
+                                context
+                                    .process
+                                    .modify_registers_with(|r| r.with_resume_flag_cleared())
+                                    .unwrap();
+                                CheckerState::Done
+                            } else {
+                                panic!("Unexpected breakpoint skid");
+                            }
+                        }
+                        CheckerState::Done => panic!("Invalid state"),
+                    };
+
+                    let next_state = segment_info.state.insert(next_state);
+
+                    if matches!(next_state, CheckerState::Done) {
+                        take_checkpoint = true;
                     }
-                    CheckerState::Done => panic!("Invalid state"),
-                };
 
-                let next_state = segment_info.state.insert(next_state);
-
-                if matches!(next_state, CheckerState::Done) {
-                    take_checkpoint = true;
+                    // TODO: error handling
                 }
 
-                // TODO: error handling
-            }
-
-            if take_checkpoint {
-                return Ok(SignalHandlerExitAction::Checkpoint);
-            } else {
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                if take_checkpoint {
+                    return Ok(SignalHandlerExitAction::Checkpoint);
+                } else {
+                    return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                }
             }
         }
 
@@ -331,8 +331,18 @@ impl SignalHandler for PmuSegmentor {
 }
 
 impl ScheduleCheckpoint for PmuSegmentor {
-    fn schedule_checkpoint(&self, _check_coord: &CheckCoordinator) -> Result<()> {
-        todo!()
+    fn schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
+        unsafe {
+            nix::libc::pthread_sigqueue(
+                check_coord.main.pid.as_raw() as _,
+                nix::libc::SIGTRAP,
+                nix::libc::sigval {
+                    sival_ptr: Self::SIGVAL_MAGIC as *mut nix::libc::c_void,
+                },
+            )
+        };
+
+        Ok(())
     }
 }
 
