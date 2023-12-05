@@ -13,7 +13,7 @@ use crate::{
 
 use super::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
 
-const FPT_BUFFER_SIZE: usize = 512; // 512 entries (4KB buffer)
+const FPT_BUFFER_SIZE: usize = 2 * 1024 * 1024; // 2M entries (16MB buffer)
 const FPT_FLAGS: FptFlags = FptFlags::ALLOW_REALLOC;
 const MSG_FPT_INIT_FAILED: &'static str = "Failed to initialise FPT dirty page tracker";
 
