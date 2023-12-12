@@ -14,6 +14,7 @@ use reldrv::{
     check_coord::CheckCoordinatorFlags, parent_work, statistics::perf::CounterKind,
     DirtyPageAddressTrackerType, RelShellOptions, RunnerFlags,
 };
+use syscalls::{syscall, Sysno};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -137,6 +138,11 @@ struct CliArgs {
 }
 
 fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
+    if options.enable_odf {
+        unsafe { syscall!(Sysno::prctl, 65, 0, 0, 0, 0) }
+            .expect("Failed to initialise on-demand fork (ODF). Check your kernel support.");
+    }
+
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => parent_work(child, options),
         Ok(ForkResult::Child) => {
