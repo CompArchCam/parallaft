@@ -18,6 +18,7 @@ use parking_lot::{Mutex, RwLock};
 
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo, Sysno};
 
+use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
 use crate::error::{Error, EventFlags, Result};
 use crate::process::dirty_pages::IgnoredPagesProvider;
@@ -249,6 +250,7 @@ impl<'disp> CheckCoordinator<'disp> {
                         match segment.check(
                             self.main.pid,
                             &self.dispatcher.get_ignored_pages(),
+                            &self.dispatcher.get_extra_writable_ranges(),
                             self.dispatcher,
                         ) {
                             Ok((result, nr_dirty_pages)) => {

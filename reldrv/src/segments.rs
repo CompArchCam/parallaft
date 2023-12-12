@@ -2,7 +2,7 @@ use std::arch::x86_64::CpuidResult;
 use std::collections::LinkedList;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 
 use std::sync::Arc;
 use std::{mem, ptr};
@@ -234,6 +234,7 @@ impl Segment {
         &mut self,
         main_pid: Pid,
         ignored_pages: &[usize],
+        extra_writable_ranges: &[Range<usize>],
         dirty_page_tracker: &(dyn DirtyPageAddressTracker + Sync),
     ) -> Result<(std::result::Result<(), CheckFailReason>, usize)> {
         if let SegmentStatus::ReadyToCheck {
@@ -296,7 +297,13 @@ impl Segment {
             if !dpa_main_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
                 || !dpa_checker_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
             {
-                dpa_merged = filter_writable_addresses(dpa_merged, &p1_writable_ranges);
+                let writable_ranges = p1_writable_ranges
+                    .into_iter()
+                    .chain(extra_writable_ranges.into_iter())
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                dpa_merged = filter_writable_addresses(dpa_merged, &writable_ranges);
                 nr_dirty_pages = dpa_merged.len();
             }
 

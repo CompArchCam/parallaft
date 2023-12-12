@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use nix::{sys::signal::Signal, unistd::Pid};
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
@@ -6,6 +8,7 @@ use crate::{
     check_coord::{CheckCoordinator, ProcessRole},
     dirty_page_trackers::{
         DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
+        ExtraWritableRangesProvider,
     },
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
@@ -52,6 +55,7 @@ pub struct Dispatcher<'a> {
     schedule_checkpoint: Vec<&'a (dyn ScheduleCheckpoint + Sync)>,
     schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
     dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
+    extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -67,6 +71,7 @@ impl<'a> Dispatcher<'a> {
             schedule_checkpoint: Vec::new(),
             schedule_checkpoint_ready_handlers: Vec::new(),
             dirty_page_tracker: None,
+            extra_writable_ranges_providers: Vec::new(),
         }
     }
 
@@ -138,6 +143,13 @@ impl<'a> Dispatcher<'a> {
         tracker: &'a (dyn DirtyPageAddressTracker + Sync),
     ) {
         self.dirty_page_tracker = Some(tracker);
+    }
+
+    pub fn install_extra_writable_ranges_provider(
+        &mut self,
+        provider: &'a (dyn ExtraWritableRangesProvider + Sync),
+    ) {
+        self.extra_writable_ranges_providers.push(provider)
     }
 }
 
@@ -363,6 +375,18 @@ impl<'a> DirtyPageAddressTracker for Dispatcher<'a> {
             ctx: &DirtyPageAddressTrackerContext<'b>,
         ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>
     );
+}
+
+impl<'a> ExtraWritableRangesProvider for Dispatcher<'a> {
+    fn get_extra_writable_ranges(&self) -> Box<[Range<usize>]> {
+        let mut ranges = Vec::new();
+
+        for provider in &self.extra_writable_ranges_providers {
+            ranges.append(&mut provider.get_extra_writable_ranges().into_vec());
+        }
+
+        ranges.into_boxed_slice()
+    }
 }
 
 pub trait Installable<'a>

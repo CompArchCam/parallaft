@@ -8,7 +8,7 @@ use std::{
 use log::{debug, info, trace};
 
 use pretty_hex::PrettyHex;
-use procfs::process::MMPermissions;
+use procfs::process::{MMPermissions, MMapPath};
 use reverie_syscalls::MemoryAccess;
 
 use crate::error::Result;
@@ -122,17 +122,18 @@ impl Process {
 
         debug!("Page map for pid {}", self.pid);
 
-        for map in maps
-            .iter()
-            .filter(|m| m.perms.contains(procfs::process::MMPermissions::WRITE))
-        {
+        for map in maps {
             debug!(
-                "Writable map: {:?}-{:?}: {:?} @ {:p}",
+                "Map: {:?}-{:?}: {:?} @ {:p}",
                 map.address.0 as *const u8,
                 map.address.1 as *const u8,
                 map.pathname,
                 map.offset as *const u8
             );
+            if [MMapPath::Vdso, MMapPath::Vsyscall, MMapPath::Vvar].contains(&map.pathname) {
+                continue;
+            }
+
             let range = (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
             let range_info = pagemap.get_range_info(range)?;
 

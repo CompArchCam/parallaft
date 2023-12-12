@@ -1,6 +1,8 @@
 pub mod fpt;
 pub mod soft_dirty;
 
+use std::ops::Range;
+
 use bitflags::bitflags;
 use nix::unistd::Pid;
 
@@ -29,4 +31,9 @@ pub trait DirtyPageAddressTracker {
         role: ProcessRole,
         ctx: &DirtyPageAddressTrackerContext<'a>,
     ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>;
+}
+
+#[allow(unused_variables)]
+pub trait ExtraWritableRangesProvider {
+    fn get_extra_writable_ranges(&self) -> Box<[Range<usize>]>;
 }

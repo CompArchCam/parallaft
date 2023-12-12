@@ -1,7 +1,11 @@
+use std::{collections::HashSet, ops::Range};
+
 use log::{error, info};
-use reverie_syscalls::{Addr, AddrMut, MapFlags, Syscall, SyscallInfo};
+use parking_lot::Mutex;
+use reverie_syscalls::{Addr, AddrMut, MapFlags, ProtFlags, Syscall, SyscallInfo};
 
 use crate::{
+    dirty_page_trackers::ExtraWritableRangesProvider,
     dispatcher::{Dispatcher, Installable},
     error::{Error, EventFlags, Result},
     saved_syscall::{
@@ -15,11 +19,15 @@ use super::{
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
 
-pub struct MmapHandler {}
+pub struct MmapHandler {
+    extra_writable_ranges: Mutex<HashSet<Range<usize>>>,
+}
 
 impl MmapHandler {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            extra_writable_ranges: Mutex::new(HashSet::new()),
+        }
     }
 }
 
@@ -193,7 +201,7 @@ impl StandardSyscallHandler for MmapHandler {
 
     fn handle_standard_syscall_exit_main(
         &self,
-        _ret_val: isize,
+        ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
         _active_segment: &mut Segment,
         context: &HandlerContext,
@@ -206,6 +214,16 @@ impl StandardSyscallHandler for MmapHandler {
                 })?;
 
                 Ok(SyscallHandlerExitAction::ContinueInferior)
+            }
+            Syscall::Mprotect(mprotect) => {
+                if !mprotect.protection().contains(ProtFlags::PROT_WRITE) && ret_val == 0 {
+                    let addr = mprotect.addr().map_or(0, |a| a.as_raw());
+                    let len = mprotect.len();
+
+                    self.extra_writable_ranges.lock().insert(addr..addr + len);
+                }
+
+                Ok(SyscallHandlerExitAction::NextHandler)
             }
             _ => Ok(SyscallHandlerExitAction::NextHandler),
         }
@@ -235,8 +253,17 @@ impl StandardSyscallHandler for MmapHandler {
     }
 }
 
+impl ExtraWritableRangesProvider for MmapHandler {
+    fn get_extra_writable_ranges(&self) -> Box<[Range<usize>]> {
+        let m = self.extra_writable_ranges.lock();
+
+        m.iter().cloned().collect::<Box<_>>()
+    }
+}
+
 impl<'a> Installable<'a> for MmapHandler {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
         dispatcher.install_standard_syscall_handler(self);
+        dispatcher.install_extra_writable_ranges_provider(self);
     }
 }
