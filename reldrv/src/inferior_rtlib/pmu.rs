@@ -1,7 +1,8 @@
 //! PMU-interrupt-based segmentation
 
-use std::collections::HashMap;
+use std::{collections::HashMap, io};
 
+use lazy_static::lazy_static;
 use log::{debug, info};
 
 use nix::{
@@ -23,8 +24,120 @@ use crate::{
 
 use super::ScheduleCheckpoint;
 
-const MAX_SKID: u64 = 256;
-const PERF_EVENT_RAW_BRANCH_RETIRED: u64 = 0xbbc4; // branches retired excluding far branches
+const INTEL_PERF_EVENT_BRANCH_RETIRED: u64 = 0xbbc4; // branches retired excluding far branches
+const AMD_PERF_EVENT_EX_RET_BRN_FAR: u64 = 0xc6;
+const AMD_PERF_EVENT_EX_RET_BRN: u64 = 0xc2;
+
+#[derive(Debug)]
+enum PmuType {
+    // TODO: more precise model detection
+    Amd,
+    Intel,
+    Unknown,
+}
+
+impl PmuType {
+    fn detect() -> Self {
+        let cpuid0 = unsafe { std::arch::x86_64::__cpuid(0) };
+        let mut vendor = [0; 12];
+        vendor[0..4].copy_from_slice(&cpuid0.ebx.to_le_bytes());
+        vendor[4..8].copy_from_slice(&cpuid0.edx.to_le_bytes());
+        vendor[8..12].copy_from_slice(&cpuid0.ecx.to_le_bytes());
+
+        let vendor = std::str::from_utf8(&vendor).unwrap_or("[INVALID]");
+
+        match vendor {
+            "AuthenticAMD" => Self::Amd,
+            "GenuineIntel" => Self::Intel,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+lazy_static! {
+    static ref PMU_TYPE: PmuType = {
+        let t = PmuType::detect();
+        info!("PMU type: {:?}", t);
+        t
+    };
+    static ref MAX_SKID: u64 = {
+        match *PMU_TYPE {
+            PmuType::Amd => 1024,
+            PmuType::Intel => 256,
+            PmuType::Unknown => 0,
+        }
+    };
+}
+
+trait PmuCounter {
+    fn enable(&mut self) -> io::Result<()>;
+    fn disable(&mut self) -> io::Result<()>;
+    fn reset(&mut self) -> io::Result<()>;
+    fn read(&mut self) -> io::Result<u64>;
+}
+
+struct PmuCounterSingle {
+    counter: Counter,
+}
+
+impl PmuCounterSingle {
+    pub fn new(counter: Counter) -> Self {
+        Self { counter }
+    }
+}
+
+impl PmuCounter for PmuCounterSingle {
+    fn enable(&mut self) -> io::Result<()> {
+        self.counter.enable()
+    }
+
+    fn disable(&mut self) -> io::Result<()> {
+        self.counter.disable()
+    }
+
+    fn reset(&mut self) -> io::Result<()> {
+        self.counter.reset()
+    }
+
+    fn read(&mut self) -> io::Result<u64> {
+        self.counter.read()
+    }
+}
+
+struct PmuCounterDiff {
+    counter1: Box<dyn PmuCounter + Send>,
+    counter2: Box<dyn PmuCounter + Send>,
+}
+
+impl PmuCounterDiff {
+    pub fn new(counter1: Box<dyn PmuCounter + Send>, counter2: Box<dyn PmuCounter + Send>) -> Self {
+        Self { counter1, counter2 }
+    }
+}
+
+impl PmuCounter for PmuCounterDiff {
+    fn enable(&mut self) -> io::Result<()> {
+        self.counter1.enable()?;
+        self.counter2.enable()?;
+        Ok(())
+    }
+
+    fn disable(&mut self) -> io::Result<()> {
+        self.counter1.disable()?;
+        self.counter2.disable()?;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> io::Result<()> {
+        self.counter1.reset()?;
+        self.counter2.reset()?;
+        Ok(())
+    }
+
+    fn read(&mut self) -> io::Result<u64> {
+        Ok(self.counter1.read()? - self.counter2.read()?)
+    }
+}
 
 struct SegmentInfo {
     condbrs: u64,
@@ -34,11 +147,11 @@ struct SegmentInfo {
 
 enum CheckerState {
     CountingBranches {
-        condbr_irq: Counter,
-        condbr_counter: Counter,
+        condbr_irq: Box<dyn PmuCounter + Send>,
+        condbr_counter: Box<dyn PmuCounter + Send>,
     },
     Stepping {
-        condbr_counter: Counter,
+        condbr_counter: Box<dyn PmuCounter + Send>,
         breakpoint: Counter,
     },
     Done,
@@ -50,12 +163,11 @@ pub struct PmuSegmentor {
     main_state: Mutex<Option<MainState>>,
 }
 
-#[derive(Debug)]
 enum MainState {
     Idle,
     CountingBranches {
-        instr_irq: Counter,
-        condbr_counter: Counter,
+        instr_irq: Box<dyn PmuCounter + Send>,
+        condbr_counter: Box<dyn PmuCounter + Send>,
     },
 }
 
@@ -70,8 +182,8 @@ impl PmuSegmentor {
         }
     }
 
-    fn instr_counter(&self, pid: Pid, period: u64) -> Counter {
-        perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
+    fn instr_counter(&self, pid: Pid, period: u64) -> Box<dyn PmuCounter + Send> {
+        let counter = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
             .observe_pid(pid.as_raw() as _)
             .wakeup_events(1)
             .sample_period(period)
@@ -80,30 +192,102 @@ impl PmuSegmentor {
             .enabled(true)
             .pinned(true)
             .build()
-            .expect("Failed to initialise perf counter. Your hardware may not support it.")
+            .expect("Failed to initialise perf counter. Your hardware may not support it.");
+
+        Box::new(PmuCounterSingle::new(counter))
     }
 
-    fn condbr_counter(&self, pid: Pid) -> Counter {
-        perf_event::Builder::new(perf_event::events::Raw::new(PERF_EVENT_RAW_BRANCH_RETIRED))
-            .observe_pid(pid.as_raw() as _)
-            .enabled(true)
-            .pinned(true)
-            .build()
-            .unwrap()
+    fn condbr_counter(&self, pid: Pid) -> Box<dyn PmuCounter + Send> {
+        match *PMU_TYPE {
+            PmuType::Amd => {
+                let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
+                    AMD_PERF_EVENT_EX_RET_BRN,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .unwrap();
+
+                let counter2 = perf_event::Builder::new(perf_event::events::Raw::new(
+                    AMD_PERF_EVENT_EX_RET_BRN_FAR,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .unwrap();
+
+                Box::new(PmuCounterDiff::new(
+                    Box::new(PmuCounterSingle::new(counter1)),
+                    Box::new(PmuCounterSingle::new(counter2)),
+                ))
+            }
+            PmuType::Intel => {
+                let counter = perf_event::Builder::new(perf_event::events::Raw::new(
+                    INTEL_PERF_EVENT_BRANCH_RETIRED,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .unwrap();
+
+                Box::new(PmuCounterSingle::new(counter))
+            }
+            PmuType::Unknown => panic!("Unsupported PMU"),
+        }
     }
 
-    fn condbr_irq(&self, pid: Pid, period: u64) -> Counter {
-        perf_event::Builder::new(perf_event::events::Raw::new(PERF_EVENT_RAW_BRANCH_RETIRED))
-            .observe_pid(pid.as_raw() as _)
-            .wakeup_events(1)
-            .sample_period(period)
-            .precise_ip(SampleSkid::RequireZero)
-            .sigtrap(true)
-            .remove_on_exec(true)
-            .enabled(true)
-            .pinned(true)
-            .build()
-            .expect("Failed to initialise perf counter. Your hardware may not support it.")
+    fn condbr_irq(&self, pid: Pid, period: u64) -> Box<dyn PmuCounter + Send> {
+        match *PMU_TYPE {
+            PmuType::Amd => {
+                let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
+                    AMD_PERF_EVENT_EX_RET_BRN,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .wakeup_events(1)
+                .sample_period(period)
+                .sigtrap(true)
+                .remove_on_exec(true)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .unwrap();
+
+                let counter2 = perf_event::Builder::new(perf_event::events::Raw::new(
+                    AMD_PERF_EVENT_EX_RET_BRN_FAR,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .unwrap();
+
+                Box::new(PmuCounterDiff::new(
+                    Box::new(PmuCounterSingle::new(counter1)),
+                    Box::new(PmuCounterSingle::new(counter2)),
+                ))
+            }
+            PmuType::Intel => {
+                let counter = perf_event::Builder::new(perf_event::events::Raw::new(
+                    INTEL_PERF_EVENT_BRANCH_RETIRED,
+                ))
+                .observe_pid(pid.as_raw() as _)
+                .wakeup_events(1)
+                .sample_period(period)
+                .precise_ip(SampleSkid::RequireZero)
+                .sigtrap(true)
+                .remove_on_exec(true)
+                .enabled(true)
+                .pinned(true)
+                .build()
+                .expect("Failed to initialise perf counter. Your hardware may not support it.");
+
+                Box::new(PmuCounterSingle::new(counter))
+            }
+            PmuType::Unknown => panic!("Unsupported PMU"),
+        }
     }
 
     fn breakpoint(&self, pid: Pid, address: u64) -> Counter {
@@ -143,7 +327,7 @@ impl SegmentEventHandler for PmuSegmentor {
                 instr_irq.reset().unwrap();
                 instr_irq.enable().unwrap();
             }
-            _ => panic!("Invalid main state: {:?}", main_state.as_mut()),
+            _ => panic!("Invalid main state"),
         }
 
         Ok(())
@@ -225,7 +409,7 @@ impl SignalHandler for PmuSegmentor {
                                         ip,
                                         state: Some(CheckerState::CountingBranches {
                                             condbr_irq: self
-                                                .condbr_irq(checker_pid, condbrs - MAX_SKID),
+                                                .condbr_irq(checker_pid, condbrs - *MAX_SKID),
                                             condbr_counter: self.condbr_counter(checker_pid),
                                         }),
                                     },
