@@ -350,6 +350,8 @@ impl StandardSyscallHandler for PmuSegmentor {
                     condbr_counter: self.condbr_counter(context.process.pid),
                 });
 
+                self.schedule_checkpoint(context.check_coord)?;
+
                 info!("PMU-interrupt-based segmentation enabled");
             }
             _ => (),
@@ -514,14 +516,39 @@ impl SignalHandler for PmuSegmentor {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct siginfo_t_inner {
+    si_signo: nix::libc::c_int,
+    si_errno: nix::libc::c_int,
+    si_code: nix::libc::c_int,
+    si_pid: nix::libc::c_int,
+    si_uid: nix::libc::c_int,
+    si_ptr: *mut nix::libc::c_void,
+}
+
+#[repr(C)]
+union siginfo_t {
+    si: siginfo_t_inner,
+    si_pad: [nix::libc::c_int; 128 / core::mem::size_of::<nix::libc::c_int>()],
+}
+
 impl ScheduleCheckpoint for PmuSegmentor {
     fn schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
         unsafe {
-            nix::libc::pthread_sigqueue(
-                check_coord.main.pid.as_raw() as _,
+            nix::libc::syscall(
+                nix::libc::SYS_rt_sigqueueinfo,
+                check_coord.main.pid.as_raw(),
                 nix::libc::SIGTRAP,
-                nix::libc::sigval {
-                    sival_ptr: Self::SIGVAL_MAGIC as *mut nix::libc::c_void,
+                &siginfo_t {
+                    si: siginfo_t_inner {
+                        si_signo: nix::libc::SIGTRAP,
+                        si_errno: 0,
+                        si_code: -1, /* SI_QUEUE */
+                        si_pid: 0,
+                        si_uid: 0,
+                        si_ptr: Self::SIGVAL_MAGIC as *mut nix::libc::c_void,
+                    },
                 },
             )
         };
