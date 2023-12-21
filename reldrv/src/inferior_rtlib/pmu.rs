@@ -531,6 +531,7 @@ impl SignalHandler for PmuSegmentor {
     }
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct siginfo_t_inner {
