@@ -122,10 +122,6 @@ struct CliArgs {
     #[arg(long, default_value_t = 0)]
     checkpoint_size_watermark: usize,
 
-    /// Pause on panic (e.g. when errors are detected), instead of aborting.
-    #[arg(long)]
-    pause_on_panic: bool,
-
     /// Checkpoint period in number of instructions. Used by librelrt and PMU-based segmentor.
     #[arg(long, default_value_t = 1000000000)]
     checkpoint_period: u64,
@@ -174,16 +170,6 @@ fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
 
 fn main() {
     let cli = CliArgs::parse();
-    let pause_on_panic = cli.pause_on_panic;
-
-    let orig_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |panic_info| {
-        orig_hook(panic_info);
-        if pause_on_panic {
-            raise(Signal::SIGSTOP).unwrap();
-        }
-        std::process::exit(1);
-    }));
 
     if let Some(log_output) = cli.log_output {
         let log_file = Box::new(
