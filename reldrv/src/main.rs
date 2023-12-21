@@ -214,8 +214,12 @@ fn main() {
     let mut runner_flags = RunnerFlags::empty();
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
     runner_flags.set(RunnerFlags::DUMP_STATS, cli.dump_stats);
-    runner_flags.set(RunnerFlags::DONT_TRAP_RDTSC, cli.dont_trap_rdtsc);
-    runner_flags.set(RunnerFlags::DONT_TRAP_CPUID, cli.dont_trap_cpuid);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        runner_flags.set(RunnerFlags::DONT_TRAP_RDTSC, cli.dont_trap_rdtsc);
+        runner_flags.set(RunnerFlags::DONT_TRAP_CPUID, cli.dont_trap_cpuid);
+    }
 
     let mut check_coord_flags = CheckCoordinatorFlags::empty();
     check_coord_flags.set(CheckCoordinatorFlags::NO_MEM_CHECK, cli.no_mem_check);

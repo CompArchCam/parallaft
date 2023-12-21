@@ -24,32 +24,50 @@ use crate::{
 
 use super::ScheduleCheckpoint;
 
+#[cfg(target_arch = "x86_64")]
 const INTEL_PERF_EVENT_BRANCH_RETIRED: u64 = 0xbbc4; // branches retired excluding far branches
+
+#[cfg(target_arch = "x86_64")]
 const AMD_PERF_EVENT_EX_RET_BRN_FAR: u64 = 0xc6;
+
+#[cfg(target_arch = "x86_64")]
 const AMD_PERF_EVENT_EX_RET_BRN: u64 = 0xc2;
 
 #[derive(Debug)]
 enum PmuType {
     // TODO: more precise model detection
+    #[cfg(target_arch = "x86_64")]
     Amd,
+    #[cfg(target_arch = "x86_64")]
     Intel,
+    #[cfg(target_arch = "aarch64")]
+    Armv8,
     Unknown,
 }
 
 impl PmuType {
     fn detect() -> Self {
-        let cpuid0 = unsafe { std::arch::x86_64::__cpuid(0) };
-        let mut vendor = [0; 12];
-        vendor[0..4].copy_from_slice(&cpuid0.ebx.to_le_bytes());
-        vendor[4..8].copy_from_slice(&cpuid0.edx.to_le_bytes());
-        vendor[8..12].copy_from_slice(&cpuid0.ecx.to_le_bytes());
+        #[cfg(target_arch = "x86_64")]
+        {
+            let cpuid0 = unsafe { std::arch::x86_64::__cpuid(0) };
+            let mut vendor = [0; 12];
+            vendor[0..4].copy_from_slice(&cpuid0.ebx.to_le_bytes());
+            vendor[4..8].copy_from_slice(&cpuid0.edx.to_le_bytes());
+            vendor[8..12].copy_from_slice(&cpuid0.ecx.to_le_bytes());
 
-        let vendor = std::str::from_utf8(&vendor).unwrap_or("[INVALID]");
+            let vendor = std::str::from_utf8(&vendor).unwrap_or("[INVALID]");
 
-        match vendor {
-            "AuthenticAMD" => Self::Amd,
-            "GenuineIntel" => Self::Intel,
-            _ => Self::Unknown,
+            match vendor {
+                "AuthenticAMD" => Self::Amd,
+                "GenuineIntel" => Self::Intel,
+                _ => Self::Unknown,
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // TODO: detection
+            Self::Armv8
         }
     }
 }
@@ -62,9 +80,11 @@ lazy_static! {
     };
     static ref MAX_SKID: u64 = {
         match *PMU_TYPE {
+            #[cfg(target_arch = "x86_64")]
             PmuType::Amd => 2048,
+            #[cfg(target_arch = "x86_64")]
             PmuType::Intel => 256,
-            PmuType::Unknown => 0,
+            _ => 0,
         }
     };
 }
@@ -141,7 +161,7 @@ impl PmuCounter for PmuCounterDiff {
 
 struct SegmentInfo {
     condbrs: u64,
-    ip: u64,
+    ip: usize,
     state: Option<CheckerState>,
 }
 
@@ -204,6 +224,7 @@ impl PmuSegmentor {
 
     fn condbr_counter(&self, pid: Pid) -> Box<dyn PmuCounter + Send> {
         match *PMU_TYPE {
+            #[cfg(target_arch = "x86_64")]
             PmuType::Amd => {
                 let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
                     AMD_PERF_EVENT_EX_RET_BRN,
@@ -228,6 +249,7 @@ impl PmuSegmentor {
                     Box::new(PmuCounterSingle::new(counter2)),
                 ))
             }
+            #[cfg(target_arch = "x86_64")]
             PmuType::Intel => {
                 let counter = perf_event::Builder::new(perf_event::events::Raw::new(
                     INTEL_PERF_EVENT_BRANCH_RETIRED,
@@ -240,12 +262,13 @@ impl PmuSegmentor {
 
                 Box::new(PmuCounterSingle::new(counter))
             }
-            PmuType::Unknown => panic!("Unsupported PMU"),
+            _ => panic!("Unsupported PMU"),
         }
     }
 
     fn condbr_irq(&self, pid: Pid, period: u64) -> Box<dyn PmuCounter + Send> {
         match *PMU_TYPE {
+            #[cfg(target_arch = "x86_64")]
             PmuType::Amd => {
                 let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
                     AMD_PERF_EVENT_EX_RET_BRN,
@@ -274,6 +297,7 @@ impl PmuSegmentor {
                     Box::new(PmuCounterSingle::new(counter2)),
                 ))
             }
+            #[cfg(target_arch = "x86_64")]
             PmuType::Intel => {
                 let counter = perf_event::Builder::new(perf_event::events::Raw::new(
                     INTEL_PERF_EVENT_BRANCH_RETIRED,
@@ -291,12 +315,12 @@ impl PmuSegmentor {
 
                 Box::new(PmuCounterSingle::new(counter))
             }
-            PmuType::Unknown => panic!("Unsupported PMU"),
+            _ => panic!("Unsupported PMU"),
         }
     }
 
-    fn breakpoint(&self, pid: Pid, address: u64) -> Counter {
-        perf_event::Builder::new(perf_event::events::Breakpoint::execute(address))
+    fn breakpoint(&self, pid: Pid, address: usize) -> Counter {
+        perf_event::Builder::new(perf_event::events::Breakpoint::execute(address as _))
             .sample_period(1)
             .observe_pid(pid.as_raw() as _)
             .sigtrap(true)
@@ -385,7 +409,7 @@ impl SignalHandler for PmuSegmentor {
                         == Self::SIGVAL_MAGIC as *mut nix::libc::c_void)
             /* TRAP_PERF */
             {
-                let ip = context.process.read_registers().unwrap().rip;
+                let ip = context.process.read_registers().unwrap().ip();
 
                 let mut take_checkpoint = false;
 
@@ -436,6 +460,7 @@ impl SignalHandler for PmuSegmentor {
 
                             take_checkpoint = true;
 
+                            #[cfg(target_arch = "x86_64")]
                             context
                                 .check_coord
                                 .main
@@ -498,6 +523,7 @@ impl SignalHandler for PmuSegmentor {
                                     breakpoint,
                                 }
                             } else if diff == 0 {
+                                #[cfg(target_arch = "x86_64")]
                                 context
                                     .process
                                     .modify_registers_with(|r| r.with_resume_flag_cleared())

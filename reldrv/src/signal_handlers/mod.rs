@@ -1,4 +1,7 @@
+#[cfg(target_arch = "x86_64")]
 pub mod cpuid;
+
+#[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
 use nix::sys::signal::Signal;

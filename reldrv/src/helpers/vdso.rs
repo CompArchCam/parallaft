@@ -28,7 +28,7 @@ impl StandardSyscallHandler for VdsoRemover {
             match syscall {
                 Syscall::Execve(_) | Syscall::Execveat(_) => {
                     let process = context.process;
-                    let sp = process.read_registers()?.rsp;
+                    let sp = process.read_registers()?.sp();
                     let mut addr = Addr::<u64>::from_raw(sp as _).unwrap();
 
                     let mut zero_count: i32 = 2;

@@ -26,7 +26,8 @@ use nix::{
 };
 
 lazy_static! {
-    pub static ref PAGESIZE: u64 = procfs::page_size();
+    pub static ref PAGESIZE: usize = procfs::page_size() as _;
+    pub static ref PAGEMASK: usize = !(*PAGESIZE - 1);
 }
 
 pub struct Process {

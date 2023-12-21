@@ -1945,6 +1945,7 @@ typed_syscall! {
     }
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for ArchPrctl {
     fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
         let builder = RangesSyscallMayWriteBuilder::new(memory);
@@ -1959,6 +1960,7 @@ impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for ArchPrctl {
     }
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for ArchPrctl {
     fn may_read(&'a self, memory: &'a M) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
         let builder = RangesSyscallMayReadBuilder::new(memory);
@@ -2924,6 +2926,7 @@ typed_syscall! {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Newfstatat {
     fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
         let builder = RangesSyscallMayWriteBuilder::new(memory);

@@ -5,8 +5,12 @@ use nix::{
     sys::signal::{raise, Signal},
     unistd::{fork, ForkResult},
 };
+use reldrv::parent_work;
 pub use reldrv::RelShellOptions;
-use reldrv::{parent_work, RunnerFlags};
+
+#[cfg(target_arch = "x86_64")]
+use reldrv::RunnerFlags;
+
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -35,10 +39,15 @@ pub fn trace_with_options(f: impl FnOnce() -> i32, options: RelShellOptions) -> 
 }
 
 pub fn trace(f: impl FnOnce() -> i32) -> i32 {
+    #[allow(unused_mut)]
     let mut options = RelShellOptions::default();
 
+    #[cfg(target_arch = "x86_64")]
     options.runner_flags.insert(RunnerFlags::DONT_TRAP_CPUID);
+    #[cfg(target_arch = "x86_64")]
     options.runner_flags.insert(RunnerFlags::DONT_TRAP_RDTSC);
+
+    options.max_nr_live_segments = 1;
 
     trace_with_options(f, options)
 }

@@ -50,8 +50,6 @@ use crate::process::ProcessLifetimeHook;
 use crate::process::ProcessLifetimeHookContext;
 use crate::process::{OwnedProcess, Process};
 use crate::segments::CheckpointCaller;
-use crate::signal_handlers::cpuid::CpuidHandler;
-use crate::signal_handlers::rdtsc::RdtscHandler;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
@@ -68,12 +66,20 @@ use crate::syscall_handlers::{CustomSyscallHandler, HandlerContext, SyscallHandl
 use crate::throttlers::memory::MemoryBasedThrottler;
 use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
+#[cfg(target_arch = "x86_64")]
+use crate::signal_handlers::cpuid::CpuidHandler;
+
+#[cfg(target_arch = "x86_64")]
+use crate::signal_handlers::rdtsc::RdtscHandler;
+
 bitflags! {
     #[derive(Default)]
     pub struct RunnerFlags: u32 {
         const POLL_WAITPID = 0b00000001;
         const DUMP_STATS = 0b00000010;
+        #[cfg(target_arch = "x86_64")]
         const DONT_TRAP_RDTSC = 0b00000100;
+        #[cfg(target_arch = "x86_64")]
         const DONT_TRAP_CPUID = 0b00001000;
     }
 }
@@ -178,10 +184,12 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     disp.register_module(ReplicatedSyscallHandler::new());
 
     // Non-deterministic instruction handlers
+    #[cfg(target_arch = "x86_64")]
     if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
         disp.register_module(RdtscHandler::new());
     }
 
+    #[cfg(target_arch = "x86_64")]
     if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_CPUID) {
         disp.register_module(CpuidHandler::new());
     }

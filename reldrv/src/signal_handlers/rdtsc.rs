@@ -79,7 +79,7 @@ impl SignalHandler for RdtscHandler {
                     })
                     .unwrap_or_else(|| Ok(get_rdtsc()))?;
 
-                process.write_registers(regs.with_tsc(tsc).with_offsetted_rip(2))?;
+                process.write_registers(regs.with_tsc(tsc).with_offsetted_ip(2))?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             } else if instr & 0xffffff == 0xf9010f {
@@ -116,7 +116,7 @@ impl SignalHandler for RdtscHandler {
                     )
                     .unwrap_or_else(|| Ok(get_rdtscp()))?;
 
-                process.write_registers(regs.with_tscp(tsc, aux).with_offsetted_rip(3))?;
+                process.write_registers(regs.with_tscp(tsc, aux).with_offsetted_ip(3))?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }

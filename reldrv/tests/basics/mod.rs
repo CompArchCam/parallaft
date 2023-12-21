@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use std::arch::asm;
 
 use crate::common::{checkpoint_fini, checkpoint_take, setup, trace};
@@ -17,6 +18,21 @@ fn basic_checkpointing() {
         }),
         0
     )
+}
+
+#[test]
+#[serial]
+fn basic_checkpointing_twice() {
+    setup();
+    assert_eq!(
+        trace(|| {
+            checkpoint_take();
+            checkpoint_take();
+            checkpoint_fini();
+            0
+        }),
+        0
+    );
 }
 
 #[test]
@@ -47,6 +63,7 @@ fn duplicated_checkpoint_fini() {
     );
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 #[serial]
 fn register_preservation_after_checkpoint() {
@@ -146,6 +163,74 @@ fn register_preservation_after_checkpoint() {
         }),
         0
     )
+}
+
+#[cfg(target_arch = "aarch64")]
+#[test]
+#[serial]
+fn register_preservation_after_checkpoint() {
+    setup();
+    assert_eq!(
+        trace(|| {
+            unsafe {
+                asm!(
+                    "
+                        mov x0, 42
+                        mov x1, 43
+                        mov x2, 44
+                        mov x3, 45
+                        mov x4, 46
+                        mov x5, 47
+                        mov x6, 48
+                        mov x7, 49
+                        mov x9, 51
+                        mov x10, 52
+
+                        mov w8, 0xff77
+                        svc #0
+
+                        mov x1, x7
+                        
+                        mov x8, 49
+                        cmp x8, x7
+                        bne 1f
+
+                        mov w8, 0xff78
+                        svc #0
+
+                        mov x8, 49
+                        cmp x8, x7
+                        bne 2f
+
+                        b 3f
+                    1:
+                        mov x8, 93
+                        mov x0, 1
+                        svc 0
+                    
+                    2:
+                        mov x8, 93
+                        mov x0, 2
+                        svc 0
+                    3:
+                    ",
+                    out("x0") _,
+                    out("x1") _,
+                    out("x2") _,
+                    out("x3") _,
+                    out("x4") _,
+                    out("x5") _,
+                    out("x6") _,
+                    out("x7") _,
+                    out("x8") _,
+                    out("x9") _,
+                    out("x10") _,
+                )
+            };
+            0
+        }),
+        0
+    );
 }
 
 // #[test]

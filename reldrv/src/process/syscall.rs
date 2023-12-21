@@ -1,5 +1,3 @@
-use std::ffi::c_void;
-
 use nix::{
     sched::CloneFlags,
     sys::{
@@ -12,8 +10,8 @@ use nix::{
 
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
-use super::{registers::Registers, Process};
-use crate::{error::Result, process::PAGESIZE};
+use super::{memory::InjectedInstructionContext, registers::Registers, Process};
+use crate::{error::Result, process::memory::instructions};
 
 impl Process {
     pub fn syscall_direct(
@@ -28,10 +26,11 @@ impl Process {
         let (saved_regs, saved_sigmask) = Self::save_state(self.pid)?;
         let mut saved_instr = None;
 
-        let mut op = ptrace::getsyscallinfo(self.pid)?.op;
-        if force_instr_insertion {
-            op = SyscallInfoOp::None;
-        }
+        let op = if force_instr_insertion {
+            SyscallInfoOp::None
+        } else {
+            ptrace::getsyscallinfo(self.pid)?.op
+        };
 
         match op {
             SyscallInfoOp::Entry { .. } => (),
@@ -41,9 +40,18 @@ impl Process {
                 restart_parent_old_syscall = false;
 
                 // handle syscall exit
-                assert_eq!(self.instr_at(saved_regs.rip as usize - 2, 2), 0x050f); // syscall
+                debug_assert_eq!(
+                    self.instr_at(
+                        saved_regs.ip() as usize - instructions::SYSCALL.length(),
+                        instructions::SYSCALL.length()
+                    ),
+                    instructions::SYSCALL
+                );
 
-                self.write_registers(saved_regs.with_offsetted_rip(-2))?; // jump back to previous syscall
+                self.write_registers(
+                    saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize)),
+                )?; // jump back to previous syscall
+
                 ptrace::syscall(self.pid, None)?;
 
                 assert!(matches!(
@@ -51,7 +59,7 @@ impl Process {
                     WaitStatus::PtraceSyscall(_)
                 ));
 
-                assert!(matches!(
+                debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     SyscallInfoOp::Entry { .. }
                 ));
@@ -61,24 +69,7 @@ impl Process {
                 restart_child_old_syscall = false;
                 restart_parent_old_syscall = false;
 
-                let addr = saved_regs.rip & (!(*PAGESIZE - 1));
-                let orig_instr = self.instr_at(addr as usize, 2) as u16;
-
-                saved_instr = Some((addr, orig_instr));
-
-                // dbg!(saved_instr);
-
-                // info!("Addr {:p}", addr as *const u8);
-                // self.dump_memory_maps().unwrap();
-
-                let orig_word = ptrace::read(self.pid, addr as *mut c_void).unwrap() as u64;
-
-                let new_word = (orig_word & (!0xffff)) | 0x050f;
-
-                unsafe { ptrace::write(self.pid, addr as *mut c_void, new_word as *mut c_void) }
-                    .unwrap();
-
-                self.write_registers(saved_regs.with_rip(addr))?;
+                saved_instr = Some(self.instr_inject(instructions::SYSCALL)?);
 
                 ptrace::syscall(self.pid, None)?;
 
@@ -87,7 +78,7 @@ impl Process {
                     WaitStatus::PtraceSyscall(_)
                 ));
 
-                assert!(matches!(
+                debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     SyscallInfoOp::Entry { .. }
                 ));
@@ -181,12 +172,13 @@ impl Process {
         }
 
         let child = Process::new(Pid::from_raw(child_pid as _));
+
         Ok(child)
     }
 
     fn save_state(pid: Pid) -> Result<(Registers, u64)> {
         Ok((
-            Registers::new(ptrace::getregs(pid)?),
+            Process::new(pid).read_registers_precise()?,
             ptrace::getsigmask(pid)?,
         ))
     }
@@ -196,37 +188,35 @@ impl Process {
         saved_regs: Registers,
         saved_sigmask: u64,
         restart_old_syscall: bool,
-        saved_instr: Option<(u64, u16)>,
+        saved_instr: Option<InjectedInstructionContext>,
     ) -> Result<()> {
         let process = Process::new(pid);
         let mut saved_regs = saved_regs;
 
         if restart_old_syscall {
-            if saved_instr.is_some() {
-                panic!()
-            }
+            assert!(saved_instr.is_none());
 
             // jump back to the previous instruction
-            if cfg!(target_arch = "x86_64") {
-                assert_eq!(process.instr_at((saved_regs.inner.rip - 2) as _, 2), 0x050f); // syscall
-                saved_regs.inner.rip -= 2;
+            debug_assert_eq!(
+                process.instr_at(
+                    saved_regs.ip() - instructions::SYSCALL.length(),
+                    instructions::SYSCALL.length()
+                ),
+                instructions::SYSCALL
+            );
+            saved_regs = saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize));
+
+            #[cfg(target_arch = "x86_64")]
+            {
                 saved_regs.inner.rax = saved_regs.inner.orig_rax;
-            } else {
-                panic!("Unsupported architecture");
             }
         }
 
         // restore the registers
         process.write_registers(saved_regs)?;
 
-        if let Some((orig_addr, orig_instr)) = saved_instr {
-            // restore previously-rewritten instrs
-            let orig_word = ptrace::read(pid, orig_addr as *mut c_void).unwrap() as u64;
-
-            let new_word = (orig_word & (!0xffff)) | orig_instr as u64;
-
-            unsafe { ptrace::write(pid, orig_addr as *mut c_void, new_word as *mut c_void) }
-                .unwrap();
+        if let Some(saved_instr) = saved_instr {
+            process.instr_restore(saved_instr)?;
         }
 
         if restart_old_syscall {
@@ -238,18 +228,16 @@ impl Process {
             let wait_status = waitpid(pid, None)?;
             assert_eq!(wait_status, WaitStatus::PtraceSyscall(pid));
 
-            // expect the syscall nr
-            let syscall_info = ptrace::getsyscallinfo(pid)?;
+            if cfg!(debug_assertions) {
+                // expect the syscall nr
+                let syscall_info = ptrace::getsyscallinfo(pid)?;
 
-            let orig_nr = if cfg!(target_arch = "x86_64") {
-                saved_regs.inner.orig_rax as usize
-            } else {
-                panic!("Unsupported architecture");
-            };
+                let orig_nr = saved_regs.sysno_raw();
 
-            assert!(
-                matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
-            );
+                assert!(
+                    matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
+                );
+            }
         }
 
         // restore the signal mask
@@ -260,9 +248,12 @@ impl Process {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use nix::{
-        sys::{signal::raise, wait::WaitPidFlag},
+        sys::{
+            signal::{kill, raise, Signal::SIGKILL},
+            wait::WaitPidFlag,
+        },
         unistd::{fork, getpid, gettid, getuid, ForkResult},
     };
     use serial_test::serial;
@@ -270,7 +261,7 @@ mod tests {
     use super::super::OwnedProcess;
     use super::*;
 
-    fn trace(f: impl FnOnce() -> i32) -> OwnedProcess {
+    pub fn trace(f: impl FnOnce() -> i32) -> OwnedProcess {
         match unsafe { fork().unwrap() } {
             ForkResult::Parent { child } => {
                 let wait_status = waitpid(child, Some(WaitPidFlag::WSTOPPED)).unwrap();
@@ -279,10 +270,10 @@ mod tests {
                     child,
                     ptrace::Options::PTRACE_O_TRACESYSGOOD
                         | ptrace::Options::PTRACE_O_TRACECLONE
-                        | ptrace::Options::PTRACE_O_TRACEFORK,
+                        | ptrace::Options::PTRACE_O_TRACEFORK
+                        | ptrace::Options::PTRACE_O_EXITKILL,
                 )
                 .unwrap();
-                // ptrace::setoptions(child, ptrace::Options::PTRACE_O_TRACESYSGOOD).unwrap();
                 OwnedProcess::new(child)
             }
             ForkResult::Child => {
@@ -550,24 +541,43 @@ mod tests {
             Sysno::getpid
         );
 
+        assert!(matches!(
+            ptrace::getsyscallinfo(parent.pid).unwrap().op,
+            SyscallInfoOp::Entry { .. }
+        ));
+
         let mut regs = parent.read_registers().unwrap();
 
-        regs.inner.r8 = 0x8086;
-        regs.inner.r9 = 0x8087;
-        regs.inner.r10 = 0x8088;
-        regs.inner.r11 = 0x8089;
-        regs.inner.r12 = 0x808a;
-        regs.inner.r13 = 0x808b;
-        regs.inner.r14 = 0x808c;
-        regs.inner.r15 = 0x808d;
-        regs.inner.rax = 0x808e;
-        regs.inner.rbp = 0x808f;
-        regs.inner.rbx = 0x8090;
-        regs.inner.rcx = 0x8091;
-        regs.inner.rdi = 0x8092;
-        regs.inner.rdx = 0x8093;
-        regs.inner.rsi = 0x8094;
-        regs.inner.rsp = 0x8095;
+        #[cfg(target_arch = "x86_64")]
+        {
+            regs.inner.r8 = 0x8086;
+            regs.inner.r9 = 0x8087;
+            regs.inner.r10 = 0x8088;
+            regs.inner.r11 = 0x8089;
+            regs.inner.r12 = 0x808a;
+            regs.inner.r13 = 0x808b;
+            regs.inner.r14 = 0x808c;
+            regs.inner.r15 = 0x808d;
+            regs.inner.rax = 0x808e;
+            regs.inner.rbp = 0x808f;
+            regs.inner.rbx = 0x8090;
+            regs.inner.rcx = 0x8091;
+            regs.inner.rdi = 0x8092;
+            regs.inner.rdx = 0x8093;
+            regs.inner.rsi = 0x8094;
+            regs.inner.rsp = 0x8095;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut idx = 0x8085;
+            regs.regs.fill_with(|| {
+                idx += 1;
+                idx
+            });
+            regs.regs[7] = 0; // we can't modify x7 during syscall-exits
+            regs.sysno = regs.regs[8] as _;
+        }
 
         parent.write_registers(regs).unwrap();
 
@@ -577,16 +587,29 @@ mod tests {
             .unwrap()
             .as_owned();
 
-        assert_eq!(parent.read_registers().unwrap().inner, regs.inner);
-        assert_eq!(child.read_registers().unwrap().inner, regs.inner);
+        assert!(matches!(
+            ptrace::getsyscallinfo(parent.pid).unwrap().op,
+            SyscallInfoOp::Exit { .. }
+        ));
 
-        ptrace::kill(parent.pid).unwrap();
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(parent.read_registers_precise().unwrap().with_x7(0), regs);
+            assert_eq!(child.read_registers().unwrap().with_x7(0), regs);
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            assert_eq!(parent.read_registers_precise().unwrap(), regs);
+            assert_eq!(child.read_registers().unwrap(), regs);
+        }
+
+        kill(parent.pid, SIGKILL).unwrap();
         assert!(matches!(
             parent.waitpid().unwrap(),
             WaitStatus::Signaled(_, _, _)
         ));
 
-        ptrace::kill(child.pid).unwrap();
+        kill(child.pid, SIGKILL).unwrap();
         assert!(matches!(
             child.waitpid().unwrap(),
             WaitStatus::Signaled(_, _, _)

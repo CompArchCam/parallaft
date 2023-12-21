@@ -96,7 +96,7 @@ impl SignalHandler for CpuidHandler {
                     )
                     .unwrap_or_else(|| Ok(get_cpuid()))?;
 
-                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_rip(2))?;
+                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_ip(2))?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }

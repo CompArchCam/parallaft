@@ -1,4 +1,6 @@
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::CpuidResult;
+
 use std::collections::LinkedList;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -160,8 +162,13 @@ impl SegmentStatus {
 
 #[derive(Debug)]
 pub enum SavedTrapEvent {
+    #[cfg(target_arch = "x86_64")]
     Rdtsc(u64),
-    Rdtscp(u64, u32),             // tsc, aux
+
+    #[cfg(target_arch = "x86_64")]
+    Rdtscp(u64, u32), // tsc, aux
+
+    #[cfg(target_arch = "x86_64")]
     Cpuid(u32, u32, CpuidResult), // leaf, subleaf, result
 }
 
@@ -314,10 +321,13 @@ impl Segment {
                 return Ok((Err(CheckFailReason::MemoryMismatch), nr_dirty_pages));
             }
 
-            let checker_regs = p1.read_registers()?;
+            let checker_regs = p1.read_registers()?; // can't use read_registers_precise yet due to waitpid race
             let reference_registers = p2.read_registers()?;
 
-            if checker_regs.inner != reference_registers.inner {
+            #[cfg(target_arch = "aarch64")]
+            let checker_regs = checker_regs.with_x7(reference_registers.x7()); // ignore x7, yet, because we can't read correct x7 in syscall entry
+
+            if checker_regs != reference_registers {
                 error!("Register differs for epoch {}", self.checkpoint_start.epoch);
                 info!("Checker registers: {:#?}", checker_regs);
                 info!("Reference registers: {:#?}", reference_registers);

@@ -32,6 +32,7 @@ impl RelRt {
         unsafe { libc::syscall(SYSNO_SET_COUNTER_ADDR as _, self.counter_addr) };
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub fn try_yield(&mut self) {
         unsafe {
             asm!(
@@ -46,6 +47,35 @@ impl RelRt {
                 out("rcx") _,
                 out("r11") _,
                 out("rax") _,
+            )
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn try_yield(&mut self) {
+        unsafe {
+            // TODO: this is not atomic
+            asm!(
+                "
+                    ldr x0, [{0}]
+                    add x0, x0, #1
+                    str x0, [{0}]
+                    bcc 1f
+                    mov x8, #0xff77
+                    svc #0
+                1:
+                ",
+                in(reg) self.counter_addr,
+                out("x0") _,
+                out("x1") _,
+                out("x8") _,
+                out("x9") _,
+                out("x10") _,
+                out("x11") _,
+                out("x12") _,
+                out("x13") _,
+                out("x14") _,
+                out("x15") _,
             )
         }
     }

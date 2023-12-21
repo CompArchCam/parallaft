@@ -27,14 +27,18 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         _active_segment: &mut Segment,
         _context: &HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
+        let action = || {
+            StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
+                syscall: *syscall,
+                kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                exit_action: SyscallExitAction::ReplicateSyscall,
+            })
+        };
+
         Ok(match syscall {
-            Syscall::ArchPrctl(_) | Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {
-                StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
-                    syscall: *syscall,
-                    kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
-                    exit_action: SyscallExitAction::ReplicateSyscall,
-                })
-            }
+            #[cfg(target_arch = "x86_64")]
+            Syscall::ArchPrctl(_) => action(),
+            Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => action(),
             _ => StandardSyscallEntryMainHandlerExitAction::NextHandler,
         })
     }
@@ -45,17 +49,21 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         active_segment: &mut Segment,
         _context: &HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
+        let action = || {
+            let saved_syscall = active_segment
+                .syscall_log
+                .front()
+                .expect("spurious syscall made by checker");
+
+            assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
+
+            StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior
+        };
+
         Ok(match syscall {
-            Syscall::ArchPrctl(_) | Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {
-                let saved_syscall = active_segment
-                    .syscall_log
-                    .front()
-                    .expect("spurious syscall made by checker");
-
-                assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
-
-                StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior
-            }
+            #[cfg(target_arch = "x86_64")]
+            Syscall::ArchPrctl(_) => action(),
+            Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => action(),
             _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,
         })
     }

@@ -19,11 +19,17 @@ impl StandardSyscallHandler for CloneHandler {
         syscall: &Syscall,
         _context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
+        #[cfg(target_arch = "x86_64")]
         if matches!(
             syscall,
             Syscall::Fork(_) | Syscall::Vfork(_) | Syscall::Clone(_) | Syscall::Clone3(_)
         ) {
             panic!("fork/vfork/clone/clone3 is disallowed");
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if matches!(syscall, Syscall::Clone(_) | Syscall::Clone3(_)) {
+            panic!("clone/clone3 is disallowed");
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)

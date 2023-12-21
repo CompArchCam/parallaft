@@ -88,6 +88,7 @@ impl From<StatBuf> for libc::stat {
     // aarch64 cannot transmute
     #[cfg(target_arch = "aarch64")]
     fn from(buf: StatBuf) -> libc::stat {
+        let _ = buf;
         todo!("aarch64 implementation is incomplete");
     }
 }

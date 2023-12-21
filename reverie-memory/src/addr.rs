@@ -174,6 +174,12 @@ pub struct AddrMut<'a, T> {
     _p: PhantomData<&'a mut T>,
 }
 
+impl<'a, T> From<usize> for AddrMut<'a, T> {
+    fn from(raw: usize) -> Self {
+        Self::from_raw(raw).unwrap()
+    }
+}
+
 impl<'a, T> AddrMut<'a, T> {
     /// Construct an address from a raw `usize`. Useful for converting a syscall
     /// register to a pointer. If the raw value is 0, then `None` is returned.
