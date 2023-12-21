@@ -134,6 +134,10 @@ struct CliArgs {
     #[arg(short, long)]
     pmu_segmentation: bool,
 
+    /// In PMU-based segmentation, number of instructions to skip at the start of the main process execution before the first checkpoint.
+    #[arg(long)]
+    pmu_segmentation_skip_instructions: Option<u64>,
+
     /// Dirty page tracker to use
     #[arg(long, default_value = "soft-dirty")]
     dirty_page_tracker: DirtyPageAddressTrackerType,
@@ -246,6 +250,7 @@ fn main() {
             dirty_page_tracker: cli.dirty_page_tracker,
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
+            pmu_segmentation_skip_instructions: cli.pmu_segmentation_skip_instructions,
         },
     );
 

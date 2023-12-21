@@ -113,6 +113,7 @@ pub struct RelShellOptions {
 
     // enable automatic segmentation based on precise PMU interrupts
     pub pmu_segmentation: bool,
+    pub pmu_segmentation_skip_instructions: Option<u64>,
 
     // dirty page tracker backend to use
     pub dirty_page_tracker: DirtyPageAddressTrackerType,
@@ -189,7 +190,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
 
     let legacy_rtlib_handler = LegacyInferiorRtLib::new();
     let relrtlib_handler = RelRtLib::new(options.checkpoint_period);
-    let pmu_segmentor = PmuSegmentor::new(options.checkpoint_period);
+    let pmu_segmentor = PmuSegmentor::new(
+        options.checkpoint_period,
+        options.pmu_segmentation_skip_instructions,
+    );
 
     if options.pmu_segmentation {
         pmu_segmentor.install(&mut disp);

@@ -161,10 +161,14 @@ pub struct PmuSegmentor {
     period: u64,
     segment_info_map: Mutex<HashMap<Pid, SegmentInfo>>,
     main_state: Mutex<Option<MainState>>,
+    skip_instructions: Option<u64>,
 }
 
 enum MainState {
-    Idle,
+    New,
+    SkippingInstructions {
+        _instr_irq: Box<dyn PmuCounter + Send>,
+    },
     CountingBranches {
         instr_irq: Box<dyn PmuCounter + Send>,
         condbr_counter: Box<dyn PmuCounter + Send>,
@@ -174,11 +178,12 @@ enum MainState {
 impl PmuSegmentor {
     const SIGVAL_MAGIC: usize = 0xdeadbeef;
 
-    pub fn new(period: u64) -> Self {
+    pub fn new(period: u64, skip_instructions: Option<u64>) -> Self {
         Self {
             period,
-            main_state: Mutex::new(Some(MainState::Idle)),
+            main_state: Mutex::new(Some(MainState::New)),
             segment_info_map: Mutex::new(HashMap::new()),
+            skip_instructions,
         }
     }
 
@@ -345,12 +350,15 @@ impl StandardSyscallHandler for PmuSegmentor {
             Syscall::Execve(_) | Syscall::Execveat(_) if ret_val == 0 => {
                 assert_eq!(context.process.pid, context.check_coord.main.pid);
 
-                *self.main_state.lock() = Some(MainState::CountingBranches {
-                    instr_irq: self.instr_counter(context.process.pid, self.period),
-                    condbr_counter: self.condbr_counter(context.process.pid),
-                });
-
-                self.schedule_checkpoint(context.check_coord)?;
+                match self.skip_instructions {
+                    Some(instrs) => {
+                        let mut main_state = self.main_state.lock();
+                        *main_state = Some(MainState::SkippingInstructions {
+                            _instr_irq: self.instr_counter(context.process.pid, instrs),
+                        })
+                    }
+                    None => self.schedule_checkpoint(context.check_coord)?,
+                }
 
                 info!("PMU-interrupt-based segmentation enabled");
             }
@@ -390,6 +398,14 @@ impl SignalHandler for PmuSegmentor {
                     let mut state = self.main_state.lock();
 
                     let next_state = match state.take().unwrap() {
+                        MainState::SkippingInstructions { .. } | MainState::New => {
+                            take_checkpoint = true;
+
+                            MainState::CountingBranches {
+                                instr_irq: self.instr_counter(context.process.pid, self.period),
+                                condbr_counter: self.condbr_counter(context.process.pid),
+                            }
+                        }
                         MainState::CountingBranches {
                             mut instr_irq,
                             mut condbr_counter,
@@ -430,7 +446,6 @@ impl SignalHandler for PmuSegmentor {
                                 condbr_counter: self.condbr_counter(context.process.pid),
                             }
                         }
-                        MainState::Idle => panic!("Invalid state"), // TODO: handle schedule_checkpoint request
                     };
 
                     *state = Some(next_state);
