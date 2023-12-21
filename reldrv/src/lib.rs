@@ -36,6 +36,8 @@ use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
+use crate::helpers::cpufreq::CpuFreqGovernor;
+use crate::helpers::cpufreq::CpuFreqSetter;
 use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::pmu::PmuSegmentor;
@@ -97,6 +99,11 @@ pub struct RelShellOptions {
     pub shell_cpu_set: Vec<usize>,
     #[cfg(feature = "intel_cat")]
     pub cache_masks: Option<(u32, u32, u32)>,
+
+    // cpufreq setter plugin options
+    pub main_cpu_freq_governor: Option<CpuFreqGovernor>,
+    pub checker_cpu_freq_governor: Option<CpuFreqGovernor>,
+    pub shell_cpu_freq_governor: Option<CpuFreqGovernor>,
 
     // checkpoint size limiter plugin options
     pub checkpoint_size_watermark: usize,
@@ -206,6 +213,17 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     );
 
     affinity_setter.install(&mut disp);
+
+    let cpufreq_setter = CpuFreqSetter::new(
+        &options.main_cpu_set,
+        &options.checker_cpu_set,
+        &options.shell_cpu_set,
+        options.main_cpu_freq_governor,
+        options.checker_cpu_freq_governor,
+        options.shell_cpu_freq_governor,
+    );
+
+    cpufreq_setter.install(&mut disp);
 
     let checkpoint_size_limiter = CheckpointSizeLimiter::new(options.checkpoint_size_watermark);
     checkpoint_size_limiter.install(&mut disp);

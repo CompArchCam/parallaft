@@ -10,6 +10,7 @@ use nix::unistd::{fork, ForkResult};
 use clap::Parser;
 use clap_num::maybe_hex;
 
+use reldrv::helpers::cpufreq::CpuFreqGovernor;
 use reldrv::{
     check_coord::CheckCoordinatorFlags, parent_work, statistics::perf::CounterKind,
     DirtyPageAddressTrackerType, RelShellOptions, RunnerFlags,
@@ -45,6 +46,18 @@ struct CliArgs {
     /// Cache allocation mask for the shell processes. Intel only.
     #[arg(long, value_parser=maybe_hex::<u32>)]
     shell_cache_mask: Option<u32>,
+
+    /// CPU frequency in kHz or governor "ondemand" to use for the main process. Requires `--main-cpu-set` set.
+    #[arg(long)]
+    main_cpu_freq_governor: Option<CpuFreqGovernor>,
+
+    /// CPU frequency in kHz or governor "ondemand" to use for checker processes. Requires `--checker-cpu-set` set.
+    #[arg(long)]
+    checker_cpu_freq_governor: Option<CpuFreqGovernor>,
+
+    /// CPU frequency in kHz or governor "ondemand" to use for the shell process. Requires `--shell-cpu-set` set.
+    #[arg(long)]
+    shell_cpu_freq_governor: Option<CpuFreqGovernor>,
 
     /// Poll non-blocking waitpid instead of using blocking waitpid.
     #[arg(long)]
@@ -231,6 +244,9 @@ fn main() {
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
             shell_cpu_set: cli.shell_cpu_set,
+            main_cpu_freq_governor: cli.main_cpu_freq_governor,
+            checker_cpu_freq_governor: cli.checker_cpu_freq_governor,
+            shell_cpu_freq_governor: cli.shell_cpu_freq_governor,
             checkpoint_size_watermark: cli.checkpoint_size_watermark,
             cache_masks: cli.main_cache_mask.and_then(|main_cache_mask| {
                 cli.checker_cache_mask.and_then(|checker_cache_mask| {
