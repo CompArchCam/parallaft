@@ -377,7 +377,7 @@ impl Segment {
 
 #[derive(Debug)]
 pub struct SegmentChain {
-    list: LinkedList<Arc<Mutex<Segment>>>,
+    pub list: LinkedList<Arc<Mutex<Segment>>>,
     next_id: SegmentId,
     main_pid: Pid,
 }

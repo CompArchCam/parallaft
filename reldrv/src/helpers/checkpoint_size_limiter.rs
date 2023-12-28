@@ -11,7 +11,7 @@ use crate::{
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
-    statistics::{self, Statistics},
+    statistics::{StatisticValue, Statistics},
     syscall_handlers::HandlerContext,
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
@@ -37,7 +37,16 @@ impl CheckpointSizeLimiter {
 }
 
 impl ProcessLifetimeHook for CheckpointSizeLimiter {
-    fn handle_main_fini(&self, _ret_val: i32, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _ret_val: i32,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         if self.size_watermark == 0 {
             return Ok(());
         }
@@ -135,12 +144,11 @@ impl Statistics for CheckpointSizeLimiter {
         "checkpoint_size_limiter"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, statistics::Value)]> {
-        vec![(
+    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
+        Box::new([(
             "num_triggers",
-            statistics::Value::Int(self.num_triggers.load(Ordering::SeqCst)),
-        )]
-        .into_boxed_slice()
+            Box::new(self.num_triggers.load(Ordering::SeqCst)),
+        )])
     }
 }
 

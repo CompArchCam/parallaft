@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::statistics::Statistics;
 
-use super::Value;
+use super::StatisticValue;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum CounterKind {
@@ -151,7 +151,15 @@ impl PerfStatsCollector {
 }
 
 impl ProcessLifetimeHook for PerfStatsCollector {
-    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let process = context.process;
         let mut group = self.counters.lock();
         let mut counters = self
@@ -172,7 +180,16 @@ impl ProcessLifetimeHook for PerfStatsCollector {
         Ok(())
     }
 
-    fn handle_main_fini(&self, _ret_val: i32, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _ret_val: i32,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let mut group = self.counters.lock();
 
         group
@@ -197,7 +214,7 @@ impl Statistics for PerfStatsCollector {
         "perf"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Value)]> {
+    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
         let mut g = self.counters.lock();
 
         self.counter_kinds
@@ -205,11 +222,14 @@ impl Statistics for PerfStatsCollector {
             .map(|s| s.to_str())
             .zip(
                 g.iter_mut()
-                    .map(|c| Value::Int(scale(c.read_count_and_time().unwrap())))
+                    .map(|c| {
+                        let t: Box<dyn StatisticValue> =
+                            Box::new(scale(c.read_count_and_time().unwrap()));
+                        t
+                    })
                     .collect::<Vec<_>>(),
             )
-            .collect::<Vec<_>>()
-            .into_boxed_slice()
+            .collect::<Box<[(&str, Box<dyn StatisticValue>)]>>()
     }
 }
 

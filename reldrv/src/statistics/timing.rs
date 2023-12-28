@@ -13,7 +13,7 @@ use crate::{
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
-use super::{Statistics, Value};
+use super::{StatisticValue, Statistics};
 
 pub struct TimingCollector {
     utime: AtomicU64,
@@ -46,7 +46,7 @@ impl Statistics for TimingCollector {
         "timing"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Value)]> {
+    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
         let ticks_per_second = procfs::ticks_per_second();
         let utime_ticks = self.utime.load(Ordering::SeqCst);
         let stime_ticks = self.stime.load(Ordering::SeqCst);
@@ -58,19 +58,15 @@ impl Statistics for TimingCollector {
         let all_wall_time = self.all_wall_time.lock().unwrap().as_secs_f64();
         let exit_status = self.exit_status.lock().unwrap_or(255);
 
-        vec![
-            ("main_user_time", Value::Float(main_utime)),
-            ("main_sys_time", Value::Float(main_stime)),
-            ("main_cpu_time", Value::Float(main_cpu_time)),
-            ("main_wall_time", Value::Float(main_wall_time)),
-            ("all_wall_time", Value::Float(all_wall_time)),
-            (
-                "main_cpu_usage",
-                Value::Float(main_cpu_time / main_wall_time),
-            ),
-            ("exit_status", Value::Int(exit_status as _)),
-        ]
-        .into_boxed_slice()
+        Box::new([
+            ("main_user_time", Box::new(main_utime)),
+            ("main_sys_time", Box::new(main_stime)),
+            ("main_cpu_time", Box::new(main_cpu_time)),
+            ("main_wall_time", Box::new(main_wall_time)),
+            ("all_wall_time", Box::new(all_wall_time)),
+            ("main_cpu_usage", Box::new(main_cpu_time / main_wall_time)),
+            ("exit_status", Box::new(exit_status)),
+        ])
     }
 }
 
@@ -95,13 +91,30 @@ impl StandardSyscallHandler for TimingCollector {
 }
 
 impl ProcessLifetimeHook for TimingCollector {
-    fn handle_main_init(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         *self.start_time.lock() = Some(Instant::now());
 
         Ok(())
     }
 
-    fn handle_main_fini(&self, ret_val: i32, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        ret_val: i32,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.main_wall_time.lock() = Some(elapsed);
         *self.exit_status.lock() = Some(ret_val);
@@ -109,7 +122,15 @@ impl ProcessLifetimeHook for TimingCollector {
         Ok(())
     }
 
-    fn handle_all_fini(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let elapsed = self.start_time.lock().unwrap().elapsed();
         *self.all_wall_time.lock() = Some(elapsed);
 

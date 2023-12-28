@@ -15,7 +15,10 @@ pub mod throttlers;
 use std::collections::HashMap;
 use std::fs;
 use std::panic;
+use std::panic::catch_unwind;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bitflags::bitflags;
 
@@ -33,6 +36,7 @@ use clap::ValueEnum;
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
+use crate::dispatcher::Halt;
 use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
@@ -50,8 +54,10 @@ use crate::signal_handlers::cpuid::CpuidHandler;
 use crate::signal_handlers::rdtsc::RdtscHandler;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
+use crate::statistics::memory::MemoryCollector;
 use crate::statistics::perf::PerfStatsCollector;
 use crate::statistics::timing::TimingCollector;
+use crate::statistics::Statistics;
 use crate::statistics::StatisticsSet;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
@@ -123,6 +129,11 @@ pub struct RelShellOptions {
 
     // odf enabler options
     pub enable_odf: bool,
+
+    // memory sampler options
+    pub sample_memory_usage: bool,
+    pub memory_sample_includes_rt: bool,
+    pub memory_sample_interval: Duration,
 }
 
 #[allow(unused)]
@@ -244,13 +255,25 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let dirty_page_stats = DirtyPageStatsCollector::new();
     dirty_page_stats.install(&mut disp);
 
-    let all_stats = StatisticsSet::new(vec![
+    let mut stats: Vec<&dyn Statistics> = vec![
         &time_stats,
         &counter_stats,
         &cache_stats,
         &dirty_page_stats,
         &checkpoint_size_limiter,
-    ]);
+    ];
+
+    let memory_stats = MemoryCollector::new(
+        options.memory_sample_interval,
+        options.memory_sample_includes_rt,
+    );
+
+    if options.sample_memory_usage {
+        memory_stats.install(&mut disp);
+        stats.push(&memory_stats);
+    }
+
+    let all_stats = StatisticsSet::new(stats);
 
     let memory_based_throttler = MemoryBasedThrottler::new(options.memory_overhead_watermark);
     memory_based_throttler.install(&mut disp);
@@ -275,73 +298,139 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     let check_coord = CheckCoordinator::new(inferior, options.check_coord_flags, &disp);
 
     std::thread::scope(|scope| {
-        let process_lifetime_hook_ctx = ProcessLifetimeHookContext {
-            process: &check_coord.main,
-            check_coord: &check_coord,
-            scope,
-        };
+        let unwind_result = catch_unwind(AssertUnwindSafe(|| {
+            let process_lifetime_hook_ctx = ProcessLifetimeHookContext {
+                process: &check_coord.main,
+                check_coord: &check_coord,
+                scope,
+            };
 
-        disp.handle_main_init(&process_lifetime_hook_ctx).unwrap();
+            disp.handle_main_init(process_lifetime_hook_ctx).unwrap();
 
-        check_coord.main.resume().unwrap();
+            check_coord.main.resume().unwrap();
 
-        let mut main_finished = false;
-        let mut last_syscall_entry_handled_by_check_coord: HashMap<Pid, bool> = HashMap::new();
+            let mut main_finished = false;
+            let mut last_syscall_entry_handled_by_check_coord: HashMap<Pid, bool> = HashMap::new();
 
-        loop {
-            let status = waitpid(
-                None,
-                if options.runner_flags.contains(RunnerFlags::POLL_WAITPID) {
-                    Some(WaitPidFlag::WNOHANG)
-                } else {
-                    None
-                },
-            )
-            .unwrap();
+            loop {
+                let status = waitpid(
+                    None,
+                    if options.runner_flags.contains(RunnerFlags::POLL_WAITPID) {
+                        Some(WaitPidFlag::WNOHANG)
+                    } else {
+                        None
+                    },
+                )
+                .unwrap();
 
-            match status {
-                WaitStatus::Stopped(pid, sig) => {
-                    check_coord.handle_signal(pid, sig, scope).unwrap();
-                }
-                WaitStatus::Exited(pid, status) => {
-                    info!("Child {} exited", pid);
-                    if pid == check_coord.main.pid {
-                        main_finished = true;
+                match status {
+                    WaitStatus::Stopped(pid, sig) => {
+                        check_coord.handle_signal(pid, sig, scope).unwrap();
+                    }
+                    WaitStatus::Exited(pid, status) => {
+                        info!("Child {} exited", pid);
+                        if pid == check_coord.main.pid {
+                            main_finished = true;
 
-                        disp.handle_main_fini(status, &process_lifetime_hook_ctx)
-                            .unwrap();
+                            disp.handle_main_fini(status, process_lifetime_hook_ctx)
+                                .unwrap();
 
-                        exit_status = Some(status);
+                            exit_status = Some(status);
 
-                        if check_coord.is_all_finished() {
-                            break;
+                            if check_coord.is_all_finished() {
+                                break;
+                            }
                         }
                     }
-                }
-                WaitStatus::PtraceSyscall(pid) => {
-                    let syscall_info = match ptrace::getsyscallinfo(pid) {
-                        Ok(syscall_info) => syscall_info,
-                        Err(Errno::ESRCH) => continue, // TODO: why?
-                        err => panic!("failed to get syscall info: {:?}", err),
-                    };
+                    WaitStatus::PtraceSyscall(pid) => {
+                        let syscall_info = match ptrace::getsyscallinfo(pid) {
+                            Ok(syscall_info) => syscall_info,
+                            Err(Errno::ESRCH) => continue, // TODO: why?
+                            err => panic!("failed to get syscall info: {:?}", err),
+                        };
 
-                    let process = Process::new(pid);
-                    let regs = process.read_registers().unwrap();
+                        let process = Process::new(pid);
+                        let regs = process.read_registers().unwrap();
 
-                    if matches!(syscall_info.op, SyscallInfoOp::Entry { .. }) {
-                        // syscall entry
+                        if matches!(syscall_info.op, SyscallInfoOp::Entry { .. }) {
+                            // syscall entry
 
-                        if let Some(sysno) = regs.sysno() {
-                            let args = regs.syscall_args();
-                            check_coord
-                                .handle_syscall_entry(pid, sysno, args, scope)
-                                .unwrap();
-                            last_syscall_entry_handled_by_check_coord.insert(pid, true);
+                            if let Some(sysno) = regs.sysno() {
+                                let args = regs.syscall_args();
+                                check_coord
+                                    .handle_syscall_entry(pid, sysno, args, scope)
+                                    .unwrap();
+                                last_syscall_entry_handled_by_check_coord.insert(pid, true);
+                            } else {
+                                let handled = disp
+                                    .handle_custom_syscall_entry(
+                                        regs.sysno_raw(),
+                                        regs.syscall_args(),
+                                        &HandlerContext {
+                                            process: &process,
+                                            segments: &check_coord.segments.read(),
+                                            check_coord: &check_coord,
+                                            scope,
+                                        },
+                                    )
+                                    .unwrap();
+
+                                if matches!(handled, SyscallHandlerExitAction::NextHandler) {
+                                    // handle our custom syscalls
+                                    match (regs.sysno_raw(), regs.syscall_args()) {
+                                        (0xff77, ..) => {
+                                            info!("Checkpoint requested by {}", pid);
+                                            check_coord
+                                                .handle_checkpoint(
+                                                    pid,
+                                                    false,
+                                                    false,
+                                                    CheckpointCaller::Child,
+                                                    scope,
+                                                )
+                                                .unwrap();
+                                        }
+                                        (0xff78, ..) => {
+                                            info!("Checkpoint finish requested by {}", pid);
+                                            check_coord
+                                                .handle_checkpoint(
+                                                    pid,
+                                                    true,
+                                                    false,
+                                                    CheckpointCaller::Child,
+                                                    scope,
+                                                )
+                                                .unwrap();
+                                        }
+                                        (0xff79, ..) => {
+                                            if pid == check_coord.main.pid {
+                                                info!("Sync requested by main");
+                                                check_coord.handle_sync().unwrap();
+                                            }
+                                        }
+                                        _ => {
+                                            warn!("Unhandled syscall: {:x}", regs.sysno_raw());
+                                            ptrace::syscall(pid, None).unwrap();
+                                        }
+                                    }
+                                } else {
+                                    ptrace::syscall(pid, None).unwrap();
+                                }
+
+                                last_syscall_entry_handled_by_check_coord.insert(pid, false);
+                            }
                         } else {
-                            let handled = disp
-                                .handle_custom_syscall_entry(
-                                    regs.sysno_raw(),
-                                    regs.syscall_args(),
+                            // syscall exit
+                            if *last_syscall_entry_handled_by_check_coord
+                                .get(&pid)
+                                .unwrap_or(&false)
+                            {
+                                check_coord
+                                    .handle_syscall_exit(pid, regs.syscall_ret_val(), scope)
+                                    .unwrap();
+                            } else {
+                                disp.handle_custom_syscall_exit(
+                                    regs.syscall_ret_val(),
                                     &HandlerContext {
                                         process: &process,
                                         segments: &check_coord.segments.read(),
@@ -351,125 +440,67 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
                                 )
                                 .unwrap();
 
-                            if matches!(handled, SyscallHandlerExitAction::NextHandler) {
-                                // handle our custom syscalls
-                                match (regs.sysno_raw(), regs.syscall_args()) {
-                                    (0xff77, ..) => {
-                                        info!("Checkpoint requested by {}", pid);
-                                        check_coord
-                                            .handle_checkpoint(
-                                                pid,
-                                                false,
-                                                false,
-                                                CheckpointCaller::Child,
-                                                scope,
-                                            )
-                                            .unwrap();
-                                    }
-                                    (0xff78, ..) => {
-                                        info!("Checkpoint finish requested by {}", pid);
-                                        check_coord
-                                            .handle_checkpoint(
-                                                pid,
-                                                true,
-                                                false,
-                                                CheckpointCaller::Child,
-                                                scope,
-                                            )
-                                            .unwrap();
-                                    }
-                                    (0xff79, ..) => {
-                                        if pid == check_coord.main.pid {
-                                            info!("Sync requested by main");
-                                            check_coord.handle_sync().unwrap();
-                                        }
-                                    }
-                                    _ => {
-                                        warn!("Unhandled syscall: {:x}", regs.sysno_raw());
-                                        ptrace::syscall(pid, None).unwrap();
-                                    }
-                                }
-                            } else {
                                 ptrace::syscall(pid, None).unwrap();
                             }
-
-                            last_syscall_entry_handled_by_check_coord.insert(pid, false);
-                        }
-                    } else {
-                        // syscall exit
-                        if *last_syscall_entry_handled_by_check_coord
-                            .get(&pid)
-                            .unwrap_or(&false)
-                        {
-                            check_coord
-                                .handle_syscall_exit(pid, regs.syscall_ret_val(), scope)
-                                .unwrap();
-                        } else {
-                            disp.handle_custom_syscall_exit(
-                                regs.syscall_ret_val(),
-                                &HandlerContext {
-                                    process: &process,
-                                    segments: &check_coord.segments.read(),
-                                    check_coord: &check_coord,
-                                    scope,
-                                },
-                            )
-                            .unwrap();
-
-                            ptrace::syscall(pid, None).unwrap();
                         }
                     }
-                }
-                WaitStatus::PtraceEvent(_pid, _sig, event) => {
-                    info!("Ptrace event = {:}", event);
-                }
-                WaitStatus::Signaled(pid, sig, _) => {
-                    if sig == Signal::SIGKILL {
-                        if check_coord.has_errors() {
-                            panic!("Memory check has errors");
-                        }
+                    WaitStatus::PtraceEvent(_pid, _sig, event) => {
+                        info!("Ptrace event = {:}", event);
+                    }
+                    WaitStatus::Signaled(pid, sig, _) => {
+                        if sig == Signal::SIGKILL {
+                            if check_coord.has_errors() {
+                                panic!("Memory check has errors");
+                            }
 
-                        if main_finished && check_coord.is_all_finished() {
-                            break;
-                        }
+                            if main_finished && check_coord.is_all_finished() {
+                                break;
+                            }
 
-                        check_coord
-                            .segments
-                            .read()
-                            .lookup_segment_with(pid, |segment, is_main| {
-                                if is_main {
-                                    panic!("Inferior unexpectedly killed by SIGKILL");
-                                } else {
-                                    if !matches!(
-                                        segment.status,
-                                        segments::SegmentStatus::Checked { .. }
-                                    ) {
-                                        panic!("Checker {} unexpected killed by SIGKILL", pid);
+                            check_coord.segments.read().lookup_segment_with(
+                                pid,
+                                |segment, is_main| {
+                                    if is_main {
+                                        panic!("Inferior unexpectedly killed by SIGKILL");
+                                    } else {
+                                        if !matches!(
+                                            segment.status,
+                                            segments::SegmentStatus::Checked { .. }
+                                        ) {
+                                            panic!("Checker {} unexpected killed by SIGKILL", pid);
+                                        }
                                     }
-                                }
-                            });
-                    } else {
-                        panic!("PID {} signaled by {}", pid, sig);
+                                },
+                            );
+                        } else {
+                            panic!("PID {} signaled by {}", pid, sig);
+                        }
                     }
+                    _ => (),
                 }
-                _ => (),
             }
-        }
 
-        disp.handle_all_fini(&process_lifetime_hook_ctx).unwrap();
+            disp.handle_all_fini(process_lifetime_hook_ctx).unwrap();
 
-        if options.runner_flags.contains(RunnerFlags::DUMP_STATS) || options.stats_output.is_some()
-        {
-            let _nr_checkpoints = check_coord.epoch();
+            if options.runner_flags.contains(RunnerFlags::DUMP_STATS)
+                || options.stats_output.is_some()
+            {
+                let _nr_checkpoints = check_coord.epoch();
 
-            let mut s = all_stats.as_text();
-            s.push_str("\n");
+                let mut s = all_stats.as_text();
+                s.push_str("\n");
 
-            if let Some(output_path) = options.stats_output {
-                fs::write(output_path, s).unwrap();
-            } else {
-                print!("{}", s);
+                if let Some(output_path) = options.stats_output {
+                    fs::write(output_path, s).unwrap();
+                } else {
+                    print!("{}", s);
+                }
             }
+        }));
+
+        if unwind_result.is_err() {
+            disp.halt();
+            panic!("Caught unwind");
         }
     });
 

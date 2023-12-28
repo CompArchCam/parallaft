@@ -102,7 +102,15 @@ impl CustomSyscallHandler for RseqHandler {
 }
 
 impl ProcessLifetimeHook for RseqHandler {
-    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let rseq_config = ptrace::get_rseq_configuration(context.process.pid)
             .ok()
             .and_then(|c| {

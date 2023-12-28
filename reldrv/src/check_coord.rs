@@ -181,7 +181,7 @@ impl<'disp> CheckCoordinator<'disp> {
                 };
 
                 self.dispatcher
-                    .handle_checker_init(&ProcessLifetimeHookContext {
+                    .handle_checker_init(ProcessLifetimeHookContext {
                         process: &checker,
                         check_coord: self,
                         scope,
@@ -285,7 +285,7 @@ impl<'disp> CheckCoordinator<'disp> {
                         self.dispatcher
                             .handle_checker_fini(
                                 outer_nr_dirty_pages,
-                                &ProcessLifetimeHookContext {
+                                ProcessLifetimeHookContext {
                                     process: &Process::new(pid),
                                     check_coord: self,
                                     scope,

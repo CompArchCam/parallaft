@@ -9,7 +9,7 @@ use crate::{
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
-use super::{timing::TimingCollector, Statistics, Value};
+use super::{timing::TimingCollector, StatisticValue, Statistics};
 
 pub struct CounterCollector<'a> {
     checkpoint_count: AtomicU64,
@@ -32,21 +32,20 @@ impl<'a> Statistics for CounterCollector<'a> {
         "counter"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Value)]> {
+    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
         let checkpoint_count = self.checkpoint_count.load(Ordering::SeqCst);
         let syscall_count = self.syscall_count.load(Ordering::SeqCst);
 
         let main_wall_time = self.timing_collector.main_wall_time().as_secs_f64();
 
-        vec![
-            ("checkpoint_count", Value::Int(checkpoint_count)),
-            ("syscall_count", Value::Int(syscall_count)),
+        Box::new([
+            ("checkpoint_count", Box::new(checkpoint_count)),
+            ("syscall_count", Box::new(syscall_count)),
             (
                 "checkpoint_frequency",
-                Value::Float(checkpoint_count as f64 / main_wall_time),
+                Box::new(checkpoint_count as f64 / main_wall_time),
             ),
-        ]
-        .into_boxed_slice()
+        ])
     }
 }
 
@@ -64,7 +63,15 @@ impl<'a> StandardSyscallHandler for CounterCollector<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for CounterCollector<'a> {
-    fn handle_all_fini(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         let epoch = context.check_coord.epoch();
         self.checkpoint_count.store(epoch as _, Ordering::SeqCst);
         Ok(())

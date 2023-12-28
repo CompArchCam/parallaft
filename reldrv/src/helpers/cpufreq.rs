@@ -166,7 +166,15 @@ impl<'a> CpuFreqSetter<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
-    fn handle_main_init(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         if self.main_cpu_freq_governor.is_some()
             || self.checker_cpu_freq_governor.is_some()
             || self.shell_cpu_freq_governor.is_some()
@@ -189,7 +197,15 @@ impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
         Ok(())
     }
 
-    fn handle_all_fini(&self, _context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         self.old_params_restore();
         Ok(())
     }

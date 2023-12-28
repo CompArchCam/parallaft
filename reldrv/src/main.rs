@@ -3,6 +3,7 @@ use std::os::unix::process::CommandExt;
 use std::panic;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use nix::sys::signal::{raise, Signal};
 use nix::unistd::{fork, ForkResult};
@@ -146,8 +147,24 @@ struct CliArgs {
     #[arg(long)]
     odf: bool,
 
+    /// Sample memory usage
+    #[arg(long)]
+    sample_memory_usage: bool,
+
+    /// Include runtime memory usage in memory usage sampling
+    #[arg(long)]
+    memory_sample_includes_rt: bool,
+
+    /// Memory sample interval in milliseconds
+    #[arg(long, value_parser = parse_duration, default_value = "500")]
+    memory_sample_interval: Duration,
+
     command: String,
     args: Vec<String>,
+}
+
+fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
+    Ok(std::time::Duration::from_millis(arg.parse()?))
 }
 
 fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
@@ -251,6 +268,9 @@ fn main() {
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
             pmu_segmentation_skip_instructions: cli.pmu_segmentation_skip_instructions,
+            sample_memory_usage: cli.sample_memory_usage,
+            memory_sample_includes_rt: cli.memory_sample_includes_rt,
+            memory_sample_interval: cli.memory_sample_interval,
         },
     );
 

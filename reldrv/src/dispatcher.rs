@@ -25,10 +25,10 @@ use crate::{
 };
 
 macro_rules! generate_event_handler {
-    ($handlers_list:ident, $event_method:ident $(, $param:ident : $param_type:ty)*) => {
-        fn $event_method(&self $(, $param : $param_type)*) -> Result<()> {
+    ($handlers_list:ident, fn $name:ident $( < $( $gen:tt ),+ > )? (& $($self_lifetime:lifetime)? self, $( $arg_name:ident : $arg_ty:ty ),* $(,)? ) ) => {
+        fn $name(& $($self_lifetime)? self, $( $arg_name : $arg_ty ),*) -> Result<()> {
             for handler in &self.$handlers_list {
-                handler.$event_method($( $param ),*)?;
+                handler.$name($( $arg_name ),*)?;
             }
 
             Ok(())
@@ -44,6 +44,8 @@ macro_rules! generate_event_handler_option {
     };
 }
 
+// fn handle_event<T>(list: &Vec<T>, )
+
 pub struct Dispatcher<'a> {
     process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
     standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
@@ -56,6 +58,7 @@ pub struct Dispatcher<'a> {
     schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
     dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
+    halt_hooks: Vec<&'a (dyn Halt + Sync)>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -72,6 +75,7 @@ impl<'a> Dispatcher<'a> {
             schedule_checkpoint_ready_handlers: Vec::new(),
             dirty_page_tracker: None,
             extra_writable_ranges_providers: Vec::new(),
+            halt_hooks: Vec::new(),
         }
     }
 
@@ -151,14 +155,84 @@ impl<'a> Dispatcher<'a> {
     ) {
         self.extra_writable_ranges_providers.push(provider)
     }
+
+    pub fn install_halt_hook(&mut self, hook: &'a (dyn Halt + Sync)) {
+        self.halt_hooks.push(hook)
+    }
 }
 
 impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
-    generate_event_handler!(process_lifetime_hooks, handle_main_init, context: &ProcessLifetimeHookContext);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_init, context: &ProcessLifetimeHookContext);
-    generate_event_handler!(process_lifetime_hooks, handle_checker_fini, nr_dirty_pages: Option<usize>, context: &ProcessLifetimeHookContext);
-    generate_event_handler!(process_lifetime_hooks, handle_all_fini, context: &ProcessLifetimeHookContext);
-    generate_event_handler!(process_lifetime_hooks, handle_main_fini, ret_val: i32, context: &ProcessLifetimeHookContext);
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_main_init(context))
+    }
+
+    fn handle_checker_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_checker_init(context))
+    }
+
+    fn handle_checker_fini<'s, 'scope, 'disp>(
+        &'s self,
+        nr_dirty_pages: Option<usize>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_checker_fini(nr_dirty_pages, context))
+    }
+
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_all_fini(context))
+    }
+
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        ret_val: i32,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_main_fini(ret_val, context))
+    }
 }
 
 impl<'a> StandardSyscallHandler for Dispatcher<'a> {
@@ -338,12 +412,12 @@ impl<'a> SignalHandler for Dispatcher<'a> {
 }
 
 impl<'a> SegmentEventHandler for Dispatcher<'a> {
-    generate_event_handler!(segment_event_handlers, handle_segment_created, segment: &Segment);
-    generate_event_handler!(segment_event_handlers, handle_segment_chain_closed, segment: &Segment);
-    generate_event_handler!(segment_event_handlers, handle_segment_ready, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller);
-    generate_event_handler!(segment_event_handlers, handle_segment_checked, segment: &Segment);
-    generate_event_handler!(segment_event_handlers, handle_segment_removed, segment: &Segment);
-    generate_event_handler!(segment_event_handlers, handle_checkpoint_created_pre, main_pid: Pid, last_segment_id: Option<SegmentId>);
+    generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, segment: &Segment));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, segment: &Segment));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, segment: &Segment));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Segment));
+    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main_pid: Pid, last_segment_id: Option<SegmentId>));
 }
 
 impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
@@ -359,11 +433,11 @@ impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
 }
 
 impl<'a> ScheduleCheckpoint for Dispatcher<'a> {
-    generate_event_handler!(schedule_checkpoint, schedule_checkpoint, check_coord: &CheckCoordinator);
+    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, check_coord: &CheckCoordinator));
 }
 
 impl<'a> ScheduleCheckpointReady for Dispatcher<'a> {
-    generate_event_handler!(schedule_checkpoint_ready_handlers, handle_ready_to_schedule_checkpoint, check_coord: &CheckCoordinator);
+    generate_event_handler!(schedule_checkpoint_ready_handlers, fn handle_ready_to_schedule_checkpoint(&self, check_coord: &CheckCoordinator));
 }
 
 impl<'a> DirtyPageAddressTracker for Dispatcher<'a> {
@@ -389,9 +463,19 @@ impl<'a> ExtraWritableRangesProvider for Dispatcher<'a> {
     }
 }
 
+impl<'a> Halt for Dispatcher<'a> {
+    fn halt(&self) {
+        self.halt_hooks.iter().for_each(|h| h.halt())
+    }
+}
+
 pub trait Installable<'a>
 where
     Self: Sized,
 {
     fn install(&'a self, dispatcher: &mut Dispatcher<'a>);
+}
+
+pub trait Halt {
+    fn halt(&self);
 }

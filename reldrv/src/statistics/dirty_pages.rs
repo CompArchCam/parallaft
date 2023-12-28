@@ -1,35 +1,8 @@
-use parking_lot::Mutex;
-
 use crate::dispatcher::Dispatcher;
-
 use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
-
 use crate::{dispatcher::Installable, error::Result};
 
-use super::{Statistics, Value};
-
-struct RunningAverage {
-    data: Mutex<(f64, usize)>,
-}
-
-impl RunningAverage {
-    pub fn new() -> Self {
-        Self {
-            data: Mutex::new((0.0, 0)),
-        }
-    }
-    pub fn get(&self) -> f64 {
-        self.data.lock().0
-    }
-
-    pub fn update(&self, value: f64) {
-        let mut data = self.data.lock();
-        let (avg, cnt) = &mut *data;
-
-        *cnt += 1;
-        *avg = (1.0 / *cnt as f64) * value + (1.0 - 1.0 / *cnt as f64);
-    }
-}
+use super::{RunningAverage, StatisticValue, Statistics};
 
 pub struct DirtyPageStatsCollector {
     avg: RunningAverage,
@@ -44,11 +17,16 @@ impl DirtyPageStatsCollector {
 }
 
 impl ProcessLifetimeHook for DirtyPageStatsCollector {
-    fn handle_checker_fini(
-        &self,
+    fn handle_checker_fini<'s, 'scope, 'disp>(
+        &'s self,
         nr_dirty_pages: Option<usize>,
-        _context: &ProcessLifetimeHookContext,
-    ) -> Result<()> {
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         if let Some(nr_dirty_pages) = nr_dirty_pages {
             self.avg.update(nr_dirty_pages as _);
         }
@@ -62,8 +40,8 @@ impl Statistics for DirtyPageStatsCollector {
         "dirty_pages"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Value)]> {
-        vec![("nr_dirty_pages", Value::Float(self.avg.get()))].into_boxed_slice()
+    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
+        Box::new([("nr_dirty_pages", Box::new(self.avg.get()))])
     }
 }
 

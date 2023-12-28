@@ -51,7 +51,15 @@ impl<'a> AffinitySetter<'a> {
 }
 
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
-    fn handle_main_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         context.process.set_cpu_affinity(self.main_cpu_set)?;
@@ -98,7 +106,15 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         Ok(())
     }
 
-    fn handle_checker_init(&self, context: &ProcessLifetimeHookContext) -> Result<()> {
+    fn handle_checker_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
         context.process.set_cpu_affinity(self.checker_cpu_set)?;
 
         Ok(())
