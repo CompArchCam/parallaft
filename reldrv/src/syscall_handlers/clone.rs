@@ -1,6 +1,6 @@
 use reverie_syscalls::Syscall;
 
-use crate::dispatcher::{Dispatcher, Installable};
+use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 
 use super::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction};
@@ -30,8 +30,11 @@ impl StandardSyscallHandler for CloneHandler {
     }
 }
 
-impl<'a> Installable<'a> for CloneHandler {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_standard_syscall_handler(self);
+impl Module for CloneHandler {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_standard_syscall_handler(self);
     }
 }

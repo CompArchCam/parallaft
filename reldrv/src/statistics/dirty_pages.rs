@@ -1,8 +1,9 @@
-use crate::dispatcher::Dispatcher;
+use crate::dispatcher::Subscribers;
 use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
-use crate::{dispatcher::Installable, error::Result};
+use crate::statistics_list;
+use crate::{dispatcher::Module, error::Result};
 
-use super::{RunningAverage, StatisticValue, Statistics};
+use super::{RunningAverage, StatisticValue, StatisticsProvider};
 
 pub struct DirtyPageStatsCollector {
     avg: RunningAverage,
@@ -20,7 +21,7 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         nr_dirty_pages: Option<usize>,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -35,18 +36,22 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
     }
 }
 
-impl Statistics for DirtyPageStatsCollector {
+impl StatisticsProvider for DirtyPageStatsCollector {
     fn class_name(&self) -> &'static str {
         "dirty_pages"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
-        Box::new([("nr_dirty_pages", Box::new(self.avg.get()))])
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        statistics_list!(nr_dirty_pages = self.avg.get())
     }
 }
 
-impl<'a> Installable<'a> for DirtyPageStatsCollector {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_process_lifetime_hook(self);
+impl Module for DirtyPageStatsCollector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }

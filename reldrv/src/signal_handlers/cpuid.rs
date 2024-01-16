@@ -6,7 +6,7 @@ use reverie_syscalls::{Addr, MemoryAccess, Syscall};
 use syscalls::{syscall_args, Sysno};
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::{Error, EventFlags, Result},
     segments::SavedTrapEvent,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
@@ -23,10 +23,10 @@ impl CpuidHandler {
 }
 
 impl SignalHandler for CpuidHandler {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -113,9 +113,12 @@ impl StandardSyscallHandler for CpuidHandler {
     }
 }
 
-impl<'a> Installable<'a> for CpuidHandler {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_signal_handler(self);
-        dispatcher.install_standard_syscall_handler(self);
+impl Module for CpuidHandler {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_signal_handler(self);
+        subs.install_standard_syscall_handler(self);
     }
 }

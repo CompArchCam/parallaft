@@ -3,53 +3,43 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use reverie_syscalls::Syscall;
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    statistics_list,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
-use super::{timing::TimingCollector, StatisticValue, Statistics};
+use super::{StatisticValue, StatisticsProvider};
 
-pub struct CounterCollector<'a> {
+pub struct CounterCollector {
     checkpoint_count: AtomicU64,
     syscall_count: AtomicU64,
-    timing_collector: &'a TimingCollector,
 }
 
-impl<'a> CounterCollector<'a> {
-    pub fn new(timing_collector: &'a TimingCollector) -> CounterCollector {
+impl CounterCollector {
+    pub fn new() -> CounterCollector {
         CounterCollector {
             checkpoint_count: AtomicU64::new(0),
             syscall_count: AtomicU64::new(0),
-            timing_collector,
         }
     }
 }
 
-impl<'a> Statistics for CounterCollector<'a> {
+impl StatisticsProvider for CounterCollector {
     fn class_name(&self) -> &'static str {
         "counter"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
-        let checkpoint_count = self.checkpoint_count.load(Ordering::SeqCst);
-        let syscall_count = self.syscall_count.load(Ordering::SeqCst);
-
-        let main_wall_time = self.timing_collector.main_wall_time().as_secs_f64();
-
-        Box::new([
-            ("checkpoint_count", Box::new(checkpoint_count)),
-            ("syscall_count", Box::new(syscall_count)),
-            (
-                "checkpoint_frequency",
-                Box::new(checkpoint_count as f64 / main_wall_time),
-            ),
-        ])
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        statistics_list!(
+            checkpoint_count = self.checkpoint_count.load(Ordering::SeqCst),
+            syscall_count = self.syscall_count.load(Ordering::SeqCst)
+        )
     }
 }
 
-impl<'a> StandardSyscallHandler for CounterCollector<'a> {
+impl StandardSyscallHandler for CounterCollector {
     fn handle_standard_syscall_entry(
         &self,
         _syscall: &Syscall,
@@ -62,10 +52,10 @@ impl<'a> StandardSyscallHandler for CounterCollector<'a> {
     }
 }
 
-impl<'a> ProcessLifetimeHook for CounterCollector<'a> {
-    fn handle_all_fini<'s, 'scope, 'disp>(
+impl ProcessLifetimeHook for CounterCollector {
+    fn handle_all_fini<'s, 'scope, 'disp, 'modules>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, 'modules>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -78,9 +68,13 @@ impl<'a> ProcessLifetimeHook for CounterCollector<'a> {
     }
 }
 
-impl<'a, 'c> Installable<'a> for CounterCollector<'c> {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_process_lifetime_hook(self);
+impl Module for CounterCollector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_standard_syscall_handler(self);
+        subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }

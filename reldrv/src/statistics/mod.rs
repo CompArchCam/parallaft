@@ -8,10 +8,23 @@ pub mod memory;
 pub mod perf;
 pub mod timing;
 
-pub trait Statistics {
+#[macro_export]
+macro_rules! statistics_list {
+    ($($name:ident = $value:expr),*) => {
+        Box::new(
+            [
+                $(
+                    (::std::stringify!($name).to_owned(), Box::new($value))
+                ),*
+            ]
+        )
+    };
+}
+
+pub trait StatisticsProvider {
     fn class_name(&self) -> &'static str;
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]>;
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]>;
 }
 
 pub trait StatisticValue {
@@ -48,34 +61,12 @@ impl<'i> Display for DisplayProxy<'i> {
     }
 }
 
-pub struct StatisticsSet<'a> {
-    stats: Vec<&'a dyn Statistics>,
-}
-
-impl<'a> StatisticsSet<'a> {
-    pub fn new(stats: Vec<&'a dyn Statistics>) -> Self {
-        Self { stats }
-    }
-
-    pub fn all_statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
-        self.stats
-            .iter()
-            .flat_map(|ss| {
-                ss.statistics()
-                    .into_vec()
-                    .into_iter()
-                    .map(|(stat_name, value)| (format!("{}.{}", ss.class_name(), stat_name), value))
-            })
-            .collect()
-    }
-
-    pub fn as_text(&self) -> String {
-        self.all_statistics()
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, DisplayProxy::new(v.as_ref())))
-            .collect::<Vec<String>>()
-            .join("\n")
-    }
+pub fn as_text(stats: Box<[(String, Box<dyn StatisticValue>)]>) -> String {
+    stats
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, DisplayProxy::new(v.as_ref())))
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 pub struct RunningAverage {

@@ -2,7 +2,7 @@ use log::info;
 use reverie_syscalls::{Addr, MemoryAccess, Syscall};
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::Process,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
@@ -69,8 +69,11 @@ impl StandardSyscallHandler for VdsoRemover {
     }
 }
 
-impl<'a> Installable<'a> for VdsoRemover {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_standard_syscall_handler(self);
+impl Module for VdsoRemover {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_standard_syscall_handler(self);
     }
 }

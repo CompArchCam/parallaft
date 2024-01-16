@@ -286,6 +286,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "downcast-rs"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
+
+[[package]]
 name = "env_logger"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -864,6 +870,7 @@ dependencies = [
  "cc",
  "clap",
  "clap-num",
+ "downcast-rs",
  "env_logger",
  "human_bytes",
  "lazy-init",
@@ -881,6 +888,7 @@ dependencies = [
  "syscalls",
  "tempfile",
  "thiserror",
+ "typed-arena",
  "unwind",
 ]
 
@@ -1115,6 +1123,12 @@ dependencies = [
  "quote",
  "syn 2.0.40",
 ]
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "unicode-ident"

@@ -5,13 +5,14 @@ use std::{
 
 use crate::{
     check_coord::CheckCoordinator,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
-    statistics::{StatisticValue, Statistics},
+    statistics::{StatisticValue, StatisticsProvider},
+    statistics_list,
     syscall_handlers::HandlerContext,
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
@@ -40,7 +41,7 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -59,10 +60,10 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
 }
 
 impl SignalHandler for CheckpointSizeLimiter {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -139,24 +140,25 @@ impl ScheduleCheckpointReady for CheckpointSizeLimiter {
     }
 }
 
-impl Statistics for CheckpointSizeLimiter {
+impl StatisticsProvider for CheckpointSizeLimiter {
     fn class_name(&self) -> &'static str {
         "checkpoint_size_limiter"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
-        Box::new([(
-            "num_triggers",
-            Box::new(self.num_triggers.load(Ordering::SeqCst)),
-        )])
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        statistics_list!(num_triggers = self.num_triggers.load(Ordering::SeqCst))
     }
 }
 
-impl<'a> Installable<'a> for CheckpointSizeLimiter {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_process_lifetime_hook(self);
-        dispatcher.install_signal_handler(self);
-        dispatcher.install_schedule_checkpoint_ready_handler(self);
-        dispatcher.install_segment_event_handler(self);
+impl Module for CheckpointSizeLimiter {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
+        subs.install_signal_handler(self);
+        subs.install_schedule_checkpoint_ready_handler(self);
+        subs.install_segment_event_handler(self);
+        subs.install_stats_providers(self);
     }
 }

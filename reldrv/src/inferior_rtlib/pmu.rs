@@ -15,7 +15,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     check_coord::CheckCoordinator,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
@@ -62,7 +62,7 @@ lazy_static! {
     };
     static ref MAX_SKID: u64 = {
         match *PMU_TYPE {
-            PmuType::Amd => 1024,
+            PmuType::Amd => 2048,
             PmuType::Intel => 256,
             PmuType::Unknown => 0,
         }
@@ -369,10 +369,10 @@ impl StandardSyscallHandler for PmuSegmentor {
 }
 
 impl SignalHandler for PmuSegmentor {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<crate::signal_handlers::SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -573,11 +573,14 @@ impl ScheduleCheckpoint for PmuSegmentor {
     }
 }
 
-impl<'a> Installable<'a> for PmuSegmentor {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_segment_event_handler(self);
-        dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_signal_handler(self);
-        dispatcher.install_schedule_checkpoint(self);
+impl Module for PmuSegmentor {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_segment_event_handler(self);
+        subs.install_standard_syscall_handler(self);
+        subs.install_signal_handler(self);
+        subs.install_schedule_checkpoint(self);
     }
 }

@@ -2,7 +2,7 @@ use nix::unistd::Pid;
 
 use crate::{
     check_coord::ProcessRole,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::Module,
     error::Result,
     process::Process,
     segments::{Segment, SegmentEventHandler, SegmentId},
@@ -64,9 +64,12 @@ impl SegmentEventHandler for SoftDirtyPageTracker {
     }
 }
 
-impl<'a> Installable<'a> for SoftDirtyPageTracker {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_dirty_page_tracker(self);
-        dispatcher.install_segment_event_handler(self);
+impl Module for SoftDirtyPageTracker {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut crate::dispatcher::Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_dirty_page_tracker(self);
+        subs.install_segment_event_handler(self);
     }
 }

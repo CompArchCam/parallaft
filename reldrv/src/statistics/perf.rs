@@ -4,10 +4,10 @@ use nix::unistd::Pid;
 use parking_lot::Mutex;
 use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, DynamicBuilder, Hardware};
 
-use crate::dispatcher::{Dispatcher, Installable};
+use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
-use crate::statistics::Statistics;
+use crate::statistics::StatisticsProvider;
 
 use super::StatisticValue;
 
@@ -153,7 +153,7 @@ impl PerfStatsCollector {
 impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -183,7 +183,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -209,17 +209,17 @@ fn scale(count: perf_event::CountAndTime) -> u64 {
     }
 }
 
-impl Statistics for PerfStatsCollector {
+impl StatisticsProvider for PerfStatsCollector {
     fn class_name(&self) -> &'static str {
         "perf"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
         let mut g = self.counters.lock();
 
         self.counter_kinds
             .iter()
-            .map(|s| s.to_str())
+            .map(|s| s.to_str().to_owned())
             .zip(
                 g.iter_mut()
                     .map(|c| {
@@ -229,12 +229,16 @@ impl Statistics for PerfStatsCollector {
                     })
                     .collect::<Vec<_>>(),
             )
-            .collect::<Box<[(&str, Box<dyn StatisticValue>)]>>()
+            .collect::<Box<[(String, Box<dyn StatisticValue>)]>>()
     }
 }
 
-impl<'a> Installable<'a> for PerfStatsCollector {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_process_lifetime_hook(self);
+impl Module for PerfStatsCollector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }

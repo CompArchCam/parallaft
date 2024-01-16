@@ -3,7 +3,7 @@ use std::process::Command;
 use log::info;
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::Process,
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
@@ -53,7 +53,7 @@ impl<'a> AffinitySetter<'a> {
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -108,7 +108,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -121,8 +121,11 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     }
 }
 
-impl<'a, 'b> Installable<'b> for AffinitySetter<'a> {
-    fn install(&'b self, dispatcher: &mut Dispatcher<'b>) {
-        dispatcher.install_process_lifetime_hook(self);
+impl Module for AffinitySetter<'_> {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
     }
 }

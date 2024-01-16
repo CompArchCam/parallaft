@@ -7,7 +7,7 @@ use syscalls::SyscallArgs;
 
 use crate::{
     check_coord::CheckCoordinator,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::{Error, Result},
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
@@ -137,10 +137,10 @@ impl CustomSyscallHandler for RelRtLib {
 }
 
 impl SignalHandler for RelRtLib {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -192,12 +192,15 @@ impl IgnoredPagesProvider for RelRtLib {
     }
 }
 
-impl<'a> Installable<'a> for RelRtLib {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_segment_event_handler(self);
-        dispatcher.install_custom_syscall_handler(self);
-        dispatcher.install_signal_handler(self);
-        dispatcher.install_schedule_checkpoint(self);
-        dispatcher.install_ignored_pages_provider(self);
+impl Module for RelRtLib {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_segment_event_handler(self);
+        subs.install_custom_syscall_handler(self);
+        subs.install_signal_handler(self);
+        subs.install_schedule_checkpoint(self);
+        subs.install_ignored_pages_provider(self);
     }
 }

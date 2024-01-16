@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use super::{RunningAverage, StatisticValue, Statistics};
-use crate::dispatcher::{Dispatcher, Halt};
+use super::{RunningAverage, StatisticValue, StatisticsProvider};
+use crate::dispatcher::{Halt, Subscribers};
 use crate::process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext};
-use crate::{dispatcher::Installable, error::Result};
+use crate::statistics_list;
+use crate::{dispatcher::Module, error::Result};
 
 pub struct MemoryCollector {
     interval: Duration,
@@ -34,7 +35,7 @@ impl MemoryCollector {
 impl ProcessLifetimeHook for MemoryCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -98,7 +99,7 @@ impl ProcessLifetimeHook for MemoryCollector {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -119,26 +120,27 @@ impl Halt for MemoryCollector {
     }
 }
 
-impl Statistics for MemoryCollector {
+impl StatisticsProvider for MemoryCollector {
     fn class_name(&self) -> &'static str {
         "memory"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
-        Box::new([
-            ("pss_average", Box::new(self.pss_average.get())),
-            ("pss_peak", Box::new(*self.pss_peak.lock())),
-            (
-                "num_samples",
-                Box::new(self.num_samples.load(Ordering::SeqCst)),
-            ),
-        ])
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        statistics_list!(
+            pss_average = self.pss_average.get(),
+            pss_peak = *self.pss_peak.lock(),
+            num_samples = self.num_samples.load(Ordering::SeqCst)
+        )
     }
 }
 
-impl<'a> Installable<'a> for MemoryCollector {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_process_lifetime_hook(self);
-        dispatcher.install_halt_hook(self);
+impl Module for MemoryCollector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
+        subs.install_halt_hook(self);
+        subs.install_stats_providers(self);
     }
 }

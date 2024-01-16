@@ -6,7 +6,7 @@ use reverie_syscalls::{Addr, AddrMut, MapFlags, ProtFlags, Syscall, SyscallInfo}
 
 use crate::{
     dirty_page_trackers::ExtraWritableRangesProvider,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::{Error, EventFlags, Result},
     saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
@@ -261,9 +261,12 @@ impl ExtraWritableRangesProvider for MmapHandler {
     }
 }
 
-impl<'a> Installable<'a> for MmapHandler {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_extra_writable_ranges_provider(self);
+impl Module for MmapHandler {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_standard_syscall_handler(self);
+        subs.install_extra_writable_ranges_provider(self);
     }
 }

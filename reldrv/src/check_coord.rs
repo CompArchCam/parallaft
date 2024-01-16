@@ -42,14 +42,14 @@ pub enum ProcessRole {
     Checker,
 }
 
-pub struct CheckCoordinator<'disp> {
+pub struct CheckCoordinator<'disp, 'modules> {
     pub segments: Arc<RwLock<SegmentChain>>,
     pub main: Arc<OwnedProcess>,
     pub epoch: AtomicU32,
     throttling: Mutex<Option<&'disp (dyn Throttler + Sync)>>,
     pending_sync: Arc<Mutex<Option<u32>>>,
     flags: CheckCoordinatorFlags,
-    pub dispatcher: &'disp Dispatcher<'disp>,
+    pub dispatcher: &'disp Dispatcher<'disp, 'modules>,
     last_syscall: Mutex<HashMap<Pid, Syscall>>,
 }
 
@@ -65,11 +65,11 @@ bitflags! {
 }
 
 #[allow(unused)]
-impl<'disp> CheckCoordinator<'disp> {
+impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
     pub fn new(
         main: OwnedProcess,
         flags: CheckCoordinatorFlags,
-        dispatcher: &'disp Dispatcher,
+        dispatcher: &'disp Dispatcher<'disp, 'modules>,
     ) -> Self {
         // main.pid
         let main_pid = main.pid;

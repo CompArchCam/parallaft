@@ -7,7 +7,7 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
 };
@@ -104,7 +104,7 @@ impl CustomSyscallHandler for RseqHandler {
 impl ProcessLifetimeHook for RseqHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -127,10 +127,13 @@ impl ProcessLifetimeHook for RseqHandler {
     }
 }
 
-impl<'a> Installable<'a> for RseqHandler {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_process_lifetime_hook(self);
-        dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_custom_syscall_handler(self);
+impl Module for RseqHandler {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
+        subs.install_standard_syscall_handler(self);
+        subs.install_custom_syscall_handler(self);
     }
 }

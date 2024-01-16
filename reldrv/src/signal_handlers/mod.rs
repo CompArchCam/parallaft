@@ -25,10 +25,10 @@ pub enum SignalHandlerExitAction {
 }
 
 pub trait SignalHandler {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         _signal: Signal,
-        _context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        _context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

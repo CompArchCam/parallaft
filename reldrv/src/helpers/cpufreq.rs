@@ -5,7 +5,7 @@ use std::str::FromStr;
 use log::info;
 use parking_lot::Mutex;
 
-use crate::dispatcher::{Dispatcher, Installable};
+use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 
@@ -168,7 +168,7 @@ impl<'a> CpuFreqSetter<'a> {
 impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -199,7 +199,7 @@ impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -217,8 +217,11 @@ impl<'a> Drop for CpuFreqSetter<'a> {
     }
 }
 
-impl<'a, 'b> Installable<'b> for CpuFreqSetter<'a> {
-    fn install(&'b self, dispatcher: &mut Dispatcher<'b>) {
-        dispatcher.install_process_lifetime_hook(self);
+impl<'a> Module for CpuFreqSetter<'a> {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_process_lifetime_hook(self);
     }
 }

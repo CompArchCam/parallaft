@@ -23,6 +23,8 @@ libfpt-rs = { path = "../libfpt-rs" }
 clap-num = "1.0.2"
 unwind = { version = "0.4.1", features = ["ptrace"] }
 parking_lot = "0.12.1"
+downcast-rs = "1.2.0"
+typed-arena = "2.0.2"
 
 [build-dependencies]
 cc = "1.0.78"

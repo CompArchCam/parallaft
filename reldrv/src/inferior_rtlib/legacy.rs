@@ -4,7 +4,7 @@ use reverie_syscalls::{AddrMut, MemoryAccess};
 use syscalls::SyscallArgs;
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::{dirty_pages::IgnoredPagesProvider, Process},
     segments::{CheckpointCaller, Segment, SegmentEventHandler},
@@ -120,10 +120,13 @@ impl CustomSyscallHandler for LegacyInferiorRtLib {
     }
 }
 
-impl<'a> Installable<'a> for LegacyInferiorRtLib {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_segment_event_handler(self);
-        dispatcher.install_ignored_pages_provider(self);
-        dispatcher.install_custom_syscall_handler(self);
+impl Module for LegacyInferiorRtLib {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_segment_event_handler(self);
+        subs.install_ignored_pages_provider(self);
+        subs.install_custom_syscall_handler(self);
     }
 }

@@ -6,7 +6,7 @@ use log::info;
 use super::Throttler;
 use crate::{
     check_coord::CheckCoordinator,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     segments::SegmentChain,
 };
 
@@ -50,8 +50,11 @@ impl Throttler for NrSegmentsBasedThrottler {
     }
 }
 
-impl<'a> Installable<'a> for NrSegmentsBasedThrottler {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_throttler(self);
+impl Module for NrSegmentsBasedThrottler {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_throttler(self);
     }
 }

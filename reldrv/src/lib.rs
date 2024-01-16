@@ -36,8 +36,8 @@ use clap::ValueEnum;
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorFlags};
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
+use crate::dispatcher::Dispatcher;
 use crate::dispatcher::Halt;
-use crate::dispatcher::{Dispatcher, Installable};
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 use crate::helpers::cpufreq::CpuFreqGovernor;
@@ -57,8 +57,7 @@ use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
 use crate::statistics::perf::PerfStatsCollector;
 use crate::statistics::timing::TimingCollector;
-use crate::statistics::Statistics;
-use crate::statistics::StatisticsSet;
+use crate::statistics::StatisticsProvider;
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::exit::ExitHandler;
@@ -168,125 +167,91 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
     )
     .unwrap();
 
-    let mut disp = Dispatcher::new();
-    let rseq_handler = RseqHandler::new();
-    rseq_handler.install(&mut disp);
+    let disp = Dispatcher::new();
 
-    let clone_handler = CloneHandler::new();
-    clone_handler.install(&mut disp);
+    // Syscall handlers
+    disp.register_module(RseqHandler::new());
+    disp.register_module(CloneHandler::new());
+    disp.register_module(ExecveHandler::new());
+    disp.register_module(ExitHandler::new());
+    disp.register_module(MmapHandler::new());
+    disp.register_module(ReplicatedSyscallHandler::new());
 
-    let execve_handler = ExecveHandler::new();
-    execve_handler.install(&mut disp);
-
-    let exit_handler = ExitHandler::new();
-    exit_handler.install(&mut disp);
-
-    let mmap_handler = MmapHandler::new();
-    mmap_handler.install(&mut disp);
-
-    let replicated_syscall_handler = ReplicatedSyscallHandler::new();
-    replicated_syscall_handler.install(&mut disp);
-
-    let rdtsc_handler = RdtscHandler::new();
-
+    // Non-deterministic instruction handlers
     if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_RDTSC) {
-        rdtsc_handler.install(&mut disp);
+        disp.register_module(RdtscHandler::new());
     }
-
-    let cpuid_handler = CpuidHandler::new();
 
     if !options.runner_flags.contains(RunnerFlags::DONT_TRAP_CPUID) {
-        cpuid_handler.install(&mut disp);
+        disp.register_module(CpuidHandler::new());
     }
 
-    let legacy_rtlib_handler = LegacyInferiorRtLib::new();
-    let relrtlib_handler = RelRtLib::new(options.checkpoint_period);
-    let pmu_segmentor = PmuSegmentor::new(
-        options.checkpoint_period,
-        options.pmu_segmentation_skip_instructions,
-    );
-
+    // Segmentation
     if options.pmu_segmentation {
-        pmu_segmentor.install(&mut disp);
+        disp.register_module(PmuSegmentor::new(
+            options.checkpoint_period,
+            options.pmu_segmentation_skip_instructions,
+        ));
     } else {
-        legacy_rtlib_handler.install(&mut disp);
-        relrtlib_handler.install(&mut disp);
+        disp.register_module(LegacyInferiorRtLib::new());
+        disp.register_module(RelRtLib::new(options.checkpoint_period));
     }
 
-    let vdso_remover = VdsoRemover::new();
-    vdso_remover.install(&mut disp);
+    // Misc
+    disp.register_module(VdsoRemover::new());
 
     #[cfg(not(feature = "intel_cat"))]
-    let affinity_setter = AffinitySetter::new(&options.main_cpu_set, &options.checker_cpu_set);
+    disp.register_module(AffinitySetter::new(
+        &options.main_cpu_set,
+        &options.checker_cpu_set,
+    ));
 
     #[cfg(feature = "intel_cat")]
-    let affinity_setter = AffinitySetter::new_with_cache_allocation(
+    disp.register_module(AffinitySetter::new_with_cache_allocation(
         &options.main_cpu_set,
         &options.checker_cpu_set,
         &options.shell_cpu_set,
         options.cache_masks,
-    );
+    ));
 
-    affinity_setter.install(&mut disp);
-
-    let cpufreq_setter = CpuFreqSetter::new(
+    disp.register_module(CpuFreqSetter::new(
         &options.main_cpu_set,
         &options.checker_cpu_set,
         &options.shell_cpu_set,
         options.main_cpu_freq_governor,
         options.checker_cpu_freq_governor,
         options.shell_cpu_freq_governor,
-    );
+    ));
 
-    cpufreq_setter.install(&mut disp);
+    disp.register_module(CheckpointSizeLimiter::new(
+        options.checkpoint_size_watermark,
+    ));
 
-    let checkpoint_size_limiter = CheckpointSizeLimiter::new(options.checkpoint_size_watermark);
-    checkpoint_size_limiter.install(&mut disp);
-
-    let time_stats = TimingCollector::new();
-    time_stats.install(&mut disp);
-
-    let counter_stats = CounterCollector::new(&time_stats);
-    counter_stats.install(&mut disp);
-
-    let cache_stats = PerfStatsCollector::new(options.enabled_perf_counters);
-    cache_stats.install(&mut disp);
-
-    let dirty_page_stats = DirtyPageStatsCollector::new();
-    dirty_page_stats.install(&mut disp);
-
-    let mut stats: Vec<&dyn Statistics> = vec![
-        &time_stats,
-        &counter_stats,
-        &cache_stats,
-        &dirty_page_stats,
-        &checkpoint_size_limiter,
-    ];
-
-    let memory_stats = MemoryCollector::new(
-        options.memory_sample_interval,
-        options.memory_sample_includes_rt,
-    );
+    // Statistics
+    disp.register_module(TimingCollector::new());
+    disp.register_module(CounterCollector::new());
+    disp.register_module(PerfStatsCollector::new(options.enabled_perf_counters));
+    disp.register_module(DirtyPageStatsCollector::new());
 
     if options.sample_memory_usage {
-        memory_stats.install(&mut disp);
-        stats.push(&memory_stats);
+        disp.register_module(MemoryCollector::new(
+            options.memory_sample_interval,
+            options.memory_sample_includes_rt,
+        ));
     }
 
-    let all_stats = StatisticsSet::new(stats);
+    // Throttlers
+    disp.register_module(MemoryBasedThrottler::new(options.memory_overhead_watermark));
+    disp.register_module(NrSegmentsBasedThrottler::new(options.max_nr_live_segments));
 
-    let memory_based_throttler = MemoryBasedThrottler::new(options.memory_overhead_watermark);
-    memory_based_throttler.install(&mut disp);
-
-    let nr_segment_based_throttler = NrSegmentsBasedThrottler::new(options.max_nr_live_segments);
-    nr_segment_based_throttler.install(&mut disp);
-
-    let soft_dirty_page_tracker = SoftDirtyPageTracker::new(options.dont_clear_soft_dirty);
-    let fpt_dirty_page_tracker = FptDirtyPageTracker::new();
-
+    // Dirty page trackers
     match options.dirty_page_tracker {
-        DirtyPageAddressTrackerType::SoftDirty => soft_dirty_page_tracker.install(&mut disp),
-        DirtyPageAddressTrackerType::Fpt => fpt_dirty_page_tracker.install(&mut disp),
+        DirtyPageAddressTrackerType::SoftDirty => {
+            disp.register_module(SoftDirtyPageTracker::new(options.dont_clear_soft_dirty));
+        }
+        DirtyPageAddressTrackerType::Fpt => {
+            disp.register_module(FptDirtyPageTracker::new());
+        }
     }
 
     info!("Child process tracing started");
@@ -485,9 +450,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
             if options.runner_flags.contains(RunnerFlags::DUMP_STATS)
                 || options.stats_output.is_some()
             {
-                let _nr_checkpoints = check_coord.epoch();
-
-                let mut s = all_stats.as_text();
+                let mut s = statistics::as_text(disp.statistics());
                 s.push_str("\n");
 
                 if let Some(output_path) = options.stats_output {

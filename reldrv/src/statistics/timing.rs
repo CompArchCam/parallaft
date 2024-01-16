@@ -7,13 +7,14 @@ use parking_lot::Mutex;
 use reverie_syscalls::Syscall;
 
 use crate::{
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::Result,
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    statistics_list,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
-use super::{StatisticValue, Statistics};
+use super::{StatisticValue, StatisticsProvider};
 
 pub struct TimingCollector {
     utime: AtomicU64,
@@ -41,12 +42,12 @@ impl TimingCollector {
     }
 }
 
-impl Statistics for TimingCollector {
+impl StatisticsProvider for TimingCollector {
     fn class_name(&self) -> &'static str {
         "timing"
     }
 
-    fn statistics(&self) -> Box<[(&'static str, Box<dyn StatisticValue>)]> {
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
         let ticks_per_second = procfs::ticks_per_second();
         let utime_ticks = self.utime.load(Ordering::SeqCst);
         let stime_ticks = self.stime.load(Ordering::SeqCst);
@@ -58,15 +59,15 @@ impl Statistics for TimingCollector {
         let all_wall_time = self.all_wall_time.lock().unwrap().as_secs_f64();
         let exit_status = self.exit_status.lock().unwrap_or(255);
 
-        Box::new([
-            ("main_user_time", Box::new(main_utime)),
-            ("main_sys_time", Box::new(main_stime)),
-            ("main_cpu_time", Box::new(main_cpu_time)),
-            ("main_wall_time", Box::new(main_wall_time)),
-            ("all_wall_time", Box::new(all_wall_time)),
-            ("main_cpu_usage", Box::new(main_cpu_time / main_wall_time)),
-            ("exit_status", Box::new(exit_status)),
-        ])
+        statistics_list!(
+            main_user_time = main_utime,
+            main_sys_time = main_stime,
+            main_cpu_time = main_cpu_time,
+            main_wall_time = main_wall_time,
+            all_wall_time = all_wall_time,
+            main_cpu_usage = main_cpu_time / main_wall_time,
+            exit_status = exit_status
+        )
     }
 }
 
@@ -93,7 +94,7 @@ impl StandardSyscallHandler for TimingCollector {
 impl ProcessLifetimeHook for TimingCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -108,7 +109,7 @@ impl ProcessLifetimeHook for TimingCollector {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -124,7 +125,7 @@ impl ProcessLifetimeHook for TimingCollector {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -138,9 +139,13 @@ impl ProcessLifetimeHook for TimingCollector {
     }
 }
 
-impl<'a> Installable<'a> for TimingCollector {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_standard_syscall_handler(self);
-        dispatcher.install_process_lifetime_hook(self);
+impl Module for TimingCollector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_standard_syscall_handler(self);
+        subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }

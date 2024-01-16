@@ -22,12 +22,12 @@ pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
-pub struct HandlerContext<'p, 'segs, 'disp, 'scope, 'env> {
+pub struct HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules> {
     pub process: &'p Process,
     // active_segment: Option<&'a mut Segment>,
     // is_main: bool,
     pub segments: &'segs SegmentChain,
-    pub check_coord: &'disp CheckCoordinator<'disp>,
+    pub check_coord: &'disp CheckCoordinator<'disp, 'modules>,
     pub scope: &'scope Scope<'scope, 'env>,
 }
 

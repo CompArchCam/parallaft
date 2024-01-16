@@ -1,8 +1,10 @@
 use std::ops::Range;
 
 use nix::{sys::signal::Signal, unistd::Pid};
+use parking_lot::RwLock;
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
+use typed_arena::Arena;
 
 use crate::{
     check_coord::{CheckCoordinator, ProcessRole},
@@ -16,6 +18,7 @@ use crate::{
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     segments::{CheckpointCaller, Segment, SegmentChain, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
+    statistics::{StatisticValue, StatisticsProvider},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
         StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
@@ -27,7 +30,7 @@ use crate::{
 macro_rules! generate_event_handler {
     ($handlers_list:ident, fn $name:ident $( < $( $gen:tt ),+ > )? (& $($self_lifetime:lifetime)? self, $( $arg_name:ident : $arg_ty:ty ),* $(,)? ) ) => {
         fn $name(& $($self_lifetime)? self, $( $arg_name : $arg_ty ),*) -> Result<()> {
-            for handler in &self.$handlers_list {
+            for handler in &self.subscribers.read().$handlers_list {
                 handler.$name($( $arg_name ),*)?;
             }
 
@@ -39,14 +42,12 @@ macro_rules! generate_event_handler {
 macro_rules! generate_event_handler_option {
     ($handler_option:ident, fn $name:ident $( < $( $gen:tt ),+ > )? (&self, $( $arg_name:ident : $arg_ty:ty ),* $(,)? ) $( -> $ret_ty:ty )? ) => {
         fn $name $( < $( $gen ),+ > )? ( &self, $( $arg_name : $arg_ty ),* ) $( -> $ret_ty )? {
-            self.$handler_option.ok_or($crate::error::Error::NotHandled)?.$name($( $arg_name ),*)
+            self.subscribers.read().$handler_option.ok_or($crate::error::Error::NotHandled)?.$name($( $arg_name ),*)
         }
     };
 }
 
-// fn handle_event<T>(list: &Vec<T>, )
-
-pub struct Dispatcher<'a> {
+pub struct Subscribers<'a> {
     process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
     standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
     custom_syscall_handlers: Vec<&'a (dyn CustomSyscallHandler + Sync)>,
@@ -59,9 +60,10 @@ pub struct Dispatcher<'a> {
     dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
     halt_hooks: Vec<&'a (dyn Halt + Sync)>,
+    stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
 }
 
-impl<'a> Dispatcher<'a> {
+impl<'a> Subscribers<'a> {
     pub fn new() -> Self {
         Self {
             process_lifetime_hooks: Vec::new(),
@@ -76,6 +78,7 @@ impl<'a> Dispatcher<'a> {
             dirty_page_tracker: None,
             extra_writable_ranges_providers: Vec::new(),
             halt_hooks: Vec::new(),
+            stats_providers: Vec::new(),
         }
     }
 
@@ -127,21 +130,6 @@ impl<'a> Dispatcher<'a> {
         self.schedule_checkpoint_ready_handlers.push(handler)
     }
 
-    pub fn dispatch_throttle(
-        &self,
-        nr_dirty_pages: usize,
-        segments: &SegmentChain,
-        check_coord: &CheckCoordinator,
-    ) -> Option<&'a (dyn Throttler + Sync)> {
-        for &handler in &self.throttlers {
-            if handler.should_throttle(nr_dirty_pages, segments, check_coord) {
-                return Some(handler);
-            }
-        }
-
-        None
-    }
-
     pub fn install_dirty_page_tracker(
         &mut self,
         tracker: &'a (dyn DirtyPageAddressTracker + Sync),
@@ -159,33 +147,80 @@ impl<'a> Dispatcher<'a> {
     pub fn install_halt_hook(&mut self, hook: &'a (dyn Halt + Sync)) {
         self.halt_hooks.push(hook)
     }
+
+    pub fn install_stats_providers(&mut self, provider: &'a (dyn StatisticsProvider + Sync)) {
+        self.stats_providers.push(provider)
+    }
 }
 
-impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
+pub struct Dispatcher<'a, 'm> {
+    modules: Arena<Box<dyn Module + 'm>>,
+    subscribers: RwLock<Subscribers<'a>>,
+}
+
+impl<'a, 'm> Dispatcher<'a, 'm> {
+    pub fn new() -> Self {
+        Self {
+            modules: Arena::new(),
+            subscribers: RwLock::new(Subscribers::new()),
+        }
+    }
+
+    pub fn dispatch_throttle(
+        &self,
+        nr_dirty_pages: usize,
+        segments: &SegmentChain,
+        check_coord: &CheckCoordinator,
+    ) -> Option<&'a (dyn Throttler + Sync)> {
+        for &handler in &self.subscribers.read().throttlers {
+            if handler.should_throttle(nr_dirty_pages, segments, check_coord) {
+                return Some(handler);
+            }
+        }
+
+        None
+    }
+
+    pub fn register_module<'s, T>(&'s self, module: T) -> &T
+    where
+        T: Module + 'm,
+        's: 'a,
+    {
+        let m = self.modules.alloc(Box::new(module));
+        m.subscribe_all(&mut self.subscribers.write());
+        unsafe { &*(m.as_ref() as *const _ as *const T) }
+    }
+}
+
+impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        self.process_lifetime_hooks
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_main_init(context))
     }
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        self.process_lifetime_hooks
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_checker_init(context))
     }
@@ -193,28 +228,32 @@ impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         nr_dirty_pages: Option<usize>,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        self.process_lifetime_hooks
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_checker_fini(nr_dirty_pages, context))
     }
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        self.process_lifetime_hooks
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_all_fini(context))
     }
@@ -222,26 +261,28 @@ impl<'a> ProcessLifetimeHook for Dispatcher<'a> {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         ret_val: i32,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        self.process_lifetime_hooks
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_main_fini(ret_val, context))
     }
 }
 
-impl<'a> StandardSyscallHandler for Dispatcher<'a> {
+impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry(syscall, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -258,7 +299,7 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         syscall: &Syscall,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit(ret_val, syscall, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -275,7 +316,7 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret =
                 handler.handle_standard_syscall_entry_main(syscall, active_segment, context)?;
 
@@ -294,7 +335,7 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_main(
                 ret_val,
                 saved_incomplete_syscall,
@@ -316,7 +357,7 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret =
                 handler.handle_standard_syscall_entry_checker(syscall, active_segment, context)?;
 
@@ -338,7 +379,7 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
         active_segment: &mut Segment,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.standard_syscall_handlers {
+        for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_checker(
                 ret_val,
                 saved_syscall,
@@ -355,14 +396,14 @@ impl<'a> StandardSyscallHandler for Dispatcher<'a> {
     }
 }
 
-impl<'a> CustomSyscallHandler for Dispatcher<'a> {
+impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_custom_syscall_entry(
         &self,
         sysno: usize,
         args: SyscallArgs,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.custom_syscall_handlers {
+        for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_entry(sysno, args, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -378,7 +419,7 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
         ret_val: isize,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        for handler in &self.custom_syscall_handlers {
+        for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_exit(ret_val, context)?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -390,16 +431,16 @@ impl<'a> CustomSyscallHandler for Dispatcher<'a> {
     }
 }
 
-impl<'a> SignalHandler for Dispatcher<'a> {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env>(
+impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
+    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env>,
+        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
-        for handler in &self.signal_handlers {
+        for handler in &self.subscribers.read().signal_handlers {
             let ret = handler.handle_signal(signal, context)?;
 
             if !matches!(ret, SignalHandlerExitAction::NextHandler) {
@@ -411,7 +452,7 @@ impl<'a> SignalHandler for Dispatcher<'a> {
     }
 }
 
-impl<'a> SegmentEventHandler for Dispatcher<'a> {
+impl<'a, 'm> SegmentEventHandler for Dispatcher<'a, 'm> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, segment: &Segment));
     generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, segment: &Segment));
     generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller));
@@ -420,11 +461,11 @@ impl<'a> SegmentEventHandler for Dispatcher<'a> {
     generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main_pid: Pid, last_segment_id: Option<SegmentId>));
 }
 
-impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
+impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
     fn get_ignored_pages(&self) -> Box<[usize]> {
         let mut pages = Vec::new();
 
-        for provider in &self.ignored_pages_providers {
+        for provider in &self.subscribers.read().ignored_pages_providers {
             pages.append(&mut provider.get_ignored_pages().into_vec());
         }
 
@@ -432,15 +473,15 @@ impl<'a> IgnoredPagesProvider for Dispatcher<'a> {
     }
 }
 
-impl<'a> ScheduleCheckpoint for Dispatcher<'a> {
+impl<'a, 'm> ScheduleCheckpoint for Dispatcher<'a, 'm> {
     generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, check_coord: &CheckCoordinator));
 }
 
-impl<'a> ScheduleCheckpointReady for Dispatcher<'a> {
+impl<'a, 'm> ScheduleCheckpointReady for Dispatcher<'a, 'm> {
     generate_event_handler!(schedule_checkpoint_ready_handlers, fn handle_ready_to_schedule_checkpoint(&self, check_coord: &CheckCoordinator));
 }
 
-impl<'a> DirtyPageAddressTracker for Dispatcher<'a> {
+impl<'a, 'm> DirtyPageAddressTracker for Dispatcher<'a, 'm> {
     generate_event_handler_option!(dirty_page_tracker,
         fn take_dirty_pages_addresses<'b>(
             &self,
@@ -451,11 +492,11 @@ impl<'a> DirtyPageAddressTracker for Dispatcher<'a> {
     );
 }
 
-impl<'a> ExtraWritableRangesProvider for Dispatcher<'a> {
+impl<'a, 'm> ExtraWritableRangesProvider for Dispatcher<'a, 'm> {
     fn get_extra_writable_ranges(&self) -> Box<[Range<usize>]> {
         let mut ranges = Vec::new();
 
-        for provider in &self.extra_writable_ranges_providers {
+        for provider in &self.subscribers.read().extra_writable_ranges_providers {
             ranges.append(&mut provider.get_extra_writable_ranges().into_vec());
         }
 
@@ -463,19 +504,44 @@ impl<'a> ExtraWritableRangesProvider for Dispatcher<'a> {
     }
 }
 
-impl<'a> Halt for Dispatcher<'a> {
+impl<'a, 'm> Halt for Dispatcher<'a, 'm> {
     fn halt(&self) {
-        self.halt_hooks.iter().for_each(|h| h.halt())
+        self.subscribers
+            .read()
+            .halt_hooks
+            .iter()
+            .for_each(|h| h.halt())
     }
 }
 
-pub trait Installable<'a>
-where
-    Self: Sized,
-{
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>);
+impl StatisticsProvider for Dispatcher<'_, '_> {
+    fn class_name(&self) -> &'static str {
+        "combined"
+    }
+
+    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        self.subscribers
+            .read()
+            .stats_providers
+            .iter()
+            .flat_map(|ss| {
+                ss.statistics()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(stat_name, value)| (format!("{}.{}", ss.class_name(), stat_name), value))
+            })
+            .collect()
+    }
+}
+
+pub trait Module {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd;
 }
 
 pub trait Halt {
     fn halt(&self);
 }
+
+unsafe impl Sync for Dispatcher<'_, '_> {}

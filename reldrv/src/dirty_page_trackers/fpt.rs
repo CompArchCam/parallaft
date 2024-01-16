@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::{
     check_coord::ProcessRole,
     dirty_page_trackers::DirtyPageAddressFlags,
-    dispatcher::{Dispatcher, Installable},
+    dispatcher::{Module, Subscribers},
     error::{Error, Result},
     segments::{CheckpointCaller, Segment, SegmentEventHandler, SegmentId},
 };
@@ -125,9 +125,12 @@ impl SegmentEventHandler for FptDirtyPageTracker {
     }
 }
 
-impl<'a> Installable<'a> for FptDirtyPageTracker {
-    fn install(&'a self, dispatcher: &mut Dispatcher<'a>) {
-        dispatcher.install_dirty_page_tracker(self);
-        dispatcher.install_segment_event_handler(self);
+impl Module for FptDirtyPageTracker {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_dirty_page_tracker(self);
+        subs.install_segment_event_handler(self);
     }
 }
