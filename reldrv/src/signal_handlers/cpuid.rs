@@ -8,8 +8,11 @@ use syscalls::{syscall_args, Sysno};
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, EventFlags, Result},
+    process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::SavedTrapEvent,
-    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
+    syscall_handlers::{
+        is_execve_ok, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
+    },
 };
 
 use super::{SignalHandler, SignalHandlerExitAction};
@@ -19,6 +22,20 @@ pub struct CpuidHandler;
 impl CpuidHandler {
     pub fn new() -> Self {
         Self {}
+    }
+
+    fn enable_cpuid_faulting(process: &Process) -> Result<()> {
+        let ret = process.syscall_direct(
+            Sysno::arch_prctl,
+            syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
+            true,
+            false,
+            true,
+        )?;
+        assert_eq!(ret, 0);
+        info!("Cpuid init done");
+
+        Ok(())
     }
 }
 
@@ -96,20 +113,26 @@ impl StandardSyscallHandler for CpuidHandler {
         syscall: &Syscall,
         context: &HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) && ret_val == 0 {
+        if is_execve_ok(syscall, ret_val) {
             // arch_prctl cpuid is cleared after every execve
-            let ret = context.process.syscall_direct(
-                Sysno::arch_prctl,
-                syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
-                true,
-                false,
-                true,
-            )?;
-            assert_eq!(ret, 0);
-            info!("Cpuid init done");
+            Self::enable_cpuid_faulting(context.process)?;
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
+    }
+}
+
+impl ProcessLifetimeHook for CpuidHandler {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        Self::enable_cpuid_faulting(context.process)
     }
 }
 
@@ -120,5 +143,6 @@ impl Module for CpuidHandler {
     {
         subs.install_signal_handler(self);
         subs.install_standard_syscall_handler(self);
+        subs.install_process_lifetime_hook(self);
     }
 }

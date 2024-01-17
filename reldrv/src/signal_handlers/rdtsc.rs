@@ -1,32 +1,28 @@
 use std::{
     arch::x86_64::{__rdtscp, _rdtsc},
     mem::MaybeUninit,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use log::info;
 use nix::{libc, sys::signal::Signal};
-use reverie_syscalls::{Addr, MemoryAccess, Syscall};
+use reverie_syscalls::{Addr, MemoryAccess};
 use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, EventFlags, Result},
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::SavedTrapEvent,
-    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
+    syscall_handlers::HandlerContext,
 };
 
 use super::{SignalHandler, SignalHandlerExitAction};
 
-pub struct RdtscHandler {
-    init_done: AtomicBool,
-}
+pub struct RdtscHandler;
 
 impl RdtscHandler {
     pub fn new() -> Self {
-        Self {
-            init_done: AtomicBool::new(false),
-        }
+        Self {}
     }
 }
 
@@ -130,32 +126,26 @@ impl SignalHandler for RdtscHandler {
     }
 }
 
-impl StandardSyscallHandler for RdtscHandler {
-    fn handle_standard_syscall_exit(
-        &self,
-        ret_val: isize,
-        syscall: &reverie_syscalls::Syscall,
-        context: &HandlerContext,
-    ) -> Result<SyscallHandlerExitAction> {
-        if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_))
-            && ret_val == 0
-            && self
-                .init_done
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
-            let ret = context.process.syscall_direct(
-                Sysno::prctl,
-                syscall_args!(libc::PR_SET_TSC as _, libc::PR_TSC_SIGSEGV as _),
-                false,
-                false,
-                true,
-            )?;
-            assert_eq!(ret, 0);
-            info!("Rdtsc init done");
-        };
-
-        Ok(SyscallHandlerExitAction::NextHandler)
+impl ProcessLifetimeHook for RdtscHandler {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        let ret = context.process.syscall_direct(
+            Sysno::prctl,
+            syscall_args!(libc::PR_SET_TSC as _, libc::PR_TSC_SIGSEGV as _),
+            false,
+            false,
+            true,
+        )?;
+        assert_eq!(ret, 0);
+        info!("Rdtsc init done");
+        Ok(())
     }
 }
 
@@ -165,6 +155,6 @@ impl Module for RdtscHandler {
         's: 'd,
     {
         subs.install_signal_handler(self);
-        subs.install_standard_syscall_handler(self);
+        subs.install_process_lifetime_hook(self);
     }
 }

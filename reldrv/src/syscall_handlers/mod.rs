@@ -152,3 +152,7 @@ pub trait CustomSyscallHandler {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
+
+pub fn is_execve_ok(syscall: &Syscall, ret_val: isize) -> bool {
+    return matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) && ret_val == 0;
+}
