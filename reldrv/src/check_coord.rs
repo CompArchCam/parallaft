@@ -85,6 +85,31 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         }
     }
 
+    fn check_throttle(
+        &self,
+        segments: &SegmentChain,
+        nr_dirty_pages: usize,
+        is_last_checkpoint_finalizing: bool,
+    ) -> bool {
+        if is_last_checkpoint_finalizing {
+            return false;
+        }
+
+        let mut throttling = self.throttling.lock();
+        assert!(throttling.as_ref().is_none(), "Unexpected throttling state");
+
+        if let Some(throttler) = self
+            .dispatcher
+            .dispatch_throttle(nr_dirty_pages, &segments, self)
+        {
+            info!("Throttling");
+            *throttling = Some(throttler);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Handle checkpoint request from the target
     pub fn handle_checkpoint<'s, 'scope, 'env>(
         &'s self,
@@ -144,23 +169,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
                     segments.lookup_segment_main_mg().map(|s| s.nr),
                 )?;
 
-                if !is_last_checkpoint_finalizing {
-                    let mut throttling = self.throttling.lock();
-
-                    if let Some(throttler) = throttling.as_ref() {
-                        panic!("Unexpected throttling state");
-                    } else {
-                        if let Some(throttler) =
-                            self.dispatcher
-                                .dispatch_throttle(nr_dirty_pages, &segments, self)
-                        {
-                            info!("Throttling");
-                            *throttling = Some(throttler);
-                        } else {
-                            self.main.resume()?;
-                        }
-                    }
-                } else {
+                if !self.check_throttle(&segments, nr_dirty_pages, is_last_checkpoint_finalizing) {
                     self.main.resume()?;
                 }
 
@@ -208,7 +217,10 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
                         segments.lookup_segment_main_mg().map(|s| s.nr),
                     )?;
 
-                    self.main.resume()?;
+                    if !self.check_throttle(&segments, nr_dirty_pages, false) {
+                        self.main.resume()?;
+                    }
+
                     let checkpoint =
                         Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
 
