@@ -54,10 +54,10 @@ impl Process {
 
                 ptrace::syscall(self.pid, None)?;
 
-                assert!(matches!(
+                assert_eq!(
                     waitpid(self.pid, None)?,
-                    WaitStatus::PtraceSyscall(_)
-                ));
+                    WaitStatus::PtraceSyscall(self.pid)
+                );
 
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
@@ -73,10 +73,10 @@ impl Process {
 
                 ptrace::syscall(self.pid, None)?;
 
-                assert!(matches!(
+                assert_eq!(
                     waitpid(self.pid, None)?,
-                    WaitStatus::PtraceSyscall(_)
-                ));
+                    WaitStatus::PtraceSyscall(self.pid)
+                );
 
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
@@ -315,10 +315,10 @@ pub(crate) mod tests {
         // second getpid entry
         ptrace::syscall(process.pid, None).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
 
         assert_eq!(
             process.read_registers().unwrap().sysno().unwrap(),
@@ -334,19 +334,19 @@ pub(crate) mod tests {
 
         // second getpid exit
         ptrace::syscall(process.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
 
         dbg!(ptrace::getsyscallinfo(process.pid).unwrap());
 
         // gettid entry
         ptrace::syscall(process.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
         assert_eq!(
             process.read_registers().unwrap().sysno().unwrap(),
             Sysno::gettid
@@ -392,10 +392,10 @@ pub(crate) mod tests {
         // second getpid entry
         ptrace::syscall(process.pid, None).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
 
         assert_eq!(
             process.read_registers().unwrap().sysno().unwrap(),
@@ -404,10 +404,10 @@ pub(crate) mod tests {
 
         // second getpid exit
         ptrace::syscall(process.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
 
         // inject a getuid syscall
         let uid2 = process
@@ -417,10 +417,10 @@ pub(crate) mod tests {
 
         // gettid entry
         ptrace::syscall(process.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             process.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(process.pid)
+        );
         assert_eq!(
             process.read_registers().unwrap().sysno().unwrap(),
             Sysno::gettid
@@ -464,10 +464,10 @@ pub(crate) mod tests {
         // second getpid entry
         ptrace::syscall(parent.pid, None).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             parent.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(parent.pid)
+        );
 
         assert_eq!(
             parent.read_registers().unwrap().sysno().unwrap(),
@@ -476,10 +476,10 @@ pub(crate) mod tests {
 
         // second getpid exit
         ptrace::syscall(parent.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             parent.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(parent.pid)
+        );
 
         // clone the process
         let child = parent
@@ -489,10 +489,10 @@ pub(crate) mod tests {
 
         // parent gettid entry
         ptrace::syscall(parent.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             parent.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(parent.pid)
+        );
         assert_eq!(
             parent.read_registers().unwrap().sysno().unwrap(),
             Sysno::gettid
@@ -504,10 +504,10 @@ pub(crate) mod tests {
 
         // child gettid entry
         ptrace::syscall(child.pid, None).unwrap();
-        assert!(matches!(
+        assert_eq!(
             child.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(child.pid)
+        );
         assert_eq!(
             child.read_registers().unwrap().sysno().unwrap(),
             Sysno::gettid
@@ -531,10 +531,10 @@ pub(crate) mod tests {
         // getpid entry
         ptrace::syscall(parent.pid, None).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             parent.waitpid().unwrap(),
-            WaitStatus::PtraceSyscall(_)
-        ));
+            WaitStatus::PtraceSyscall(parent.pid)
+        );
 
         assert_eq!(
             parent.read_registers().unwrap().sysno().unwrap(),
