@@ -192,6 +192,10 @@ fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
 fn main() {
     let cli = CliArgs::parse();
 
+    let mut env_logger_builder = pretty_env_logger::formatted_timed_builder();
+
+    env_logger_builder.parse_default_env();
+
     if let Some(log_output) = cli.log_output {
         let log_file = Box::new(
             OpenOptions::new()
@@ -201,15 +205,12 @@ fn main() {
                 .expect("Can't create file"),
         );
 
-        env_logger::Builder::new()
-            .parse_default_env()
-            .target(env_logger::Target::Pipe(log_file))
-            .init();
+        env_logger_builder.target(pretty_env_logger::env_logger::Target::Pipe(log_file));
 
         log_panics::init();
-    } else {
-        env_logger::init();
     }
+
+    env_logger_builder.init();
 
     let mut runner_flags = RunnerFlags::empty();
     runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);

@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.1.1", features = ["derive"] }
-env_logger = "0.10.0"
 log = "0.4.17"
 nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-get-rseq-configuration" }
 procfs = { git = "https://github.com/mbyzhang/procfs.git" }
@@ -25,6 +24,7 @@ unwind = { version = "0.4.1", features = ["ptrace"] }
 parking_lot = "0.12.1"
 downcast-rs = "1.2.0"
 typed-arena = "2.0.2"
+pretty_env_logger = "0.5.0"
 
 [build-dependencies]
 cc = "1.0.78"

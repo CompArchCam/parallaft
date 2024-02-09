@@ -17,7 +17,7 @@ static INIT: Once = Once::new();
 
 pub fn setup() {
     INIT.call_once(|| {
-        env_logger::builder().is_test(true).init();
+        pretty_env_logger::formatted_builder().is_test(true).init();
 
         // let orig_hook = panic::take_hook();
         // panic::set_hook(Box::new(move |panic_info| {
