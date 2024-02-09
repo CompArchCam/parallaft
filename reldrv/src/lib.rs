@@ -199,6 +199,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
         disp.register_module(PmuSegmentor::new(
             options.checkpoint_period,
             options.pmu_segmentation_skip_instructions,
+            &options.main_cpu_set,
+            &options.checker_cpu_set,
         ));
     } else {
         disp.register_module(LegacyInferiorRtLib::new());

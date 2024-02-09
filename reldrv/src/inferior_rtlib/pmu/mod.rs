@@ -1,8 +1,11 @@
 //! PMU-interrupt-based segmentation
 
-use std::{collections::HashMap, io};
+mod counter;
+mod perf_typed_raw;
+mod pmu_type;
 
-use lazy_static::lazy_static;
+use std::collections::HashMap;
+
 use log::{debug, info};
 
 use nix::{
@@ -10,168 +13,38 @@ use nix::{
     unistd::Pid,
 };
 use parking_lot::Mutex;
-use perf_event::{Counter, SampleSkid};
+use perf_event::{events::Raw, Counter, SampleSkid};
 use reverie_syscalls::Syscall;
 
 use crate::{
-    check_coord::CheckCoordinator,
+    check_coord::{CheckCoordinator, ProcessRole},
     dispatcher::{Module, Subscribers},
     error::Result,
+    inferior_rtlib::ScheduleCheckpoint,
     segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
-use super::ScheduleCheckpoint;
-
-#[cfg(target_arch = "x86_64")]
-const INTEL_PERF_EVENT_BRANCH_RETIRED: u64 = 0xbbc4; // branches retired excluding far branches
-
-#[cfg(target_arch = "x86_64")]
-const AMD_PERF_EVENT_EX_RET_BRN_FAR: u64 = 0xc6;
-
-#[cfg(target_arch = "x86_64")]
-const AMD_PERF_EVENT_EX_RET_BRN: u64 = 0xc2;
-
-#[derive(Debug)]
-enum PmuType {
-    // TODO: more precise model detection
-    #[cfg(target_arch = "x86_64")]
-    Amd,
-    #[cfg(target_arch = "x86_64")]
-    Intel,
-    #[cfg(target_arch = "aarch64")]
-    Armv8,
-    Unknown,
-}
-
-impl PmuType {
-    fn detect() -> Self {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let cpuid0 = unsafe { std::arch::x86_64::__cpuid(0) };
-            let mut vendor = [0; 12];
-            vendor[0..4].copy_from_slice(&cpuid0.ebx.to_le_bytes());
-            vendor[4..8].copy_from_slice(&cpuid0.edx.to_le_bytes());
-            vendor[8..12].copy_from_slice(&cpuid0.ecx.to_le_bytes());
-
-            let vendor = std::str::from_utf8(&vendor).unwrap_or("[INVALID]");
-
-            match vendor {
-                "AuthenticAMD" => Self::Amd,
-                "GenuineIntel" => Self::Intel,
-                _ => Self::Unknown,
-            }
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            // TODO: detection
-            Self::Armv8
-        }
-    }
-}
-
-lazy_static! {
-    static ref PMU_TYPE: PmuType = {
-        let t = PmuType::detect();
-        info!("PMU type: {:?}", t);
-        t
-    };
-    static ref MAX_SKID: u64 = {
-        match *PMU_TYPE {
-            #[cfg(target_arch = "x86_64")]
-            PmuType::Amd => 2048,
-            #[cfg(target_arch = "x86_64")]
-            PmuType::Intel => 256,
-            _ => 0,
-        }
-    };
-}
-
-trait PmuCounter {
-    fn enable(&mut self) -> io::Result<()>;
-    fn disable(&mut self) -> io::Result<()>;
-    fn reset(&mut self) -> io::Result<()>;
-    fn read(&mut self) -> io::Result<u64>;
-}
-
-struct PmuCounterSingle {
-    counter: Counter,
-}
-
-impl PmuCounterSingle {
-    pub fn new(counter: Counter) -> Self {
-        Self { counter }
-    }
-}
-
-impl PmuCounter for PmuCounterSingle {
-    fn enable(&mut self) -> io::Result<()> {
-        self.counter.enable()
-    }
-
-    fn disable(&mut self) -> io::Result<()> {
-        self.counter.disable()
-    }
-
-    fn reset(&mut self) -> io::Result<()> {
-        self.counter.reset()
-    }
-
-    fn read(&mut self) -> io::Result<u64> {
-        self.counter.read()
-    }
-}
-
-struct PmuCounterDiff {
-    counter1: Box<dyn PmuCounter + Send>,
-    counter2: Box<dyn PmuCounter + Send>,
-}
-
-impl PmuCounterDiff {
-    pub fn new(counter1: Box<dyn PmuCounter + Send>, counter2: Box<dyn PmuCounter + Send>) -> Self {
-        Self { counter1, counter2 }
-    }
-}
-
-impl PmuCounter for PmuCounterDiff {
-    fn enable(&mut self) -> io::Result<()> {
-        self.counter1.enable()?;
-        self.counter2.enable()?;
-        Ok(())
-    }
-
-    fn disable(&mut self) -> io::Result<()> {
-        self.counter1.disable()?;
-        self.counter2.disable()?;
-        Ok(())
-    }
-
-    fn reset(&mut self) -> io::Result<()> {
-        self.counter1.reset()?;
-        self.counter2.reset()?;
-        Ok(())
-    }
-
-    fn read(&mut self) -> io::Result<u64> {
-        Ok(self.counter1.read()? - self.counter2.read()?)
-    }
-}
+use self::{
+    counter::{perf_counter, PmuCounter, PmuCounterDiff},
+    perf_typed_raw::TypedRaw,
+    pmu_type::PmuType,
+};
 
 struct SegmentInfo {
-    condbrs: u64,
+    branches: u64,
     ip: usize,
     state: Option<CheckerState>,
 }
 
 enum CheckerState {
     CountingBranches {
-        condbr_irq: Box<dyn PmuCounter + Send>,
-        condbr_counter: Box<dyn PmuCounter + Send>,
+        branch_irq: Box<dyn PmuCounter + Send>,
+        branch_counter: Box<dyn PmuCounter + Send>,
     },
     Stepping {
-        condbr_counter: Box<dyn PmuCounter + Send>,
+        branch_counter: Box<dyn PmuCounter + Send>,
         breakpoint: Counter,
     },
     Done,
@@ -182,6 +55,8 @@ pub struct PmuSegmentor {
     segment_info_map: Mutex<HashMap<Pid, SegmentInfo>>,
     main_state: Mutex<Option<MainState>>,
     skip_instructions: Option<u64>,
+    main_pmu_type: PmuType,
+    checker_pmu_type: PmuType,
 }
 
 enum MainState {
@@ -191,129 +66,116 @@ enum MainState {
     },
     CountingBranches {
         instr_irq: Box<dyn PmuCounter + Send>,
-        condbr_counter: Box<dyn PmuCounter + Send>,
+        branch_counter: Box<dyn PmuCounter + Send>,
     },
 }
 
 impl PmuSegmentor {
     const SIGVAL_MAGIC: usize = 0xdeadbeef;
 
-    pub fn new(period: u64, skip_instructions: Option<u64>) -> Self {
+    pub fn new(
+        period: u64,
+        skip_instructions: Option<u64>,
+        main_cpu_set: &[usize],
+        checker_cpu_set: &[usize],
+    ) -> Self {
+        let main_pmu_type = PmuType::detect(*main_cpu_set.get(0).unwrap_or(&0));
+        let checker_pmu_type = PmuType::detect(*checker_cpu_set.get(0).unwrap_or(&0));
+
+        info!("Detected PMU type for main = {:?}", main_pmu_type);
+        info!("Detected PMU type for checker = {:?}", checker_pmu_type);
+
         Self {
             period,
             main_state: Mutex::new(Some(MainState::New)),
             segment_info_map: Mutex::new(HashMap::new()),
             skip_instructions,
+            main_pmu_type,
+            checker_pmu_type,
         }
     }
 
-    fn instr_counter(&self, pid: Pid, period: u64) -> Box<dyn PmuCounter + Send> {
-        let counter = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
-            .observe_pid(pid.as_raw() as _)
-            .wakeup_events(1)
-            .sample_period(period)
-            .sigtrap(true)
-            .remove_on_exec(true)
-            .enabled(true)
-            .pinned(true)
-            .build()
-            .expect("Failed to initialise perf counter. Your hardware may not support it.");
-
-        Box::new(PmuCounterSingle::new(counter))
-    }
-
-    fn condbr_counter(&self, pid: Pid) -> Box<dyn PmuCounter + Send> {
-        match *PMU_TYPE {
-            #[cfg(target_arch = "x86_64")]
-            PmuType::Amd => {
-                let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
-                    AMD_PERF_EVENT_EX_RET_BRN,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .unwrap();
-
-                let counter2 = perf_event::Builder::new(perf_event::events::Raw::new(
-                    AMD_PERF_EVENT_EX_RET_BRN_FAR,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .unwrap();
-
-                Box::new(PmuCounterDiff::new(
-                    Box::new(PmuCounterSingle::new(counter1)),
-                    Box::new(PmuCounterSingle::new(counter2)),
-                ))
-            }
-            #[cfg(target_arch = "x86_64")]
-            PmuType::Intel => {
-                let counter = perf_event::Builder::new(perf_event::events::Raw::new(
-                    INTEL_PERF_EVENT_BRANCH_RETIRED,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .unwrap();
-
-                Box::new(PmuCounterSingle::new(counter))
-            }
-            _ => panic!("Unsupported PMU"),
+    fn pmu_type_for(&self, role: ProcessRole) -> PmuType {
+        match role {
+            ProcessRole::Main => self.main_pmu_type,
+            ProcessRole::Checker => self.checker_pmu_type,
         }
     }
 
-    fn condbr_irq(&self, pid: Pid, period: u64) -> Box<dyn PmuCounter + Send> {
-        match *PMU_TYPE {
+    fn instr_counter(
+        &self,
+        role: ProcessRole,
+        pid: Pid,
+        period: u64,
+    ) -> Box<dyn PmuCounter + Send> {
+        match self.pmu_type_for(role) {
             #[cfg(target_arch = "x86_64")]
-            PmuType::Amd => {
-                let counter1 = perf_event::Builder::new(perf_event::events::Raw::new(
-                    AMD_PERF_EVENT_EX_RET_BRN,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .wakeup_events(1)
-                .sample_period(period)
-                .sigtrap(true)
-                .remove_on_exec(true)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .unwrap();
+            PmuType::IntelMont { in_hybrid: true } => perf_counter(
+                TypedRaw::new(0x08 /* cpu_atom */, 0xc0 /* instructions */),
+                pid,
+                Some((period, SampleSkid::Arbitrary)),
+            ),
+            _ => perf_counter(
+                perf_event::events::Hardware::INSTRUCTIONS,
+                pid,
+                Some((period, SampleSkid::Arbitrary)),
+            ),
+        }
+    }
 
-                let counter2 = perf_event::Builder::new(perf_event::events::Raw::new(
-                    AMD_PERF_EVENT_EX_RET_BRN_FAR,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .unwrap();
-
+    fn branch_counter(
+        &self,
+        role: ProcessRole,
+        pid: Pid,
+        irq_period: Option<u64>,
+    ) -> Box<dyn PmuCounter + Send> {
+        match self.pmu_type_for(role) {
+            #[cfg(target_arch = "x86_64")]
+            PmuType::Amd => Box::new(PmuCounterDiff::new(
+                perf_counter(
+                    Raw::new(0xc2 /* ex_ret_brn */),
+                    pid,
+                    irq_period.map(|period| (period, SampleSkid::Arbitrary)),
+                ),
+                perf_counter(Raw::new(0xc6 /* ex_ret_brn_far */), pid, None),
+            )),
+            #[cfg(target_arch = "x86_64")]
+            PmuType::IntelLakeCove | PmuType::IntelOther => {
                 Box::new(PmuCounterDiff::new(
-                    Box::new(PmuCounterSingle::new(counter1)),
-                    Box::new(PmuCounterSingle::new(counter2)),
+                    perf_counter(
+                        Raw::new(0x00c4 /* BR_INST_RETIRED.ALL_BRANCHES */),
+                        pid,
+                        irq_period.map(|period| (period, SampleSkid::RequireZero)),
+                    ),
+                    perf_counter(Raw::new(0x40c4 /* BR_INST_RETIRED.FAR_BRANCH */), pid, None),
                 ))
             }
             #[cfg(target_arch = "x86_64")]
-            PmuType::Intel => {
-                let counter = perf_event::Builder::new(perf_event::events::Raw::new(
-                    INTEL_PERF_EVENT_BRANCH_RETIRED,
-                ))
-                .observe_pid(pid.as_raw() as _)
-                .wakeup_events(1)
-                .sample_period(period)
-                .precise_ip(SampleSkid::RequireZero)
-                .sigtrap(true)
-                .remove_on_exec(true)
-                .enabled(true)
-                .pinned(true)
-                .build()
-                .expect("Failed to initialise perf counter. Your hardware may not support it.");
+            PmuType::IntelMont { in_hybrid } => {
+                let perf_event_type = if in_hybrid {
+                    0x08 /* cpu_atom */
+                } else {
+                    0x04 /* cpu */
+                };
 
-                Box::new(PmuCounterSingle::new(counter))
+                Box::new(PmuCounterDiff::new(
+                    perf_counter(
+                        TypedRaw::new(
+                            perf_event_type,
+                            0x00c4, /* BR_INST_RETIRED.ALL_BRANCHES */
+                        ),
+                        pid,
+                        irq_period.map(|period| (period, SampleSkid::RequireZero)),
+                    ),
+                    perf_counter(
+                        TypedRaw::new(
+                            perf_event_type,
+                            0xbfc4, /* BR_INST_RETIRED.FAR_BRANCH */
+                        ),
+                        pid,
+                        None,
+                    ),
+                ))
             }
             _ => panic!("Unsupported PMU"),
         }
@@ -348,11 +210,11 @@ impl SegmentEventHandler for PmuSegmentor {
 
         match main_state.as_mut().unwrap() {
             MainState::CountingBranches {
-                ref mut condbr_counter,
+                ref mut branch_counter,
                 ref mut instr_irq,
             } => {
-                condbr_counter.reset().unwrap();
-                condbr_counter.enable().unwrap();
+                branch_counter.reset().unwrap();
+                branch_counter.enable().unwrap();
                 instr_irq.reset().unwrap();
                 instr_irq.enable().unwrap();
             }
@@ -378,7 +240,11 @@ impl StandardSyscallHandler for PmuSegmentor {
                     Some(instrs) => {
                         let mut main_state = self.main_state.lock();
                         *main_state = Some(MainState::SkippingInstructions {
-                            _instr_irq: self.instr_counter(context.process.pid, instrs),
+                            _instr_irq: self.instr_counter(
+                                ProcessRole::Main,
+                                context.process.pid,
+                                instrs,
+                            ),
                         })
                     }
                     None => self.schedule_checkpoint(context.check_coord)?,
@@ -426,18 +292,26 @@ impl SignalHandler for PmuSegmentor {
                             take_checkpoint = true;
 
                             MainState::CountingBranches {
-                                instr_irq: self.instr_counter(context.process.pid, self.period),
-                                condbr_counter: self.condbr_counter(context.process.pid),
+                                instr_irq: self.instr_counter(
+                                    ProcessRole::Main,
+                                    context.process.pid,
+                                    self.period,
+                                ),
+                                branch_counter: self.branch_counter(
+                                    ProcessRole::Main,
+                                    context.process.pid,
+                                    None,
+                                ),
                             }
                         }
                         MainState::CountingBranches {
                             mut instr_irq,
-                            mut condbr_counter,
+                            mut branch_counter,
                         } => {
                             instr_irq.disable().unwrap();
-                            condbr_counter.disable().unwrap();
-                            let condbrs = condbr_counter.read().unwrap();
-                            debug!("Main conditional branches executed = {}", condbrs);
+                            branch_counter.disable().unwrap();
+                            let branches = branch_counter.read().unwrap();
+                            debug!("Main branches executed = {}", branches);
 
                             if let Some(segment) = context.segments.last_segment() {
                                 let segment = segment.lock();
@@ -447,12 +321,19 @@ impl SignalHandler for PmuSegmentor {
                                 segment_info_map.insert(
                                     checker_pid,
                                     SegmentInfo {
-                                        condbrs,
+                                        branches,
                                         ip,
                                         state: Some(CheckerState::CountingBranches {
-                                            condbr_irq: self
-                                                .condbr_irq(checker_pid, condbrs - *MAX_SKID),
-                                            condbr_counter: self.condbr_counter(checker_pid),
+                                            branch_irq: self.branch_counter(
+                                                ProcessRole::Checker,
+                                                checker_pid,
+                                                Some(branches - self.checker_pmu_type.max_skid()),
+                                            ),
+                                            branch_counter: self.branch_counter(
+                                                ProcessRole::Checker,
+                                                checker_pid,
+                                                None,
+                                            ),
                                         }),
                                     },
                                 );
@@ -467,8 +348,16 @@ impl SignalHandler for PmuSegmentor {
                                 .modify_registers_with(|r| r.with_resume_flag_cleared())?;
 
                             MainState::CountingBranches {
-                                instr_irq: self.instr_counter(context.process.pid, self.period),
-                                condbr_counter: self.condbr_counter(context.process.pid),
+                                instr_irq: self.instr_counter(
+                                    ProcessRole::Main,
+                                    context.process.pid,
+                                    self.period,
+                                ),
+                                branch_counter: self.branch_counter(
+                                    ProcessRole::Main,
+                                    context.process.pid,
+                                    None,
+                                ),
                             }
                         }
                     };
@@ -480,21 +369,18 @@ impl SignalHandler for PmuSegmentor {
 
                     let next_state = match segment_info.state.take().unwrap() {
                         CheckerState::CountingBranches {
-                            mut condbr_irq,
-                            mut condbr_counter,
+                            mut branch_irq,
+                            mut branch_counter,
                         } => {
-                            condbr_irq.disable().unwrap();
-                            let condbrs = condbr_counter.read().unwrap();
-                            let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
+                            branch_irq.disable().unwrap();
+                            let branches = branch_counter.read().unwrap();
+                            let diff = segment_info.branches.wrapping_sub(branches) as i64;
 
-                            debug!(
-                                "Checker conditional branches executed = {} (diff = {})",
-                                condbrs, diff
-                            );
+                            debug!("Checker branches executed = {} (diff = {})", branches, diff);
 
                             if diff > 0 {
                                 CheckerState::Stepping {
-                                    condbr_counter,
+                                    branch_counter,
                                     breakpoint: self
                                         .breakpoint(context.process.pid, segment_info.ip),
                                 }
@@ -505,21 +391,18 @@ impl SignalHandler for PmuSegmentor {
                             }
                         }
                         CheckerState::Stepping {
-                            mut condbr_counter,
+                            mut branch_counter,
                             breakpoint,
                         } => {
                             debug!("Breakpoint hit");
 
-                            let condbrs = condbr_counter.read().unwrap();
-                            let diff = segment_info.condbrs.wrapping_sub(condbrs) as i64;
-                            debug!(
-                                "Checker conditional branches executed = {} (diff = {})",
-                                condbrs, diff
-                            );
+                            let branches = branch_counter.read().unwrap();
+                            let diff = segment_info.branches.wrapping_sub(branches) as i64;
+                            debug!("Checker branches executed = {} (diff = {})", branches, diff);
 
                             if diff > 0 {
                                 CheckerState::Stepping {
-                                    condbr_counter,
+                                    branch_counter,
                                     breakpoint,
                                 }
                             } else if diff == 0 {
