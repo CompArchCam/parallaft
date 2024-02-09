@@ -174,6 +174,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
                 }
 
                 let (checker, checkpoint) = if is_last_checkpoint_finalizing {
+                    info!("Protection on");
                     (reference, Checkpoint::initial(epoch_local, caller))
                 } else {
                     (
@@ -202,6 +203,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
                 })?;
             } else {
                 if !segments.is_last_checkpoint_finalizing() {
+                    info!("Protection off");
                     let reference = self
                         .main
                         .clone_process(
