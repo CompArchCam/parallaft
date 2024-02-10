@@ -13,6 +13,7 @@ pub mod syscall_handlers;
 pub mod throttlers;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::panic;
 use std::panic::catch_unwind;
@@ -159,7 +160,7 @@ impl RelShellOptions {
 }
 
 pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
-    info!("Starting");
+    info!("Starting with args {:?}", std::env::args_os().collect::<Vec<OsString>>());
 
     let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
     assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
