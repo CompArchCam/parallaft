@@ -89,9 +89,9 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         &self,
         segments: &SegmentChain,
         nr_dirty_pages: usize,
-        is_last_checkpoint_finalizing: bool,
+        on_chain_head: bool,
     ) -> bool {
-        if is_last_checkpoint_finalizing {
+        if on_chain_head {
             return false;
         }
 
@@ -110,6 +110,210 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         }
     }
 
+    fn handle_main_checkpoint<'s, 'scope, 'env>(
+        &'s self,
+        pid: Pid,
+        is_finishing: bool,
+        restart_old_syscall: bool,
+        caller: CheckpointCaller,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+    {
+        info!("Main called checkpoint");
+
+        let nr_dirty_pages = if self
+            .flags
+            .contains(CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING)
+        {
+            0
+        } else {
+            self.main.nr_dirty_pages()?
+        };
+
+        assert!(
+            self.pending_sync.lock().is_none(),
+            "Unexpected pending_sync state when handling checkpoint request"
+        );
+
+        if self.flags.contains(CheckCoordinatorFlags::DONT_FORK) {
+            self.main.resume()?;
+            return Ok(());
+        }
+
+        let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
+
+        let mut segments = self.segments.upgradable_read();
+        let on_chain_head = segments.on_chain_head();
+
+        if on_chain_head && is_finishing {
+            info!("No-op checkpoint_fini");
+            self.main.resume()?;
+            return Ok(());
+        }
+
+        let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
+
+        let reference = self
+            .main
+            .clone_process(
+                clone_flags,
+                None,
+                restart_old_syscall,
+                restart_old_syscall || !on_chain_head,
+            )?
+            .as_owned();
+
+        self.dispatcher
+            .handle_checkpoint_created_pre(pid, segments.lookup_segment_main_mg().map(|s| s.nr))?;
+
+        if !self.check_throttle(&segments, nr_dirty_pages, on_chain_head) {
+            self.main.resume()?;
+        }
+
+        let checker;
+        let checkpoint;
+
+        match (on_chain_head, is_finishing) {
+            (true, false) => {
+                // Start of the segment chain
+                info!("Protection on");
+                checker = Some(reference);
+                checkpoint = Checkpoint::initial(epoch_local, caller);
+            }
+            (false, false) => {
+                // Middle of the segment chain
+                checker = Some(
+                    reference
+                        .clone_process(clone_flags, None, restart_old_syscall, restart_old_syscall)?
+                        .as_owned(),
+                );
+                checkpoint = Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
+            }
+            (false, true) => {
+                // End of the segment chain
+                info!("Protection off");
+                checker = None;
+                checkpoint = Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
+            }
+            _ => unreachable!(),
+        }
+
+        // Dispatch handle_checker_init
+        checker.as_ref().map(|checker| {
+            self.dispatcher
+                .handle_checker_init(ProcessLifetimeHookContext {
+                    process: &checker,
+                    check_coord: self,
+                    scope,
+                })
+        });
+
+        info!("New checkpoint: {:?}", checkpoint);
+        segments
+            .with_upgraded(|segments_mut| self.add_checkpoint(segments_mut, checkpoint, checker))?;
+
+        Ok(())
+    }
+
+    pub fn handle_checker_checkpoint<'s, 'scope, 'env>(
+        &'s self,
+        pid: Pid,
+        is_finishing: bool,
+        restart_old_syscall: bool,
+        caller: CheckpointCaller,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+    {
+        info!("Checker called checkpoint");
+
+        let mut segments_rg = self.segments.upgradable_read();
+        let segment_arc = segments_rg
+            .lookup_segment_checker_arc(pid)
+            .expect("Unexpected PID");
+
+        let mut segment = segment_arc.lock();
+
+        if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
+            segment.mark_as_checked(false).unwrap();
+
+            drop(segment);
+
+            segments_rg
+                .with_upgraded(|segments_mut| self.cleanup_committed_segments(segments_mut))?;
+
+            drop(segments_rg);
+            return Ok(());
+        }
+
+        let segment_arc = segment_arc.clone();
+
+        scope.spawn(move || {
+            let mut segment = segment_arc.lock();
+
+            let mut outer_nr_dirty_pages = None;
+
+            match segment.check(
+                self.main.pid,
+                &self.dispatcher.get_ignored_pages(),
+                &self.dispatcher.get_extra_writable_ranges(),
+                self.dispatcher,
+            ) {
+                Ok((result, nr_dirty_pages)) => {
+                    self.dispatcher.handle_segment_checked(&segment).unwrap();
+                    outer_nr_dirty_pages = Some(nr_dirty_pages);
+
+                    if result.is_err() {
+                        if self
+                            .flags
+                            .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
+                        {
+                            warn!("Check fails");
+                        } else {
+                            error!("Check fails");
+                        }
+
+                        // self.main.dump_memory_maps();
+                    } else {
+                        info!("Check passed");
+                    }
+
+                    segment.mark_as_checked(result.is_err()).unwrap();
+                }
+                Err(e) => {
+                    error!("Failed to check: {:?}", e);
+                    segment.mark_as_checked(true).unwrap();
+                }
+            }
+
+            drop(segment);
+
+            self.dispatcher
+                .handle_checker_fini(
+                    outer_nr_dirty_pages,
+                    ProcessLifetimeHookContext {
+                        process: &Process::new(pid),
+                        check_coord: self,
+                        scope,
+                    },
+                ) // TODO: process may have terminated
+                .unwrap(); // TODO: error handling
+
+            let mut segments = self.segments.upgradable_read();
+            segments.with_upgraded(|segments| {
+                self.cleanup_committed_segments(segments).unwrap();
+            });
+            // TODO: error handling
+        });
+
+        Ok(())
+    }
+
     /// Handle checkpoint request from the target
     pub fn handle_checkpoint<'s, 'scope, 'env>(
         &'s self,
@@ -124,209 +328,10 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         's: 'disp,
     {
         if pid == self.main.pid {
-            info!("Main called checkpoint");
-
-            let nr_dirty_pages = if self
-                .flags
-                .contains(CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING)
-            {
-                0
-            } else {
-                self.main.nr_dirty_pages()?
-            };
-
-            assert!(
-                self.pending_sync.lock().is_none(),
-                "Unexpected pending_sync state when handling checkpoint request"
-            );
-
-            let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
-
-            if self.flags.contains(CheckCoordinatorFlags::DONT_FORK) {
-                self.main.resume()?;
-                return Ok(());
-            }
-
-            let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
-            let clone_signal = None;
-
-            let mut segments = self.segments.upgradable_read();
-
-            if !is_finishing {
-                let is_last_checkpoint_finalizing = segments.is_last_checkpoint_finalizing();
-                let reference = self
-                    .main
-                    .clone_process(
-                        clone_flags,
-                        clone_signal,
-                        restart_old_syscall,
-                        restart_old_syscall || !is_last_checkpoint_finalizing,
-                    )?
-                    .as_owned();
-
-                self.dispatcher.handle_checkpoint_created_pre(
-                    pid,
-                    segments.lookup_segment_main_mg().map(|s| s.nr),
-                )?;
-
-                if !self.check_throttle(&segments, nr_dirty_pages, is_last_checkpoint_finalizing) {
-                    self.main.resume()?;
-                }
-
-                let (checker, checkpoint) = if is_last_checkpoint_finalizing {
-                    info!("Protection on");
-                    (reference, Checkpoint::initial(epoch_local, caller))
-                } else {
-                    (
-                        reference
-                            .clone_process(
-                                clone_flags,
-                                clone_signal,
-                                restart_old_syscall,
-                                restart_old_syscall,
-                            )?
-                            .as_owned(),
-                        Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller),
-                    )
-                };
-
-                self.dispatcher
-                    .handle_checker_init(ProcessLifetimeHookContext {
-                        process: &checker,
-                        check_coord: self,
-                        scope,
-                    });
-
-                info!("New checkpoint: {:?}", checkpoint);
-                segments.with_upgraded(|segments_mut| {
-                    self.add_checkpoint(segments_mut, checkpoint, Some(checker))
-                })?;
-            } else {
-                if !segments.is_last_checkpoint_finalizing() {
-                    info!("Protection off");
-                    let reference = self
-                        .main
-                        .clone_process(
-                            clone_flags,
-                            clone_signal,
-                            restart_old_syscall,
-                            restart_old_syscall,
-                        )?
-                        .as_owned();
-
-                    self.dispatcher.handle_checkpoint_created_pre(
-                        pid,
-                        segments.lookup_segment_main_mg().map(|s| s.nr),
-                    )?;
-
-                    if !self.check_throttle(&segments, nr_dirty_pages, false) {
-                        self.main.resume()?;
-                    }
-
-                    let checkpoint =
-                        Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
-
-                    info!("New checkpoint: {:?}", checkpoint);
-                    segments.with_upgraded(|segments_mut| {
-                        self.add_checkpoint(segments_mut, checkpoint, None)
-                    })?;
-                } else {
-                    info!("No-op checkpoint_fini");
-                    self.main.resume();
-                }
-            }
+            self.handle_main_checkpoint(pid, is_finishing, restart_old_syscall, caller, scope)
         } else {
-            let mut segments_rg = self.segments.upgradable_read();
-
-            if let Some(segment_arc) = segments_rg.lookup_segment_checker_arc(pid) {
-                info!("Checker called checkpoint");
-
-                let mut segment = segment_arc.lock();
-
-                if self.flags.contains(CheckCoordinatorFlags::NO_MEM_CHECK) {
-                    segment.mark_as_checked(false).unwrap();
-
-                    drop(segment);
-
-                    segments_rg.with_upgraded(|segments_mut| {
-                        self.cleanup_committed_segments(segments_mut)
-                    })?;
-
-                    drop(segments_rg);
-                } else {
-                    let segment_arc = segment_arc.clone();
-
-                    scope.spawn(move || {
-                        let mut segment = segment_arc.lock();
-
-                        let mut outer_nr_dirty_pages = None;
-
-                        match segment.check(
-                            self.main.pid,
-                            &self.dispatcher.get_ignored_pages(),
-                            &self.dispatcher.get_extra_writable_ranges(),
-                            self.dispatcher,
-                        ) {
-                            Ok((result, nr_dirty_pages)) => {
-                                self.dispatcher.handle_segment_checked(&segment).unwrap();
-                                outer_nr_dirty_pages = Some(nr_dirty_pages);
-
-                                if result.is_err() {
-                                    if self
-                                        .flags
-                                        .contains(CheckCoordinatorFlags::IGNORE_CHECK_ERRORS)
-                                    {
-                                        warn!("Check fails");
-                                    } else {
-                                        error!("Check fails");
-                                    }
-
-                                    // self.main.dump_memory_maps();
-                                } else {
-                                    info!("Check passed");
-                                }
-
-                                segment.mark_as_checked(result.is_err()).unwrap();
-                            }
-                            Err(e) => {
-                                error!("Failed to check: {:?}", e);
-                                segment.mark_as_checked(true).unwrap();
-                            }
-                        }
-
-                        drop(segment);
-
-                        self.dispatcher
-                            .handle_checker_fini(
-                                outer_nr_dirty_pages,
-                                ProcessLifetimeHookContext {
-                                    process: &Process::new(pid),
-                                    check_coord: self,
-                                    scope,
-                                },
-                            ) // TODO: process may have terminated
-                            .unwrap(); // TODO: error handling
-
-                        let mut segments = self.segments.upgradable_read();
-                        segments.with_upgraded(|segments| {
-                            self.cleanup_committed_segments(segments).unwrap();
-                        });
-                        // TODO: error handling
-                    });
-                }
-            } else {
-                panic!("Unexpected PID")
-            };
-        };
-
-        // if let Some(segment) = self.segments.get_segment_by_checker_pid(pid) {
-        //     info!("Checker called checkpoint");
-
-        // } else {
-        //     panic!("invalid pid");
-        // }
-
-        Ok(())
+            self.handle_checker_checkpoint(pid, is_finishing, restart_old_syscall, caller, scope)
+        }
     }
 
     pub fn handle_sync(&self) -> Result<()> {

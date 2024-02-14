@@ -435,7 +435,7 @@ impl SegmentChain {
         self.list.front().map(|s| s.clone())
     }
 
-    pub fn is_last_checkpoint_finalizing(&self) -> bool {
+    pub fn on_chain_head(&self) -> bool {
         match self.list.back() {
             Some(segment) => match segment.lock().status {
                 SegmentStatus::New { .. } => false,
