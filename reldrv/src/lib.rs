@@ -160,7 +160,10 @@ impl RelShellOptions {
 }
 
 pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> i32 {
-    info!("Starting with args {:?}", std::env::args_os().collect::<Vec<OsString>>());
+    info!(
+        "Starting with args {:?}",
+        std::env::args_os().collect::<Vec<OsString>>()
+    );
 
     let status = waitpid(child_pid, Some(WaitPidFlag::WSTOPPED)).unwrap();
     assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
