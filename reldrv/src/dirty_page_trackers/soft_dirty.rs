@@ -40,6 +40,17 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
             }
         }
     }
+
+    fn nr_dirty_pages<'a>(
+        &self,
+        role: ProcessRole,
+        ctx: &DirtyPageAddressTrackerContext<'a>,
+    ) -> Result<usize> {
+        match role {
+            ProcessRole::Main => Process::new(ctx.main_pid).nr_dirty_pages(),
+            ProcessRole::Checker => ctx.segment.checker().unwrap().nr_dirty_pages(),
+        }
+    }
 }
 
 impl SegmentEventHandler for SoftDirtyPageTracker {

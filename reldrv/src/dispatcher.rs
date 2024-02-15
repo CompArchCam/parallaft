@@ -168,12 +168,11 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 
     pub fn dispatch_throttle(
         &self,
-        nr_dirty_pages: usize,
         segments: &SegmentChain,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
         for &handler in &self.subscribers.read().throttlers {
-            if handler.should_throttle(nr_dirty_pages, segments, check_coord) {
+            if handler.should_throttle(segments, check_coord) {
                 return Some(handler);
             }
         }
@@ -489,6 +488,14 @@ impl<'a, 'm> DirtyPageAddressTracker for Dispatcher<'a, 'm> {
             role: ProcessRole,
             ctx: &DirtyPageAddressTrackerContext<'b>,
         ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>
+    );
+
+    generate_event_handler_option!(dirty_page_tracker,
+        fn nr_dirty_pages<'b>(
+            &self,
+            role: ProcessRole,
+            ctx: &DirtyPageAddressTrackerContext<'b>,
+        ) -> Result<usize>
     );
 }
 

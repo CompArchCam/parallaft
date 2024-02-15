@@ -34,10 +34,7 @@ pub enum CheckFailReason {
 
 #[derive(Debug)]
 pub enum CheckpointKind {
-    Subsequent {
-        reference: OwnedProcess,
-        nr_dirty_pages: usize,
-    },
+    Subsequent { reference: OwnedProcess },
     Initial,
 }
 
@@ -56,19 +53,11 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn subsequent(
-        epoch: EpochId,
-        reference: OwnedProcess,
-        nr_dirty_pages: usize,
-        caller: CheckpointCaller,
-    ) -> Self {
+    pub fn subsequent(epoch: EpochId, reference: OwnedProcess, caller: CheckpointCaller) -> Self {
         Self {
             epoch,
             caller,
-            kind: CheckpointKind::Subsequent {
-                reference,
-                nr_dirty_pages,
-            },
+            kind: CheckpointKind::Subsequent { reference },
         }
     }
 
@@ -88,17 +77,11 @@ impl Checkpoint {
             CheckpointKind::Initial => None,
         }
     }
-
-    pub fn nr_dirty_pages(&self) -> usize {
-        match &self.kind {
-            CheckpointKind::Subsequent { nr_dirty_pages, .. } => *nr_dirty_pages,
-            CheckpointKind::Initial => 0,
-        }
-    }
 }
 
 #[derive(Debug)]
 pub enum SegmentStatus {
+    // TODO: Uninitialized,
     New {
         checker: OwnedProcess,
     },
@@ -373,10 +356,6 @@ impl Segment {
             .and_then(|c| c.reference().map(|r| r.deref()))
     }
 
-    pub fn nr_dirty_pages(&self) -> Option<usize> {
-        self.status.checkpoint_end().map(|c| c.nr_dirty_pages())
-    }
-
     pub fn has_errors(&self) -> bool {
         match self.status {
             SegmentStatus::Checked { has_errors, .. } => has_errors,
@@ -607,7 +586,7 @@ impl SegmentChain {
             .iter()
             .map(|segment| {
                 let segment = segment.lock();
-                segment.nr_dirty_pages().unwrap_or(0)
+                segment.dirty_page_addresses_main.len()
             })
             .sum()
     }

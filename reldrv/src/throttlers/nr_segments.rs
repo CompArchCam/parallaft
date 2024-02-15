@@ -23,12 +23,7 @@ impl NrSegmentsBasedThrottler {
 }
 
 impl Throttler for NrSegmentsBasedThrottler {
-    fn should_throttle(
-        &self,
-        _nr_dirty_pages: usize,
-        segments: &SegmentChain,
-        _check_coord: &CheckCoordinator,
-    ) -> bool {
+    fn should_throttle(&self, segments: &SegmentChain, _check_coord: &CheckCoordinator) -> bool {
         if self.max_nr_live_segments == 0 {
             return false;
         }

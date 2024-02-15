@@ -27,7 +27,7 @@ use crate::saved_syscall::{
     SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
     SyscallExitAction,
 };
-use crate::segments::{Checkpoint, CheckpointCaller, SegmentChain, SegmentEventHandler};
+use crate::segments::{Checkpoint, CheckpointCaller, Segment, SegmentChain, SegmentEventHandler};
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::syscall_handlers::{
     HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
@@ -60,7 +60,6 @@ bitflags! {
         const DONT_RUN_CHECKER = 0b00000100;
         const DONT_FORK = 0b00100000;
         const IGNORE_CHECK_ERRORS = 0b01000000;
-        const NO_NR_DIRTY_PAGES_LOGGING = 0b10000000;
     }
 }
 
@@ -85,12 +84,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         }
     }
 
-    fn check_throttle(
-        &self,
-        segments: &SegmentChain,
-        nr_dirty_pages: usize,
-        on_chain_head: bool,
-    ) -> bool {
+    fn check_throttle(&self, segments: &SegmentChain, on_chain_head: bool) -> bool {
         if on_chain_head {
             return false;
         }
@@ -98,10 +92,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         let mut throttling = self.throttling.lock();
         assert!(throttling.as_ref().is_none(), "Unexpected throttling state");
 
-        if let Some(throttler) = self
-            .dispatcher
-            .dispatch_throttle(nr_dirty_pages, &segments, self)
-        {
+        if let Some(throttler) = self.dispatcher.dispatch_throttle(&segments, self) {
             info!("Throttling");
             *throttling = Some(throttler);
             true
@@ -123,15 +114,6 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         's: 'disp,
     {
         info!("Main called checkpoint");
-
-        let nr_dirty_pages = if self
-            .flags
-            .contains(CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING)
-        {
-            0
-        } else {
-            self.main.nr_dirty_pages()?
-        };
 
         assert!(
             self.pending_sync.lock().is_none(),
@@ -169,7 +151,7 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
         self.dispatcher
             .handle_checkpoint_created_pre(pid, segments.lookup_segment_main_mg().map(|s| s.nr))?;
 
-        if !self.check_throttle(&segments, nr_dirty_pages, on_chain_head) {
+        if !self.check_throttle(&segments, on_chain_head) {
             self.main.resume()?;
         }
 
@@ -190,13 +172,13 @@ impl<'disp, 'modules> CheckCoordinator<'disp, 'modules> {
                         .clone_process(clone_flags, None, restart_old_syscall, restart_old_syscall)?
                         .as_owned(),
                 );
-                checkpoint = Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
+                checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             (false, true) => {
                 // End of the segment chain
                 info!("Protection off");
                 checker = None;
-                checkpoint = Checkpoint::subsequent(epoch_local, reference, nr_dirty_pages, caller);
+                checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             _ => unreachable!(),
         }

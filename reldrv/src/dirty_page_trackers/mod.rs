@@ -31,6 +31,12 @@ pub trait DirtyPageAddressTracker {
         role: ProcessRole,
         ctx: &DirtyPageAddressTrackerContext<'a>,
     ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>;
+
+    fn nr_dirty_pages<'a>(
+        &self,
+        role: ProcessRole,
+        ctx: &DirtyPageAddressTrackerContext<'a>,
+    ) -> Result<usize>;
 }
 
 #[allow(unused_variables)]

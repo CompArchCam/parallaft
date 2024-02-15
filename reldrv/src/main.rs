@@ -84,11 +84,6 @@ struct CliArgs {
     #[arg(long)]
     ignore_check_errors: bool,
 
-    /// Don't collect number of dirty pages information.
-    /// Collecting them is expensive.
-    #[arg(long)]
-    no_nr_dirty_pages_logging: bool,
-
     /// Dump statistics.
     #[arg(long)]
     dump_stats: bool,
@@ -232,10 +227,6 @@ fn main() {
     check_coord_flags.set(
         CheckCoordinatorFlags::IGNORE_CHECK_ERRORS,
         cli.ignore_check_errors,
-    );
-    check_coord_flags.set(
-        CheckCoordinatorFlags::NO_NR_DIRTY_PAGES_LOGGING,
-        cli.no_nr_dirty_pages_logging,
     );
 
     assert!(

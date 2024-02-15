@@ -1,7 +1,8 @@
 use log::info;
 
 use crate::{
-    check_coord::CheckCoordinator,
+    check_coord::{CheckCoordinator, ProcessRole},
+    dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext},
     dispatcher::{Module, Subscribers},
     process::PAGESIZE,
     segments::SegmentChain,
@@ -30,17 +31,24 @@ impl MemoryBasedThrottler {
 }
 
 impl Throttler for MemoryBasedThrottler {
-    fn should_throttle(
-        &self,
-        nr_dirty_pages: usize,
-        segments: &SegmentChain,
-        _check_coord: &CheckCoordinator,
-    ) -> bool {
+    fn should_throttle(&self, segments: &SegmentChain, check_coord: &CheckCoordinator) -> bool {
         if self.memory_overhead_watermark == 0 {
             return false;
         }
 
-        let memory_overhead = Self::get_potential_memory_overhead(nr_dirty_pages, segments);
+        let memory_overhead = Self::get_potential_memory_overhead(
+            check_coord
+                .dispatcher
+                .nr_dirty_pages(
+                    ProcessRole::Main,
+                    &DirtyPageAddressTrackerContext {
+                        segment: &*segments.last_segment().unwrap().lock(), // TODO: Not needed
+                        main_pid: check_coord.main.pid,
+                    },
+                )
+                .unwrap(),
+            segments,
+        );
 
         info!(
             "Potential memory overhead: {}",

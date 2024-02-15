@@ -48,6 +48,23 @@ impl DirtyPageAddressTracker for FptDirtyPageTracker {
 
         Ok((Box::new(record), DirtyPageAddressFlags::empty()))
     }
+
+    fn nr_dirty_pages<'a>(
+        &self,
+        role: ProcessRole,
+        ctx: &DirtyPageAddressTrackerContext<'a>,
+    ) -> Result<usize> {
+        Ok(match role {
+            ProcessRole::Main => {
+                let fd = self.fd_main.lock();
+                fd.as_ref().map_or(Ok(0), |fd| fd.get_count())?
+            }
+            ProcessRole::Checker => {
+                let fd_map = self.fd_map.lock();
+                fd_map.get(&ctx.segment.nr).unwrap().get_count()?
+            }
+        })
+    }
 }
 
 impl SegmentEventHandler for FptDirtyPageTracker {
