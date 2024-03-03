@@ -5,19 +5,18 @@ use std::collections::LinkedList;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Deref, Range};
-
 use std::sync::Arc;
 use std::{mem, ptr};
 
-use log::{error, info};
+use log::{debug, error, info};
 use nix::unistd::Pid;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::lock_api::{ArcRwLockReadGuard, ArcRwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard, RawRwLock, RwLock};
 
 use crate::check_coord::ProcessRole;
-use crate::dirty_page_trackers::{
-    DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
-};
+use crate::dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
 use crate::error::{Error, Result};
+use crate::process::detach::DetachedProcess;
 use crate::process::dirty_pages::{filter_writable_addresses, merge_page_addresses, page_diff};
 use crate::process::{OwnedProcess, Process};
 use crate::saved_syscall::{SavedIncompleteSyscall, SavedSyscall};
@@ -34,7 +33,9 @@ pub enum CheckFailReason {
 
 #[derive(Debug)]
 pub enum CheckpointKind {
-    Subsequent { reference: OwnedProcess },
+    Subsequent {
+        reference: Mutex<DetachedProcess<OwnedProcess>>,
+    },
     Initial,
 }
 
@@ -57,7 +58,9 @@ impl Checkpoint {
         Self {
             epoch,
             caller,
-            kind: CheckpointKind::Subsequent { reference },
+            kind: CheckpointKind::Subsequent {
+                reference: Mutex::new(DetachedProcess::from(reference)),
+            },
         }
     }
 
@@ -69,11 +72,9 @@ impl Checkpoint {
         }
     }
 
-    pub fn reference<'a>(&'a self) -> Option<&'a OwnedProcess> {
+    pub fn reference<'a>(&'a self) -> Option<MutexGuard<'a, DetachedProcess<OwnedProcess>>> {
         match &self.kind {
-            CheckpointKind::Subsequent {
-                reference: ref_pid, ..
-            } => Some(ref_pid),
+            CheckpointKind::Subsequent { reference, .. } => Some(reference.lock()),
             CheckpointKind::Initial => None,
         }
     }
@@ -93,6 +94,8 @@ pub enum SegmentStatus {
         checkpoint_end: Arc<Checkpoint>,
         has_errors: bool,
     },
+    /// Main process does not complete the segment
+    Incomplete,
 }
 
 impl SegmentStatus {
@@ -156,13 +159,18 @@ pub enum SavedTrapEvent {
 }
 
 #[derive(Debug)]
+pub struct SegmentReplay {
+    pub ongoing_syscall: Option<SavedIncompleteSyscall>,
+    pub syscall_log: LinkedList<SavedSyscall>, // TODO: use vec
+    pub trap_event_log: LinkedList<SavedTrapEvent>, // TODO: use vec
+}
+
+#[derive(Debug)]
 pub struct Segment {
+    pub nr: SegmentId,
     pub checkpoint_start: Arc<Checkpoint>,
     pub status: SegmentStatus,
-    pub nr: SegmentId,
-    pub syscall_log: LinkedList<SavedSyscall>,
-    pub ongoing_syscall: Option<SavedIncompleteSyscall>,
-    pub trap_event_log: LinkedList<SavedTrapEvent>,
+    pub replay: SegmentReplay,
     pub dirty_page_addresses_main: Vec<usize>,
     pub dirty_page_addresses_checker: Vec<usize>,
 }
@@ -193,16 +201,17 @@ impl Ord for Segment {
     }
 }
 
-#[allow(unused)]
 impl Segment {
     pub fn new(checkpoint_start: Arc<Checkpoint>, checker: OwnedProcess, nr: u32) -> Self {
         Self {
+            nr,
             checkpoint_start,
             status: SegmentStatus::New { checker },
-            nr,
-            syscall_log: LinkedList::new(),
-            ongoing_syscall: None,
-            trap_event_log: LinkedList::new(),
+            replay: SegmentReplay {
+                syscall_log: LinkedList::new(),
+                ongoing_syscall: None,
+                trap_event_log: LinkedList::new(),
+            },
             dirty_page_addresses_main: Vec::new(),
             dirty_page_addresses_checker: Vec::new(),
         }
@@ -237,9 +246,6 @@ impl Segment {
                 main_pid,
             };
 
-            let p1 = checker.deref();
-            let p2 = checkpoint_end.reference().unwrap().deref();
-
             let (dpa_main, dpa_main_flags) =
                 dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Main, &ctx)?;
 
@@ -273,10 +279,13 @@ impl Segment {
             );
             let mut nr_dirty_pages = dpa_merged.len();
 
-            let p1_writable_ranges = p1.get_writable_ranges()?;
-            let p2_writable_ranges = p2.get_writable_ranges()?;
+            let checker = checker.deref();
+            let mut reference = checkpoint_end.reference().unwrap();
 
-            if p1_writable_ranges != p2_writable_ranges {
+            let checker_writable_ranges = checker.get_writable_ranges()?;
+            let reference_writable_ranges = reference.get_writable_ranges()?;
+
+            if checker_writable_ranges != reference_writable_ranges {
                 error!(
                     "Memory map differs for epoch {}",
                     self.checkpoint_start.epoch
@@ -284,10 +293,8 @@ impl Segment {
                 return Ok((Err(CheckFailReason::MemoryMapMismatch), nr_dirty_pages));
             }
 
-            if !dpa_main_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
-                || !dpa_checker_flags.contains(DirtyPageAddressFlags::CONTAINS_WR_ONLY)
-            {
-                let writable_ranges = p1_writable_ranges
+            if !dpa_main_flags.contains_writable_only || !dpa_checker_flags.contains_writable_only {
+                let writable_ranges = checker_writable_ranges
                     .into_iter()
                     .chain(extra_writable_ranges.into_iter())
                     .cloned()
@@ -299,30 +306,27 @@ impl Segment {
 
             info!("Comparing {} dirty pages", nr_dirty_pages);
 
-            if !page_diff(p1, p2, &dpa_merged)? {
+            if !page_diff(checker, (*reference).as_ref(), &dpa_merged)? {
                 error!("Memory differs for epoch {}", self.checkpoint_start.epoch);
                 return Ok((Err(CheckFailReason::MemoryMismatch), nr_dirty_pages));
             }
 
-            let checker_regs = p1.read_registers()?; // can't use read_registers_precise yet due to waitpid race
-            let reference_registers = p2.read_registers()?;
+            info!("Memory check passed");
+            info!("Comparing registers");
 
-            #[cfg(target_arch = "aarch64")]
-            let checker_regs = checker_regs.with_x7(reference_registers.x7()); // ignore x7, yet, because we can't read correct x7 in syscall entry
+            let checker_regs = checker.read_registers_precise()?;
+            let reference_registers = reference.borrow_with(|p2| p2.read_registers())?;
 
             if checker_regs != reference_registers {
                 error!("Register differs for epoch {}", self.checkpoint_start.epoch);
-                info!("Checker registers: {:#?}", checker_regs);
-                info!("Reference registers: {:#?}", reference_registers);
-
-                info!("Checker backtrace");
-                checker.unwind().unwrap();
-
-                info!("Checkpoint backtrace");
-                checkpoint_end.reference().unwrap().unwind().unwrap();
+                info!("Checker registers:\n{}", checker_regs.dump());
+                info!("Reference registers:\n{}", reference_registers.dump());
 
                 return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
             }
+
+            info!("Register check passed");
+            info!("All check passed");
 
             Ok((Ok(()), nr_dirty_pages))
         } else {
@@ -345,15 +349,13 @@ impl Segment {
     }
 
     /// Get the reference process at the start of the segment, it it exists.
-    pub fn reference_start<'a>(&'a self) -> Option<&'a Process> {
-        self.checkpoint_start.reference().map(|r| r.deref())
+    pub fn reference_start<'a>(&'a self) -> Option<MutexGuard<'a, DetachedProcess<OwnedProcess>>> {
+        self.checkpoint_start.reference()
     }
 
     /// Get the reference process at the end of the segment, it it exists.
-    pub fn reference_end<'a>(&'a self) -> Option<&'a Process> {
-        self.status
-            .checkpoint_end()
-            .and_then(|c| c.reference().map(|r| r.deref()))
+    pub fn reference_end<'a>(&'a self) -> Option<MutexGuard<'a, DetachedProcess<OwnedProcess>>> {
+        self.status.checkpoint_end().and_then(|c| c.reference())
     }
 
     pub fn has_errors(&self) -> bool {
@@ -362,21 +364,28 @@ impl Segment {
             _ => false,
         }
     }
+
+    pub fn is_checked(&self) -> bool {
+        match self.status {
+            SegmentStatus::Checked { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct SegmentChain {
-    pub list: LinkedList<Arc<Mutex<Segment>>>,
-    next_id: SegmentId,
-    main_pid: Pid,
+pub struct SegmentChains {
+    pub list: LinkedList<Arc<RwLock<Segment>>>,
+    pub next_id: SegmentId,
+    in_chain: bool,
 }
 
-impl SegmentChain {
-    pub fn new(main_pid: Pid) -> Self {
+impl SegmentChains {
+    pub fn new() -> Self {
         Self {
             list: LinkedList::new(),
             next_id: 0,
-            main_pid,
+            in_chain: false,
         }
     }
 
@@ -386,7 +395,7 @@ impl SegmentChain {
             .iter()
             .filter(|s| {
                 matches!(
-                    s.lock().status,
+                    s.read_recursive().status,
                     SegmentStatus::Checked { .. } | SegmentStatus::ReadyToCheck { .. }
                 )
             })
@@ -395,7 +404,7 @@ impl SegmentChain {
 
     /// Check if there are any checking errors in this segment chain.
     pub fn has_errors(&self) -> bool {
-        self.list.iter().any(|segment| segment.lock().has_errors())
+        self.list.iter().any(|segment| segment.read().has_errors())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -406,57 +415,68 @@ impl SegmentChain {
         self.list.len()
     }
 
-    pub fn last_segment(&self) -> Option<Arc<Mutex<Segment>>> {
+    pub fn last_segment(&self) -> Option<Arc<RwLock<Segment>>> {
         self.list.back().map(|s| s.clone())
     }
 
-    pub fn first_segment(&self) -> Option<Arc<Mutex<Segment>>> {
+    pub fn first_segment(&self) -> Option<Arc<RwLock<Segment>>> {
         self.list.front().map(|s| s.clone())
     }
 
-    pub fn on_chain_head(&self) -> bool {
-        match self.list.back() {
-            Some(segment) => match segment.lock().status {
-                SegmentStatus::New { .. } => false,
-                _ => true,
-            },
-            None => true,
-        }
+    // pub fn on_chain_head(&self) -> bool {
+    //     match self.list.back() {
+    //         Some(segment) => match segment.read_recursive().status {
+    //             SegmentStatus::New { .. } => false,
+    //             _ => true,
+    //         },
+    //         None => true,
+    //     }
+    // }
+
+    pub fn in_chain(&self) -> bool {
+        self.in_chain
     }
 
     pub fn add_checkpoint(
         &mut self,
         checkpoint: Checkpoint,
         checker: Option<OwnedProcess>,
-        on_segment_ready: impl FnOnce(&mut Segment, &Checkpoint) -> Result<bool>,
-        on_segment_created: impl FnOnce(&Segment) -> Result<()>,
-        on_segment_chain_closed: impl FnOnce(&Segment) -> Result<()>,
+        on_segment_ready: impl FnOnce(
+            ArcRwLockWriteGuard<RawRwLock, Segment>,
+            &Checkpoint,
+        ) -> Result<bool>,
+        on_segment_created: impl FnOnce(ArcRwLockReadGuard<RawRwLock, Segment>) -> Result<()>,
+        on_segment_chain_closed: impl FnOnce(ArcRwLockReadGuard<RawRwLock, Segment>) -> Result<()>,
         on_cleanup_needed: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
         let checkpoint = Arc::new(checkpoint);
         let mut do_cleanup = false;
 
         if let Some(last_segment) = self.list.back() {
-            let mut last_segment = last_segment.lock();
+            let mut last_segment = last_segment.write_arc();
 
             if matches!(last_segment.status, SegmentStatus::New { .. }) {
                 last_segment.mark_as_ready(checkpoint.clone())?;
-                do_cleanup = on_segment_ready(&mut last_segment, &checkpoint)?;
+                do_cleanup = on_segment_ready(last_segment, &checkpoint)?;
             }
         }
 
         if let Some(checker) = checker {
             let segment = Segment::new(checkpoint, checker, self.next_id);
             self.next_id += 1;
+            self.in_chain = true;
 
-            info!("New segment: {:?}", segment);
-            on_segment_created(&segment)?;
+            debug!("New segment: {:?}", segment);
 
-            self.list.push_back(Arc::new(Mutex::new(segment)));
+            let segment_arc = Arc::new(RwLock::new(segment));
+            let segment_mg = segment_arc.read_arc_recursive();
+            self.list.push_back(segment_arc);
+            on_segment_created(segment_mg)?;
         } else {
             if let Some(last_segment) = self.list.back() {
-                let last_segment = last_segment.lock();
-                on_segment_chain_closed(&last_segment)?;
+                self.in_chain = false;
+                let last_segment = last_segment.read_arc_recursive();
+                on_segment_chain_closed(last_segment)?;
             } else {
                 return Err(Error::InvalidState);
             }
@@ -481,7 +501,7 @@ impl SegmentChain {
             let mut should_break = true;
             let front = self.list.front();
             if let Some(front) = front {
-                let front = front.lock();
+                let front = front.read();
                 if let SegmentStatus::Checked { has_errors, .. } = front.status {
                     if !ignore_errors && has_errors {
                         return Ok(true);
@@ -501,83 +521,12 @@ impl SegmentChain {
         Ok(false)
     }
 
-    pub fn lookup_segment_checker_with<Ret>(
-        &self,
-        pid: Pid,
-        f: impl FnOnce(MutexGuard<Segment>, Arc<Mutex<Segment>>) -> Ret,
-    ) -> Option<Ret> {
-        for segment in &self.list {
-            let segment_locked = segment.lock();
-            if segment_locked.checker().map_or(false, |c| c.pid == pid) {
-                return Some(f(segment_locked, segment.clone()));
-            }
-        }
-        None
-    }
-
-    pub fn lookup_segment_with<Ret>(
-        &self,
-        pid: Pid,
-        f: impl FnOnce(MutexGuard<Segment>, bool) -> Ret,
-    ) -> Option<Ret> {
-        if pid == self.main_pid {
-            if let Some(last_segment) = self.list.back() {
-                let last_segment_locked = last_segment.lock();
-                if matches!(last_segment_locked.status, SegmentStatus::New { .. }) {
-                    return Some(f(last_segment_locked, true));
-                }
-            }
+    pub fn main_segment(&self) -> Option<Arc<RwLock<Segment>>> {
+        if self.in_chain {
+            self.list.back().map(|segment| segment.clone())
         } else {
-            return self.lookup_segment_checker_with(pid, |segment, _| f(segment, false));
+            None
         }
-
-        None
-    }
-
-    pub fn lookup_segment_checker_arc(&self, pid: Pid) -> Option<Arc<Mutex<Segment>>> {
-        for segment in &self.list {
-            let segment_locked = segment.lock();
-            if segment_locked.checker().map_or(false, |c| c.pid == pid) {
-                return Some(segment.clone());
-            }
-        }
-        None
-    }
-
-    pub fn lookup_segment_checker_mg(&self, pid: Pid) -> Option<MutexGuard<Segment>> {
-        for segment in &self.list {
-            let segment_locked = segment.lock();
-            if segment_locked.checker().map_or(false, |c| c.pid == pid) {
-                return Some(segment_locked);
-            }
-        }
-        None
-    }
-
-    pub fn lookup_segment_main_mg(&self) -> Option<MutexGuard<Segment>> {
-        if let Some(last_segment) = self.list.back() {
-            let last_segment_locked = last_segment.lock();
-            if matches!(last_segment_locked.status, SegmentStatus::New { .. }) {
-                return Some(last_segment_locked);
-            }
-        }
-
-        None
-    }
-
-    pub fn lookup_segment_arc(&self, pid: Pid) -> Option<(Arc<Mutex<Segment>>, bool)> {
-        if pid == self.main_pid {
-            if let Some(last_segment) = self.list.back() {
-                let last_segment_locked = last_segment.lock();
-                if matches!(last_segment_locked.status, SegmentStatus::New { .. }) {
-                    return Some((last_segment.clone(), true));
-                }
-            }
-        } else {
-            return self.lookup_segment_checker_arc(pid).map(|s| (s, false));
-        }
-
-        None
     }
 
     /// Get the total number of dirty pages in this segment chain.
@@ -585,91 +534,14 @@ impl SegmentChain {
         self.list
             .iter()
             .map(|segment| {
-                let segment = segment.lock();
+                let segment = segment.read();
                 segment.dirty_page_addresses_main.len()
             })
             .sum()
     }
 }
 
-// #[derive(Debug)]
-// pub struct SegmentChain {
-//     main_pid: Pid,
-//     pub inner: RwLock<SegmentListRaw>,
-//     nr_segments: AtomicU32,
-// }
-
-// #[allow(unused)]
-// impl SegmentChain {
-//     pub fn new(main_pid: Pid) -> Self {
-//         Self {
-//             inner: RwLock::new(SegmentListRaw::new(main_pid)),
-//             nr_segments: AtomicU32::new(0),
-//         }
-//     }
-
-//     // pub fn get_last_segment(&self) -> Option<Arc<Mutex<Segment>>> {
-//     //     self.inner.read().back().map(|s| s.clone())
-//     // }
-
-//     // pub fn get_first_segment(&self) -> Option<Arc<Mutex<Segment>>> {
-//     //     self.inner.read().front().map(|s| s.clone())
-//     // }
-
-//     pub fn get_segment_by_checker_pid(&self, pid: Pid) -> Option<Arc<Mutex<Segment>>> {
-//         self.inner
-//             .read()
-//             .iter()
-//             .find(|&s| s.lock().checker().map_or(false, |c| c.pid == pid))
-//             .map(|t| t.clone())
-//     }
-
-//     pub fn get_active_segment_by_pid(&self, pid: Pid) -> Option<(Arc<Mutex<Segment>>, bool)> {
-//         if pid == self.main_pid {
-//             if let Some(last_segment) = self.inner.read().back() {
-//                 let last_segment_locked = last_segment.lock();
-//                 if matches!(last_segment_locked.status, SegmentStatus::New { .. }) {
-//                     return Some((last_segment.clone(), true));
-//                 }
-//             }
-//         } else if let Some(segment) = self.get_segment_by_checker_pid(pid) {
-//             return Some((segment, false));
-//         } else {
-//             return None;
-//         }
-
-//         None
-//     }
-
-//     pub fn get_active_segment_with<R>(
-//         &self,
-//         pid: Pid,
-//         f: impl FnOnce(&mut Segment, bool) -> R,
-//     ) -> Option<R> {
-//         self.get_active_segment_by_pid(pid)
-//             .map(|(segment, is_main)| f(segment.lock().deref_mut(), is_main))
-//     }
-
-//     /// Get the total number of dirty pages in this segment chain.
-//     pub fn nr_dirty_pages(&self) -> usize {
-//         self.inner
-//             .read()
-//             .iter()
-//             .map(|segment| {
-//                 let segment = segment.lock();
-//                 segment.nr_dirty_pages().unwrap_or(0)
-//             })
-//             .sum()
-//     }
-
-//     pub fn manipulate(&self) -> SegmentChainReadSession {
-//         SegmentChainReadSession {
-//             inner: self.inner.upgradable_read(),
-//         }
-//     }
-// }
-
-#[allow(unused)]
+#[allow(unused_variables)]
 pub trait SegmentEventHandler {
     fn handle_segment_created(&self, segment: &Segment) -> Result<()> {
         Ok(())

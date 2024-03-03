@@ -60,16 +60,16 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
 }
 
 impl SignalHandler for CheckpointSizeLimiter {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
         if signal == Signal::SIGTRAP {
-            let siginfo = ptrace::getsiginfo(context.process.pid)?;
+            let siginfo = ptrace::getsiginfo(context.process().pid)?;
             match siginfo.si_code {
                 TRAP_FPT_WATERMARK_USER => {
                     info!("Trap: FPT");

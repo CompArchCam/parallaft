@@ -62,6 +62,7 @@ impl SegmentEventHandler for LegacyInferiorRtLib {
         if let Some(base_address) = self.client_control_addr.read().as_ref() {
             let this_reference = checkpoint.reference().unwrap();
             let mut ctl: CliControl = this_reference.read_value(*base_address).unwrap();
+            drop(this_reference);
 
             assert_eq!(ctl.magic, MAGIC);
 
@@ -95,10 +96,10 @@ impl CustomSyscallHandler for LegacyInferiorRtLib {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         if sysno == SYSNO_SET_CLI_CONTROL_ADDR {
-            assert_eq!(context.process.pid, context.check_coord.main.pid);
+            assert!(context.child.is_main());
 
             let base_address = if args.arg0 == 0 {
                 None

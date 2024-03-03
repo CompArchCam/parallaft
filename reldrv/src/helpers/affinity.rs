@@ -18,7 +18,6 @@ pub struct AffinitySetter<'a> {
     cache_masks: Option<(u32, u32, u32)>,
 }
 
-#[allow(unused)]
 impl<'a> AffinitySetter<'a> {
     pub fn new(
         main_cpu_set: &'a [usize],

@@ -1,17 +1,15 @@
-use bitflags::bitflags;
 use procfs::ProcError;
 
-bitflags! {
-    pub struct EventFlags: u32 {
-        /// Inferior made an excess syscall (possibly due to skidding).
-        const IS_EXCESS = 0b001;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnexpectedEventReason {
+    /// Application made an excess syscall/trap (possibly due to skidding).
+    Excess,
 
-        /// Inferior made a incorrect syscall.
-        const IS_INCORRECT = 0b100;
+    /// Application made a syscall/trap with unexpected type (sysno) or arguments.
+    IncorrectTypeOrArguments,
 
-        /// Ptrace gives an unexpected event.
-        const IS_INVALID = 0b100;
-    }
+    /// A checker makes a syscall that has transitive access to memory that diverges from the main.
+    IncorrectMemory,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -30,11 +28,11 @@ pub enum Error {
     #[error("Not handled")]
     NotHandled,
     #[error("Unexpected syscall made by the inferior")]
-    UnexpectedSyscall(EventFlags),
+    UnexpectedSyscall(UnexpectedEventReason),
     #[error("Unexpected trap made by the inferior")]
-    UnexpectedTrap(EventFlags),
-    #[error("Not supported")]
-    NotSupported,
+    UnexpectedTrap(UnexpectedEventReason),
+    #[error("Not supported: `{0}`")]
+    NotSupported(String),
 
     #[error("Other error")]
     Other,
@@ -46,8 +44,8 @@ pub enum Error {
 impl Error {
     pub fn is_potentially_caused_by_skids(&self) -> bool {
         match self {
-            Error::UnexpectedSyscall(flags) if flags.contains(EventFlags::IS_EXCESS) => true,
-            Error::UnexpectedTrap(flags) if flags.contains(EventFlags::IS_EXCESS) => true,
+            Error::UnexpectedSyscall(UnexpectedEventReason::Excess) => true,
+            Error::UnexpectedTrap(UnexpectedEventReason::Excess) => true,
             _ => false,
         }
     }
@@ -63,7 +61,7 @@ impl IgnoreNotSupportedErrorExt for Result<()> {
     fn ignore_not_supported_error(self) -> Self {
         self.map_or_else(
             |e| match e {
-                Error::NotSupported => Ok(()),
+                Error::NotSupported(_) => Ok(()),
                 e => Err(e),
             },
             |x| Ok(x),

@@ -1,10 +1,8 @@
 pub mod fpt;
 pub mod soft_dirty;
 
-use std::ops::Range;
-
-use bitflags::bitflags;
 use nix::unistd::Pid;
+use std::ops::Range;
 
 use crate::{
     check_coord::ProcessRole,
@@ -12,10 +10,9 @@ use crate::{
     segments::{Segment, SegmentId},
 };
 
-bitflags! {
-    pub struct DirtyPageAddressFlags: u32 {
-        const CONTAINS_WR_ONLY = 0b1;
-    }
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DirtyPageAddressFlags {
+    pub contains_writable_only: bool,
 }
 
 pub struct DirtyPageAddressTrackerContext<'a> {

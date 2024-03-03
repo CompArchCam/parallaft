@@ -1,10 +1,9 @@
-use reverie_syscalls::{Syscall, SyscallInfo};
+use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    error::Result,
+    error::{Error, Result, UnexpectedEventReason},
     saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
-    segments::Segment,
 };
 
 use super::{
@@ -24,8 +23,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _active_segment: &mut Segment,
-        _context: &HandlerContext,
+        _context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let action = || {
             StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
@@ -46,26 +44,32 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        _context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let action = || {
-            let saved_syscall = active_segment
+            let saved_syscall = context
+                .child
+                .unwrap_checker_segment()
+                .replay
                 .syscall_log
                 .front()
-                .expect("spurious syscall made by checker");
+                .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
-            assert_eq!(saved_syscall.syscall.into_parts(), syscall.into_parts());
+            if &saved_syscall.syscall != syscall {
+                return Err(Error::UnexpectedSyscall(
+                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                ));
+            }
 
-            StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior
+            Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
         };
 
-        Ok(match syscall {
+        match syscall {
             #[cfg(target_arch = "x86_64")]
             Syscall::ArchPrctl(_) => action(),
             Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => action(),
-            _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,
-        })
+            _ => Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler),
+        }
     }
 
     // Exit syscall never exits

@@ -32,11 +32,21 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
         match role {
             ProcessRole::Main => {
                 let pages = ctx.segment.reference_end().unwrap().get_dirty_pages()?;
-                Ok((Box::new(pages), DirtyPageAddressFlags::CONTAINS_WR_ONLY))
+                Ok((
+                    Box::new(pages),
+                    DirtyPageAddressFlags {
+                        contains_writable_only: true,
+                    },
+                ))
             }
             ProcessRole::Checker => {
                 let pages = ctx.segment.checker().unwrap().get_dirty_pages()?;
-                Ok((Box::new(pages), DirtyPageAddressFlags::CONTAINS_WR_ONLY))
+                Ok((
+                    Box::new(pages),
+                    DirtyPageAddressFlags {
+                        contains_writable_only: true,
+                    },
+                ))
             }
         }
     }

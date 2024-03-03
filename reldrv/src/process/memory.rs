@@ -9,12 +9,12 @@ use nix::{
 use reverie_syscalls::{Addr, MemoryAccess};
 
 #[cfg(target_arch = "x86_64")]
-pub type RawInstruction = u16;
+pub type RawInstruction = u128;
 
 #[cfg(target_arch = "aarch64")]
 pub type RawInstruction = u32;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Instruction {
     pub value: RawInstruction,
 
@@ -45,12 +45,14 @@ impl Instruction {
 }
 
 #[cfg(target_arch = "x86_64")]
-#[allow(dead_code)]
 pub mod instructions {
     use super::Instruction;
 
     pub const SYSCALL: Instruction = Instruction::new(0x050f, 2); /* syscall */
     pub const TRAP: Instruction = Instruction::new(0xcc, 1); /* int3 */
+    pub const CPUID: Instruction = Instruction::new(0xa20f, 2); /* cpuid */
+    pub const RDTSC: Instruction = Instruction::new(0x310f, 2); /* rdtsc */
+    pub const RDTSCP: Instruction = Instruction::new(0xf9010f, 3); /* rdtscp */
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -123,6 +125,10 @@ impl Process {
 
         let raw_instr: RawInstruction = (val & ((1_usize << (len * 8)) - 1)) as _;
         Instruction::new(raw_instr, len)
+    }
+
+    pub fn instr_eq(&self, addr: usize, instr: Instruction) -> bool {
+        self.instr_at(addr, instr.length()) == instr
     }
 
     #[cfg(target_arch = "aarch64")]

@@ -5,14 +5,15 @@ use std::{
 
 use log::info;
 use nix::{libc, sys::signal::Signal};
-use reverie_syscalls::{Addr, MemoryAccess};
+
 use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    error::{Error, EventFlags, Result},
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    error::{Error, Result, UnexpectedEventReason},
+    process::{memory::instructions, ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::SavedTrapEvent,
+    signal_handlers::handle_nondeterministic_instruction,
     syscall_handlers::HandlerContext,
 };
 
@@ -27,96 +28,70 @@ impl RdtscHandler {
 }
 
 impl SignalHandler for RdtscHandler {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
-        let process = context.process;
-
-        let get_rdtsc = || unsafe { _rdtsc() };
-
-        let get_rdtscp = || {
-            let mut aux = MaybeUninit::uninit();
-            // add to the log
-            let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
-            let aux = unsafe { aux.assume_init() };
-            (tsc, aux)
-        };
-
         if signal == Signal::SIGSEGV {
-            let regs = process.read_registers()?;
-            let instr: u64 = process.read_value(Addr::from_raw(regs.rip as _).unwrap())?;
+            let regs = context.process().read_registers()?;
 
-            if instr & 0xffff == 0x310f {
-                info!("[PID {: >8}] Trap: Rdtsc", process.pid);
+            if context.process().instr_eq(regs.ip(), instructions::RDTSC) {
+                info!("{} Trap: Rdtsc", context.child);
 
-                // rdtsc
-                let tsc = context
-                    .segments
-                    .lookup_segment_with::<Result<u64>>(process.pid, |mut segment, is_main| {
-                        if is_main {
-                            let tsc = get_rdtsc();
-                            // add to the log
-                            segment.trap_event_log.push_back(SavedTrapEvent::Rdtsc(tsc));
+                let tsc = handle_nondeterministic_instruction(
+                    context.child,
+                    context.check_coord,
+                    || unsafe { _rdtsc() },
+                    |tsc| SavedTrapEvent::Rdtsc(tsc),
+                    |event| {
+                        if let SavedTrapEvent::Rdtsc(tsc) = event {
                             Ok(tsc)
                         } else {
-                            // replay from the log
-                            let event = segment
-                                .trap_event_log
-                                .pop_front()
-                                .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
-
-                            if let SavedTrapEvent::Rdtsc(tsc) = event {
-                                Ok(tsc)
-                            } else {
-                                Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
-                            }
+                            Err(Error::UnexpectedTrap(
+                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                            ))
                         }
-                    })
-                    .unwrap_or_else(|| Ok(get_rdtsc()))?;
+                    },
+                )?;
 
-                process.write_registers(regs.with_tsc(tsc).with_offsetted_ip(2))?;
+                context.process().write_registers(
+                    regs.with_tsc(tsc)
+                        .with_offsetted_ip(instructions::RDTSC.length() as _),
+                )?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
-            } else if instr & 0xffffff == 0xf9010f {
-                info!("[PID {: >8}] Trap: Rdtscp", process.pid);
+            } else if context.process().instr_eq(regs.ip(), instructions::RDTSCP) {
+                info!("{} Trap: Rdtscp", context.child);
 
-                // rdtscp
-                let (tsc, aux) = context
-                    .segments
-                    .lookup_segment_with::<Result<(u64, u32)>>(
-                        process.pid,
-                        |mut segment, is_main| {
-                            if is_main {
-                                let (tsc, aux) = get_rdtscp();
+                let tscp = handle_nondeterministic_instruction(
+                    context.child,
+                    context.check_coord,
+                    || {
+                        let mut aux = MaybeUninit::uninit();
+                        let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
+                        let aux = unsafe { aux.assume_init() };
+                        (tsc, aux)
+                    },
+                    |tscp| SavedTrapEvent::Rdtscp(tscp.0, tscp.1),
+                    |event| {
+                        if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
+                            Ok((tsc, aux))
+                        } else {
+                            Err(Error::UnexpectedTrap(
+                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                            ))
+                        }
+                    },
+                )?;
 
-                                segment
-                                    .trap_event_log
-                                    .push_back(SavedTrapEvent::Rdtscp(tsc, aux));
-
-                                Ok((tsc, aux))
-                            } else {
-                                // replay from the log
-                                let event = segment
-                                    .trap_event_log
-                                    .pop_front()
-                                    .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
-
-                                if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
-                                    Ok((tsc, aux))
-                                } else {
-                                    Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
-                                }
-                            }
-                        },
-                    )
-                    .unwrap_or_else(|| Ok(get_rdtscp()))?;
-
-                process.write_registers(regs.with_tscp(tsc, aux).with_offsetted_ip(3))?;
+                context.process().write_registers(
+                    regs.with_tscp(tscp.0, tscp.1)
+                        .with_offsetted_ip(instructions::RDTSCP.length() as _),
+                )?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }

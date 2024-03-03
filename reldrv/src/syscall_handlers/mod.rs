@@ -2,6 +2,7 @@ pub mod clone;
 pub mod execve;
 pub mod exit;
 pub mod mmap;
+pub mod record_replay;
 pub mod replicate;
 pub mod rseq;
 
@@ -11,40 +12,44 @@ use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 
 use crate::{
-    check_coord::CheckCoordinator,
+    check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard},
     error::Result,
     process::Process,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::{Segment, SegmentChain},
+    segments::Segment,
 };
 
 pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;
+pub const SYSNO_CHECKPOINT_SYNC: usize = 0xff79;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
-pub struct HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules> {
-    pub process: &'p Process,
-    // active_segment: Option<&'a mut Segment>,
-    // is_main: bool,
-    pub segments: &'segs SegmentChain,
+pub struct HandlerContext<'id, 'process, 'disp, 'scope, 'env, 'modules> {
+    pub child: &'id mut ProcessIdentityRef<'process, UpgradableReadGuard<Segment>>,
     pub check_coord: &'disp CheckCoordinator<'disp, 'modules>,
     pub scope: &'scope Scope<'scope, 'env>,
 }
 
-#[allow(unused)]
+impl HandlerContext<'_, '_, '_, '_, '_, '_> {
+    pub fn process(&self) -> &Process {
+        self.child.process().unwrap()
+    }
+}
+
+#[derive(Debug)]
 /// Action to take by the check coordinator after `handle_standard_syscall_entry_main` is called for a standard syscall.
 pub enum StandardSyscallEntryMainHandlerExitAction {
     /// Try the next handler. The syscall is not handled by the current handler.
     NextHandler,
 
-    /// Store the incomplete syscall in `active_segment.ongoing_syscall`.
+    /// Store the incomplete syscall in `active_segment.replay.ongoing_syscall`.
     StoreSyscall(SavedIncompleteSyscall),
 
-    /// Store the incomplete syscall in `active_segment.ongoing_syscall` and call checkpoint finalization.
+    /// Store the incomplete syscall in `active_segment.replay.ongoing_syscall` and call checkpoint finalization.
     StoreSyscallAndCheckpoint(SavedIncompleteSyscall),
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Action to take by by the check coordinator after `handle_standard_syscall_entry_checker` is called for a standard syscall.
 pub enum StandardSyscallEntryCheckerHandlerExitAction {
     /// Try the next handler. The syscall is not handled by the current handler.
@@ -57,6 +62,7 @@ pub enum StandardSyscallEntryCheckerHandlerExitAction {
     Checkpoint,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallHandlerExitAction {
     /// Try the next handler. The syscall is not handled by the current handler.
     NextHandler,
@@ -67,67 +73,53 @@ pub enum SyscallHandlerExitAction {
 
 #[allow(unused_variables)]
 pub trait StandardSyscallHandler {
-    /// Called when the main process enters a standard syscall AND is in a protected region.
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
     }
 
-    /// Called when the main process exits from a standard syscall AND is in a protected region.
-    /// Only called if the `saved_incomplete_syscall.exit_action` is set to `Custom`.
     fn handle_standard_syscall_exit_main(
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
 
-    /// Called when a checker process enters a standard syscall.
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler)
     }
 
-    /// Called when a checker process exits from a standard syscall.
-    /// Only called if the `saved_syscall.exit_action` is set to `Custom`.
     fn handle_standard_syscall_exit_checker(
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
 
-    /// Called when any process enters a standard syscall.
-    /// Called before `handle_standard_syscall_entry_{main,checker}` if in protected region.
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
 
-    /// Called when any process exits from a standard syscall.
-    /// Called before `handle_standard_syscall_exit_{main,checker}` if in protected region.
     fn handle_standard_syscall_exit(
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -139,7 +131,7 @@ pub trait CustomSyscallHandler {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -147,7 +139,7 @@ pub trait CustomSyscallHandler {
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }

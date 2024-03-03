@@ -53,7 +53,7 @@ impl ProcessLifetimeHook for MemoryCollector {
                     let mut pids = vec![context.check_coord.main.pid];
 
                     for segment in &segments.list {
-                        let segment = segment.lock();
+                        let segment = segment.read();
 
                         if let Some(p) = segment.checker() {
                             pids.push(p.pid);
@@ -61,7 +61,7 @@ impl ProcessLifetimeHook for MemoryCollector {
 
                         if let Some(p) = segment.reference_end() {
                             pids.push(p.pid);
-                        }
+                        };
                     }
 
                     if self.include_rt {

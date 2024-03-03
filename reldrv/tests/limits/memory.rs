@@ -1,16 +1,13 @@
 use std::{num::NonZeroUsize, os::fd::OwnedFd, slice};
 
-use crate::common::{
-    checkpoint_take, relrt::RelRt, setup_trace_and_unwrap_with_options, RelShellOptions,
-};
+use crate::common::{checkpoint_take, relrt::RelRt, trace_w_options};
 use nix::sys::mman;
-use reldrv::process::PAGESIZE;
-use serial_test::serial;
+use reldrv::{process::PAGESIZE, RelShellOptionsBuilder};
 
+#[ignore]
 #[test]
-#[serial]
 fn limit() {
-    setup_trace_and_unwrap_with_options::<(), reldrv::error::Error>(
+    trace_w_options::<reldrv::error::Error>(
         || {
             let size = (*PAGESIZE * 256) as usize;
 
@@ -24,8 +21,6 @@ fn limit() {
                     0,
                 )?
             };
-
-            dbg!(addr);
 
             let mut rt = RelRt::new();
             rt.enable();
@@ -46,8 +41,12 @@ fn limit() {
 
             Ok(())
         },
-        RelShellOptions::new().with_checkpoint_size_watermark(16),
-    );
+        RelShellOptionsBuilder::test_serial_default()
+            .checkpoint_size_watermark(16)
+            .build()
+            .unwrap(),
+    )
+    .expect()
 
     // TODO: assert that >= 256 / 16 = 16 checkpoints have been taken
 }

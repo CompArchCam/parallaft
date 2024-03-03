@@ -75,12 +75,12 @@ impl StandardSyscallHandler for TimingCollector {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if context.process.pid == context.check_coord.main.pid {
+        if context.child.is_main() {
             match syscall {
                 Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                    let stats = context.process.stats()?;
+                    let stats = context.process().stats()?;
                     self.utime.store(stats.utime, Ordering::SeqCst);
                     self.stime.store(stats.stime, Ordering::SeqCst);
                 }

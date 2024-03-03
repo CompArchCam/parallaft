@@ -8,6 +8,7 @@ use typed_arena::Arena;
 
 use crate::{
     check_coord::{CheckCoordinator, ProcessRole},
+    ctx,
     dirty_page_trackers::{
         DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
         ExtraWritableRangesProvider,
@@ -16,7 +17,7 @@ use crate::{
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, ProcessLifetimeHook, ProcessLifetimeHookContext},
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::{CheckpointCaller, Segment, SegmentChain, SegmentEventHandler, SegmentId},
+    segments::{CheckpointCaller, Segment, SegmentChains, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{StatisticValue, StatisticsProvider},
     syscall_handlers::{
@@ -168,7 +169,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 
     pub fn dispatch_throttle(
         &self,
-        segments: &SegmentChain,
+        segments: &SegmentChains,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
         for &handler in &self.subscribers.read().throttlers {
@@ -279,10 +280,13 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
-            let ret = handler.handle_standard_syscall_entry(syscall, context)?;
+            let ret = handler.handle_standard_syscall_entry(
+                syscall,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
                 return Ok(ret);
@@ -296,10 +300,14 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
-            let ret = handler.handle_standard_syscall_exit(ret_val, syscall, context)?;
+            let ret = handler.handle_standard_syscall_exit(
+                ret_val,
+                syscall,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
                 return Ok(ret);
@@ -312,12 +320,13 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
-            let ret =
-                handler.handle_standard_syscall_entry_main(syscall, active_segment, context)?;
+            let ret = handler.handle_standard_syscall_entry_main(
+                syscall,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, StandardSyscallEntryMainHandlerExitAction::NextHandler) {
                 return Ok(ret);
@@ -331,15 +340,13 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_main(
                 ret_val,
                 saved_incomplete_syscall,
-                active_segment,
-                context,
+                ctx!(context.child, context.scope, context.check_coord),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -353,12 +360,13 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
-            let ret =
-                handler.handle_standard_syscall_entry_checker(syscall, active_segment, context)?;
+            let ret = handler.handle_standard_syscall_entry_checker(
+                syscall,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(
                 ret,
@@ -375,15 +383,13 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_checker(
                 ret_val,
                 saved_syscall,
-                active_segment,
-                context,
+                ctx!(context.child, context.scope, context.check_coord),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -400,10 +406,14 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
-            let ret = handler.handle_custom_syscall_entry(sysno, args, context)?;
+            let ret = handler.handle_custom_syscall_entry(
+                sysno,
+                args,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
                 return Ok(ret);
@@ -416,10 +426,13 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
-            let ret = handler.handle_custom_syscall_exit(ret_val, context)?;
+            let ret = handler.handle_custom_syscall_exit(
+                ret_val,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
                 return Ok(ret);
@@ -431,16 +444,19 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
 }
 
 impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
         for handler in &self.subscribers.read().signal_handlers {
-            let ret = handler.handle_signal(signal, context)?;
+            let ret = handler.handle_signal(
+                signal,
+                ctx!(context.child, context.scope, context.check_coord),
+            )?;
 
             if !matches!(ret, SignalHandlerExitAction::NextHandler) {
                 return Ok(ret);

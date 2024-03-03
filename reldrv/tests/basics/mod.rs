@@ -1,180 +1,151 @@
-#[allow(unused_imports)]
 use std::arch::asm;
 
-use crate::common::{checkpoint_fini, checkpoint_take, setup, trace};
-
-use serial_test::serial;
+use crate::common::{checkpoint_fini, checkpoint_take, trace};
 
 #[test]
-#[serial] // we don't allow a single tracer to trace multiple processes
 fn basic_checkpointing() {
-    setup();
-
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            checkpoint_fini();
-            0
-        }),
-        0
-    )
+    trace(|| {
+        checkpoint_take();
+        checkpoint_fini();
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 #[test]
-#[serial]
 fn basic_checkpointing_twice() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            checkpoint_take();
-            checkpoint_fini();
-            0
-        }),
-        0
-    );
+    trace(|| {
+        checkpoint_take();
+        checkpoint_take();
+        checkpoint_fini();
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 #[test]
-#[serial]
 fn no_checkpoint_fini() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            0
-        }),
-        0
-    );
+    trace(|| {
+        checkpoint_take();
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 #[test]
-#[serial]
 fn duplicated_checkpoint_fini() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-            checkpoint_fini();
-            checkpoint_fini();
-            0
-        }),
-        0
-    );
+    trace(|| {
+        checkpoint_take();
+        checkpoint_fini();
+        checkpoint_fini();
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 #[cfg(target_arch = "x86_64")]
 #[test]
-#[serial]
 fn register_preservation_after_checkpoint() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            let result: u64;
+    trace(|| {
+        let result: u64;
 
-            unsafe {
-                asm!(
-                    "
-                            mov rdi, 12345
-                            push rbx
-                            push rdx
-                            push rsi
-                            push rdi
-                            push r8
-                            push r9
-                            push r10
-                            push r12
-                            push r13
-                            push r14
-                            push r15
-                            pushfq
+        unsafe {
+            asm!(
+                "
+                mov rdi, 12345
+                push rbx
+                push rdx
+                push rsi
+                push rdi
+                push r8
+                push r9
+                push r10
+                push r12
+                push r13
+                push r14
+                push r15
+                pushfq
 
-                            mov rax, 0xff77
-                            syscall
+                mov rax, 0xff77
+                syscall
 
-                            pushfq
-                            pop rax
-                            pop r11
-                            cmp rax, r11
-                            jne 1f
+                pushfq
+                pop rax
+                pop r11
+                cmp rax, r11
+                jne 1f
 
-                            pop rax
-                            cmp rax, r15
-                            jne 1f
+                pop rax
+                cmp rax, r15
+                jne 1f
 
-                            pop rax
-                            cmp rax, r14
-                            jne 1f
+                pop rax
+                cmp rax, r14
+                jne 1f
 
-                            pop rax
-                            cmp rax, r13
-                            jne 1f
+                pop rax
+                cmp rax, r13
+                jne 1f
 
-                            pop rax
-                            cmp rax, r12
-                            jne 1f
+                pop rax
+                cmp rax, r12
+                jne 1f
 
-                            pop rax
-                            cmp rax, r10
-                            jne 1f
+                pop rax
+                cmp rax, r10
+                jne 1f
 
-                            pop rax
-                            cmp rax, r9
-                            jne 1f
+                pop rax
+                cmp rax, r9
+                jne 1f
 
-                            pop rax
-                            cmp rax, r8
-                            jne 1f
+                pop rax
+                cmp rax, r8
+                jne 1f
 
-                            pop rax
-                            cmp rax, rdi
-                            jne 1f
+                pop rax
+                cmp rax, rdi
+                jne 1f
 
-                            pop rax
-                            cmp rax, rsi
-                            jne 1f
+                pop rax
+                cmp rax, rsi
+                jne 1f
 
-                            pop rax
-                            cmp rax, rdx
-                            jne 1f
+                pop rax
+                cmp rax, rdx
+                jne 1f
 
-                            pop rax
-                            cmp rax, rbx
-                            jne 1f
+                pop rax
+                cmp rax, rbx
+                jne 1f
 
-                            mov rax, 0
-                            jmp 2f
-                            1:
-                            mov rax, 1
-                            2:
-                            ",
-                    out("rcx") _,
-                    out("r11") _,
-                    out("rdi") _,
-                    lateout("rax") result,
-                )
-            }
+                mov rax, 0
+                jmp 2f
+                1:
+                mov rax, 1
+                2:
+                ",
+                out("rcx") _,
+                out("r11") _,
+                out("rdi") _,
+                lateout("rax") result,
+            )
+        }
 
-            if result == 1 {
-                return 1;
-            }
+        assert_ne!(result, 1);
 
-            0
-        }),
-        0
-    )
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 #[cfg(target_arch = "aarch64")]
 #[test]
-#[serial]
 fn register_preservation_after_checkpoint() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            unsafe {
-                asm!(
-                    "
+    trace(|| {
+        unsafe {
+            asm!(
+                "
                         mov x0, 42
                         mov x1, 43
                         mov x2, 44
@@ -214,27 +185,26 @@ fn register_preservation_after_checkpoint() {
                         svc 0
                     3:
                     ",
-                    out("x0") _,
-                    out("x1") _,
-                    out("x2") _,
-                    out("x3") _,
-                    out("x4") _,
-                    out("x5") _,
-                    out("x6") _,
-                    out("x7") _,
-                    out("x8") _,
-                    out("x9") _,
-                    out("x10") _,
-                )
-            };
-            0
-        }),
-        0
-    );
+                out("x0") _,
+                out("x1") _,
+                out("x2") _,
+                out("x3") _,
+                out("x4") _,
+                out("x5") _,
+                out("x6") _,
+                out("x7") _,
+                out("x8") _,
+                out("x9") _,
+                out("x10") _,
+            )
+        };
+        0;
+        Ok::<_, ()>(())
+    })
+    .expect()
 }
 
 // #[test]
-// #[serial]
 // #[should_panic]
 // fn oom_handling() {
 //     setup();

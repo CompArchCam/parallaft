@@ -11,10 +11,12 @@ use nix::unistd::{fork, ForkResult};
 use clap::Parser;
 use clap_num::maybe_hex;
 
+use reldrv::check_coord::ExitReason;
 use reldrv::helpers::cpufreq::CpuFreqGovernor;
+use reldrv::StatsOutput;
 use reldrv::{
-    check_coord::CheckCoordinatorFlags, parent_work, statistics::perf::CounterKind,
-    DirtyPageAddressTrackerType, RelShellOptions, RunnerFlags,
+    check_coord::CheckCoordinatorOptions, parent_work, statistics::perf::CounterKind,
+    DirtyPageAddressTrackerType, RelShellOptions,
 };
 use syscalls::{syscall, Sysno};
 
@@ -162,7 +164,7 @@ fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntEr
     Ok(std::time::Duration::from_millis(arg.parse()?))
 }
 
-fn run(cmd: &mut Command, options: RelShellOptions) -> i32 {
+fn run(cmd: &mut Command, options: RelShellOptions) -> ExitReason {
     if options.enable_odf {
         unsafe { syscall!(Sysno::prctl, 65, 0, 0, 0, 0) }
             .expect("Failed to initialise on-demand fork (ODF). Check your kernel support.");
@@ -207,28 +209,6 @@ fn main() {
 
     env_logger_builder.init();
 
-    let mut runner_flags = RunnerFlags::empty();
-    runner_flags.set(RunnerFlags::POLL_WAITPID, cli.poll_waitpid);
-    runner_flags.set(RunnerFlags::DUMP_STATS, cli.dump_stats);
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        runner_flags.set(RunnerFlags::DONT_TRAP_RDTSC, cli.dont_trap_rdtsc);
-        runner_flags.set(RunnerFlags::DONT_TRAP_CPUID, cli.dont_trap_cpuid);
-    }
-
-    let mut check_coord_flags = CheckCoordinatorFlags::empty();
-    check_coord_flags.set(CheckCoordinatorFlags::NO_MEM_CHECK, cli.no_mem_check);
-    check_coord_flags.set(
-        CheckCoordinatorFlags::DONT_RUN_CHECKER,
-        cli.dont_run_checker,
-    );
-    check_coord_flags.set(CheckCoordinatorFlags::DONT_FORK, cli.dont_fork);
-    check_coord_flags.set(
-        CheckCoordinatorFlags::IGNORE_CHECK_ERRORS,
-        cli.ignore_check_errors,
-    );
-
     assert!(
         (cli.main_cache_mask.is_none() && cli.checker_cache_mask.is_none() && cli.shell_cache_mask.is_none())
             || (cli.main_cache_mask.is_some() && cli.checker_cache_mask.is_some() && cli.shell_cache_mask.is_some()),
@@ -238,9 +218,25 @@ fn main() {
     let exit_status = run(
         Command::new(cli.command).args(cli.args),
         RelShellOptions {
-            runner_flags,
-            check_coord_flags,
-            stats_output: cli.stats_output,
+            no_cpuid_trap: cli.dont_trap_cpuid,
+            no_rdtsc_trap: cli.dont_trap_rdtsc,
+            dump_stats: {
+                if let Some(path) = cli.stats_output {
+                    Some(StatsOutput::File(path))
+                } else {
+                    if cli.dump_stats {
+                        Some(StatsOutput::StdOut)
+                    } else {
+                        None
+                    }
+                }
+            },
+            check_coord_flags: CheckCoordinatorOptions {
+                no_state_cmp: cli.no_mem_check,
+                no_checker_exec: cli.dont_run_checker,
+                no_fork: cli.dont_fork,
+                ignore_miscmp: cli.ignore_check_errors,
+            },
             checkpoint_period: cli.checkpoint_period,
             max_nr_live_segments: cli.max_nr_live_segments,
             memory_overhead_watermark: cli.max_memory_overhead,
@@ -270,5 +266,5 @@ fn main() {
         },
     );
 
-    std::process::exit(exit_status as _);
+    std::process::exit(exit_status.exit_code());
 }

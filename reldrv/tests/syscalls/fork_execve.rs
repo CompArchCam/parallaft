@@ -1,15 +1,11 @@
 use std::{os::unix::process::CommandExt, process::Command};
 
-use crate::common::{checkpoint_fini, checkpoint_take, setup, trace};
+use crate::common::{checkpoint_take, trace};
 use nix::unistd::{self, ForkResult};
-use serial_test::serial;
 
 #[test]
-#[serial]
-#[should_panic]
 fn fork() {
-    setup();
-    trace(|| {
+    trace::<()>(|| {
         match unsafe { unistd::fork().unwrap() } {
             ForkResult::Parent { .. } => {
                 println!("You should not see this line");
@@ -17,43 +13,28 @@ fn fork() {
             ForkResult::Child => {
                 println!("You should not see this line");
             }
-        };
-        0
-    });
+        }
+        unreachable!()
+    })
+    .expect_panic()
 }
 
 #[test]
-#[serial]
-#[should_panic]
 fn fork_in_protected_region() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-
-            unsafe { unistd::fork().unwrap() };
-
-            checkpoint_fini();
-            0
-        }),
-        0
-    )
+    trace::<()>(|| {
+        checkpoint_take();
+        unsafe { unistd::fork().unwrap() };
+        unreachable!()
+    })
+    .expect_panic()
 }
 
 #[test]
-#[serial]
-#[should_panic]
 fn execve() {
-    setup();
-    assert_eq!(
-        trace(|| {
-            checkpoint_take();
-
-            Command::new("/usr/bin/true").exec();
-
-            checkpoint_fini();
-            0
-        }),
-        0
-    )
+    trace::<()>(|| {
+        checkpoint_take();
+        Command::new("/usr/bin/true").exec();
+        unreachable!()
+    })
+    .expect_panic()
 }

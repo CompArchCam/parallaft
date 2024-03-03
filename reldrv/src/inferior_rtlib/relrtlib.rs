@@ -88,10 +88,10 @@ impl CustomSyscallHandler for RelRtLib {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         if sysno == SYSNO_SET_COUNTER_ADDR {
-            assert_eq!(context.process.pid, context.check_coord.main.pid); // TODO: handle this more gracefully
+            assert!(context.child.is_main()); // TODO: handle this more gracefully
             assert!(self.perf_counter.lock().is_none());
 
             let base_address = if args.arg0 == 0 {
@@ -106,7 +106,7 @@ impl CustomSyscallHandler for RelRtLib {
             );
 
             let counter = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
-                .observe_pid(context.process.pid.as_raw())
+                .observe_pid(context.process().pid.as_raw())
                 .wakeup_watermark(1)
                 .sample_period(self.period)
                 .sample(SampleFlag::IP)
@@ -125,7 +125,7 @@ impl CustomSyscallHandler for RelRtLib {
 
             return Ok(SyscallHandlerExitAction::ContinueInferior);
         } else if sysno == SYSNO_CHECKPOINT_TAKE {
-            if context.process.pid == context.check_coord.main.pid {
+            if context.child.is_main() {
                 if let Some(c) = self.perf_counter.lock().as_mut() {
                     c.enable()?;
                 }
@@ -137,23 +137,23 @@ impl CustomSyscallHandler for RelRtLib {
 }
 
 impl SignalHandler for RelRtLib {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
+        let _process = context.process();
+
         if signal == Signal::SIGTRAP {
-            let siginfo = ptrace::getsiginfo(context.process.pid)?;
+            let siginfo = ptrace::getsiginfo(context.process().pid)?;
             if siginfo.si_code == 0x6
             /* TRAP_PERF */
             {
-                info!("[PID {: >8}] Trap: Perf", context.process.pid);
-
+                info!("{} Trap: Perf", context.child);
                 self.schedule_checkpoint(context.check_coord).unwrap();
-
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
         }
@@ -167,7 +167,7 @@ impl ScheduleCheckpoint for RelRtLib {
         let addr = self.counter_addr.read();
 
         if addr.is_none() {
-            return Err(Error::NotSupported);
+            return Err(Error::InvalidState);
         }
 
         let process = &check_coord.main;

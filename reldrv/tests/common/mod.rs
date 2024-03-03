@@ -5,11 +5,8 @@ use nix::{
     sys::signal::{raise, Signal},
     unistd::{fork, ForkResult},
 };
-use reldrv::parent_work;
 pub use reldrv::RelShellOptions;
-
-#[cfg(target_arch = "x86_64")]
-use reldrv::RunnerFlags;
+use reldrv::{check_coord::ExitReason, parent_work, RelShellOptionsBuilder};
 
 use std::sync::Once;
 
@@ -21,38 +18,7 @@ pub fn setup() {
             .parse_default_env()
             .is_test(true)
             .init();
-
-        // let orig_hook = panic::take_hook();
-        // panic::set_hook(Box::new(move |panic_info| {
-        //     orig_hook(panic_info);
-        //     std::process::exit(1);
-        // }));
     });
-}
-
-pub fn trace_with_options(f: impl FnOnce() -> i32, options: RelShellOptions) -> i32 {
-    match unsafe { fork().unwrap() } {
-        ForkResult::Parent { child } => parent_work(child, options),
-        ForkResult::Child => {
-            raise(Signal::SIGSTOP).unwrap();
-            let code = f();
-            std::process::exit(code);
-        }
-    }
-}
-
-pub fn trace(f: impl FnOnce() -> i32) -> i32 {
-    #[allow(unused_mut)]
-    let mut options = RelShellOptions::default();
-
-    #[cfg(target_arch = "x86_64")]
-    options.runner_flags.insert(RunnerFlags::DONT_TRAP_CPUID);
-    #[cfg(target_arch = "x86_64")]
-    options.runner_flags.insert(RunnerFlags::DONT_TRAP_RDTSC);
-
-    options.max_nr_live_segments = 1;
-
-    trace_with_options(f, options)
 }
 
 pub fn checkpoint_take() {
@@ -63,27 +29,41 @@ pub fn checkpoint_fini() {
     unsafe { libc::syscall(0xff78) };
 }
 
-#[allow(unused)]
+#[allow(dead_code)]
 pub fn checkpoint_sync() {
     unsafe { libc::syscall(0xff79) };
 }
 
-pub fn setup_trace_and_unwrap_with_options<T, E>(
-    f: impl FnOnce() -> Result<T, E>,
+#[must_use]
+pub fn trace_w_options<E>(
+    f: impl FnOnce() -> Result<(), E>,
     options: RelShellOptions,
-) {
+) -> ExitReason {
     setup();
 
-    assert_eq!(
-        trace_with_options(
-            || {
-                match f() {
-                    Err(_) => 1,
-                    Ok(_) => 0,
-                }
-            },
-            options
-        ),
-        0
-    );
+    let ret = match unsafe { fork().unwrap() } {
+        ForkResult::Parent { child } => parent_work(child, options),
+        ForkResult::Child => {
+            raise(Signal::SIGSTOP).unwrap();
+            let code = match f() {
+                Err(_) => 1,
+                Ok(_) => 0,
+            };
+            std::process::exit(code);
+        }
+    };
+
+    // TODO: ensure there are no leftover processes
+
+    ret
+}
+
+#[must_use]
+pub fn trace<E>(f: impl FnOnce() -> Result<(), E>) -> ExitReason {
+    trace_w_options(
+        f,
+        RelShellOptionsBuilder::test_serial_default()
+            .build()
+            .unwrap(),
+    )
 }

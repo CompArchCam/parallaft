@@ -92,28 +92,7 @@ pub fn page_diff<'a>(
     Ok(true)
 }
 
-#[allow(unused)]
 impl Process {
-    // pub fn dirty_page_delta_against(
-    //     &self,
-    //     other: &Process,
-    //     ignored_pages: &[usize],
-    // ) -> Result<(bool, usize)> {
-    //     let dirty_pages_myself: Vec<usize> = self.get_dirty_pages()?.into_iter().collect();
-
-    //     let dirty_pages_other: Vec<usize> = other.get_dirty_pages()?.into_iter().collect();
-
-    //     info!("{} dirty pages", dirty_pages_myself.len());
-
-    //     page_diff(
-    //         self,
-    //         other,
-    //         &dirty_pages_myself,
-    //         &dirty_pages_other,
-    //         ignored_pages,
-    //     )
-    // }
-
     pub fn get_dirty_pages(&self) -> Result<Vec<usize>> {
         let maps = self.procfs()?.maps()?;
         let page_size = procfs::page_size();

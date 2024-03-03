@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use log::info;
+
 use nix::unistd::Pid;
 use parking_lot::Mutex;
 use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, DynamicBuilder, Hardware};
@@ -174,8 +174,6 @@ impl ProcessLifetimeHook for PerfStatsCollector {
             .collect::<std::io::Result<Vec<_>>>()?;
 
         *group = counters;
-
-        info!("Cache stats collector initialized");
 
         Ok(())
     }

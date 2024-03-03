@@ -17,7 +17,7 @@ use perf_event::{events::Raw, Counter, SampleSkid};
 use reverie_syscalls::Syscall;
 
 use crate::{
-    check_coord::{CheckCoordinator, ProcessRole},
+    check_coord::{CheckCoordinator, ProcessIdentityRef, ProcessRole},
     dispatcher::{Module, Subscribers},
     error::Result,
     inferior_rtlib::ScheduleCheckpoint,
@@ -230,11 +230,11 @@ impl StandardSyscallHandler for PmuSegmentor {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         match syscall {
             Syscall::Execve(_) | Syscall::Execveat(_) if ret_val == 0 => {
-                assert_eq!(context.process.pid, context.check_coord.main.pid);
+                assert!(context.child.is_main());
 
                 match self.skip_instructions {
                     Some(instrs) => {
@@ -242,7 +242,7 @@ impl StandardSyscallHandler for PmuSegmentor {
                         *main_state = Some(MainState::SkippingInstructions {
                             _instr_irq: self.instr_counter(
                                 ProcessRole::Main,
-                                context.process.pid,
+                                context.process().pid,
                                 instrs,
                             ),
                         })
@@ -259,32 +259,33 @@ impl StandardSyscallHandler for PmuSegmentor {
 }
 
 impl SignalHandler for PmuSegmentor {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<crate::signal_handlers::SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
         if signal == Signal::SIGTRAP {
-            let siginfo = ptrace::getsiginfo(context.process.pid)?;
+            let siginfo = ptrace::getsiginfo(context.process().pid)?;
             if siginfo.si_code == 0x6
                 || (siginfo.si_code == -1
                     && unsafe { siginfo.si_value().sival_ptr }
                         == Self::SIGVAL_MAGIC as *mut nix::libc::c_void)
             /* TRAP_PERF */
             {
-                let ip = context.process.read_registers().unwrap().ip();
+                let ip = context.process().read_registers().unwrap().ip();
 
                 let mut take_checkpoint = false;
 
                 debug!(
                     "[PID {: >8}] Trap: Perf @ IP = {:p}",
-                    context.process.pid, ip as *const u8
+                    context.process().pid,
+                    ip as *const u8
                 );
 
-                if context.process.pid == context.check_coord.main.pid {
+                if let ProcessIdentityRef::Main(process) = context.child {
                     let mut state = self.main_state.lock();
 
                     let next_state = match state.take().unwrap() {
@@ -294,12 +295,12 @@ impl SignalHandler for PmuSegmentor {
                             MainState::CountingBranches {
                                 instr_irq: self.instr_counter(
                                     ProcessRole::Main,
-                                    context.process.pid,
+                                    process.pid,
                                     self.period,
                                 ),
                                 branch_counter: self.branch_counter(
                                     ProcessRole::Main,
-                                    context.process.pid,
+                                    process.pid,
                                     None,
                                 ),
                             }
@@ -313,8 +314,10 @@ impl SignalHandler for PmuSegmentor {
                             let branches = branch_counter.read().unwrap();
                             debug!("Main branches executed = {}", branches);
 
-                            if let Some(segment) = context.segments.last_segment() {
-                                let segment = segment.lock();
+                            if let Some(segment) =
+                                context.check_coord.segments.read().main_segment()
+                            {
+                                let segment = segment.read();
                                 let checker_pid = segment.checker().unwrap().pid;
 
                                 let mut segment_info_map = self.segment_info_map.lock();
@@ -342,20 +345,17 @@ impl SignalHandler for PmuSegmentor {
                             take_checkpoint = true;
 
                             #[cfg(target_arch = "x86_64")]
-                            context
-                                .check_coord
-                                .main
-                                .modify_registers_with(|r| r.with_resume_flag_cleared())?;
+                            process.modify_registers_with(|r| r.with_resume_flag_cleared())?;
 
                             MainState::CountingBranches {
                                 instr_irq: self.instr_counter(
                                     ProcessRole::Main,
-                                    context.process.pid,
+                                    process.pid,
                                     self.period,
                                 ),
                                 branch_counter: self.branch_counter(
                                     ProcessRole::Main,
-                                    context.process.pid,
+                                    process.pid,
                                     None,
                                 ),
                             }
@@ -365,7 +365,7 @@ impl SignalHandler for PmuSegmentor {
                     *state = Some(next_state);
                 } else {
                     let mut segment_info_map = self.segment_info_map.lock();
-                    let segment_info = segment_info_map.get_mut(&context.process.pid).unwrap();
+                    let segment_info = segment_info_map.get_mut(&context.process().pid).unwrap();
 
                     let next_state = match segment_info.state.take().unwrap() {
                         CheckerState::CountingBranches {
@@ -382,7 +382,7 @@ impl SignalHandler for PmuSegmentor {
                                 CheckerState::Stepping {
                                     branch_counter,
                                     breakpoint: self
-                                        .breakpoint(context.process.pid, segment_info.ip),
+                                        .breakpoint(context.process().pid, segment_info.ip),
                                 }
                             } else if diff == 0 {
                                 CheckerState::Done
@@ -408,7 +408,7 @@ impl SignalHandler for PmuSegmentor {
                             } else if diff == 0 {
                                 #[cfg(target_arch = "x86_64")]
                                 context
-                                    .process
+                                    .process()
                                     .modify_registers_with(|r| r.with_resume_flag_cleared())
                                     .unwrap();
                                 CheckerState::Done

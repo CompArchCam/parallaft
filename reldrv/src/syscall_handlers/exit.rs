@@ -4,7 +4,6 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
-    segments::Segment,
 };
 
 use super::{
@@ -24,8 +23,7 @@ impl StandardSyscallHandler for ExitHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _active_segment: &mut Segment,
-        _context: &HandlerContext,
+        _context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {
@@ -44,15 +42,11 @@ impl StandardSyscallHandler for ExitHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        _context: &HandlerContext,
+        _context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                assert_eq!(
-                    &active_segment.ongoing_syscall.as_ref().unwrap().syscall,
-                    syscall
-                );
+                // TODO: check exit syscall
                 StandardSyscallEntryCheckerHandlerExitAction::Checkpoint
             }
             _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,

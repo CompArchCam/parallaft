@@ -1,5 +1,6 @@
+pub mod detach;
 pub mod dirty_pages;
-mod memory;
+pub mod memory;
 mod registers;
 mod stats;
 mod syscall;
@@ -35,7 +36,6 @@ pub struct Process {
     procfs: Lazy<procfs::ProcResult<procfs::process::Process>>,
 }
 
-#[allow(unused)]
 impl Process {
     pub fn new(pid: Pid) -> Self {
         Self {
@@ -88,6 +88,12 @@ impl Process {
     }
 }
 
+impl AsRef<Process> for Process {
+    fn as_ref(&self) -> &Process {
+        self
+    }
+}
+
 impl Debug for Process {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Process").field(&self.pid.as_raw()).finish()
@@ -114,6 +120,12 @@ impl Deref for OwnedProcess {
     }
 }
 
+impl AsRef<Process> for OwnedProcess {
+    fn as_ref(&self) -> &Process {
+        &self.inner
+    }
+}
+
 impl Debug for OwnedProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("OwnedProcess")
@@ -135,12 +147,20 @@ impl Drop for OwnedProcess {
     fn drop(&mut self) {
         let result = kill(self.inner.pid, Signal::SIGKILL);
 
-        // we don't need to reap zombie children here because they will be adpoted and reaped by PID 1 anyway after this process dies
-
         match result {
-            Ok(_) | Err(Errno::ESRCH) => (),
+            Ok(_) => (),
+            Err(Errno::ESRCH) => return,
             err => {
                 panic!("Failed to kill process {:?}: {:?}", self.inner.pid, err);
+            }
+        }
+
+        loop {
+            let status = self.waitpid().unwrap();
+            match status {
+                WaitStatus::Exited(_, _) => break,
+                WaitStatus::Signaled(_, Signal::SIGKILL, _) => break,
+                _ => continue,
             }
         }
     }

@@ -7,11 +7,10 @@ use reverie_syscalls::{Addr, AddrMut, MapFlags, ProtFlags, Syscall, SyscallInfo}
 use crate::{
     dirty_page_trackers::ExtraWritableRangesProvider,
     dispatcher::{Module, Subscribers},
-    error::{Error, EventFlags, Result},
+    error::{Error, Result, UnexpectedEventReason},
     saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
     },
-    segments::Segment,
 };
 
 use super::{
@@ -35,11 +34,10 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let syscall = *syscall;
-        let main = &context.check_coord.main;
+        let main = context.process();
 
         match syscall {
             Syscall::Mmap(mut mmap) => {
@@ -104,11 +102,10 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let syscall = *syscall;
-        let _main = &context.check_coord.main;
+        let active_segment = context.child.unwrap_checker_segment();
 
         match syscall {
             Syscall::Mmap(mmap) => {
@@ -126,13 +123,16 @@ impl StandardSyscallHandler for MmapHandler {
                     }
                 } else {
                     let saved_syscall = active_segment
+                        .replay
                         .syscall_log
                         .front()
-                        .ok_or(Error::UnexpectedSyscall(EventFlags::IS_EXCESS))?;
+                        .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
                     if saved_syscall.syscall != syscall {
                         error!("Mmap syscall mismatch");
-                        return Err(Error::UnexpectedSyscall(EventFlags::IS_INCORRECT));
+                        return Err(Error::UnexpectedSyscall(
+                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                        ));
                     }
 
                     if saved_syscall.ret_val != nix::libc::MAP_FAILED as _ {
@@ -159,13 +159,16 @@ impl StandardSyscallHandler for MmapHandler {
             }
             Syscall::Mremap(mut mremap) => {
                 let saved_syscall = active_segment
+                    .replay
                     .syscall_log
                     .front()
-                    .ok_or(Error::UnexpectedSyscall(EventFlags::IS_EXCESS))?;
+                    .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
                 if saved_syscall.syscall != syscall {
                     info!("Mremap syscall mismatch");
-                    return Err(Error::UnexpectedSyscall(EventFlags::IS_INCORRECT));
+                    return Err(Error::UnexpectedSyscall(
+                        UnexpectedEventReason::IncorrectTypeOrArguments,
+                    ));
                 }
 
                 // rewrite only if mmap has succeeded
@@ -203,13 +206,13 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        _active_segment: &mut Segment,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
+        let main = context.process();
         match saved_incomplete_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
                 // restore registers as if we haven't modified mmap/mremap flags
-                context.check_coord.main.modify_registers_with(|regs| {
+                main.modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1)
                 })?;
 
@@ -233,18 +236,14 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         _ret_val: isize,
         saved_syscall: &SavedSyscall,
-        active_segment: &mut Segment,
-        _context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         match saved_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
                 // restore registers as if we haven't modified mmap/mremap flags
-                active_segment
-                    .checker()
-                    .unwrap()
-                    .modify_registers_with(|regs| {
-                        regs.with_syscall_args(saved_syscall.syscall.into_parts().1)
-                    })?;
+                context.process().modify_registers_with(|regs| {
+                    regs.with_syscall_args(saved_syscall.syscall.into_parts().1)
+                })?;
 
                 Ok(SyscallHandlerExitAction::ContinueInferior)
             }

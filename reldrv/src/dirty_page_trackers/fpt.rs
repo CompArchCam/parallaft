@@ -46,7 +46,7 @@ impl DirtyPageAddressTracker for FptDirtyPageTracker {
             .remove(&(segment_id, role))
             .ok_or(Error::InvalidState)?;
 
-        Ok((Box::new(record), DirtyPageAddressFlags::empty()))
+        Ok((Box::new(record), DirtyPageAddressFlags::default()))
     }
 
     fn nr_dirty_pages<'a>(

@@ -43,9 +43,9 @@ impl StandardSyscallHandler for CounterCollector {
     fn handle_standard_syscall_entry(
         &self,
         _syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if context.process.pid == context.check_coord.main.pid {
+        if context.child.is_main() {
             self.syscall_count.fetch_add(1, Ordering::SeqCst);
         }
         Ok(SyscallHandlerExitAction::NextHandler)

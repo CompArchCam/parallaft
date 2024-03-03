@@ -1,5 +1,5 @@
 use log::info;
-use reverie_syscalls::{Addr, MemoryAccess, Syscall};
+use reverie_syscalls::{MemoryAccess, Syscall};
 
 use crate::{
     dispatcher::{Module, Subscribers},
@@ -22,26 +22,26 @@ impl StandardSyscallHandler for VdsoRemover {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         if ret_val == 0 {
             match syscall {
                 Syscall::Execve(_) | Syscall::Execveat(_) => {
-                    let process = context.process;
-                    let sp = process.read_registers()?.sp();
-                    let mut addr = Addr::<u64>::from_raw(sp as _).unwrap();
+                    let process = context.process();
+                    let sp = process.read_registers()?.sp() as usize;
+                    let mut addr = sp;
 
                     let mut zero_count: i32 = 2;
                     while zero_count > 0 {
-                        let t = process.read_value(addr)?;
+                        let t = process.read_value::<_, u64>(addr)?;
                         if t == 0 {
                             zero_count -= 1;
                         }
-                        addr = unsafe { addr.add(1) };
+                        addr += 8;
                     }
 
                     loop {
-                        let v = process.read_value(addr)?;
+                        let v = process.read_value::<_, u64>(addr)?;
 
                         if v == nix::libc::AT_NULL {
                             break;
@@ -49,17 +49,14 @@ impl StandardSyscallHandler for VdsoRemover {
 
                         if v == nix::libc::AT_SYSINFO_EHDR {
                             Process::new(process.pid) // TODO
-                            .write_value(unsafe { addr.into_mut() }, &nix::libc::AT_IGNORE)?;
+                            .write_value(sp, &nix::libc::AT_IGNORE)?;
 
-                            info!(
-                                "vDSO removed at offset {:p}",
-                                (addr.as_raw() - sp as usize) as *const u8
-                            );
+                            info!("vDSO removed at offset {:p}", (addr - sp) as *const u8);
 
                             break;
                         }
 
-                        addr = unsafe { addr.add(2) };
+                        addr += 16;
                     }
                 }
                 _ => (),

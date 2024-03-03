@@ -258,6 +258,50 @@ impl Registers {
         self.regs[7] = x7;
         self
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn dump(&self) -> String {
+        use std::fmt::Write;
+
+        let mut s = String::new();
+        writeln!(
+            &mut s,
+            "R15: {:#018x}     R14: {:#018x}     R13: {:#018x}     R12: {:#018x}",
+            self.inner.r15, self.inner.r14, self.inner.r13, self.inner.r12
+        )
+        .unwrap();
+        writeln!(
+            &mut s,
+            "R11: {:#018x}     R10: {:#018x}      R9: {:#018x}      R8: {:#018x}",
+            self.inner.r11, self.inner.r10, self.inner.r9, self.inner.r8
+        )
+        .unwrap();
+        writeln!(
+            &mut s,
+            "RDI: {:#018x}     RSI: {:#018x}     RBP: {:#018x}     RSP: {:#018x}",
+            self.inner.rdi, self.inner.rsi, self.inner.rbp, self.inner.rsp
+        )
+        .unwrap();
+        writeln!(
+            &mut s,
+            "RBX: {:#018x}     RDX: {:#018x}     RCX: {:#018x}     RAX: {:#018x}",
+            self.inner.rbx, self.inner.rdx, self.inner.rcx, self.inner.rax
+        )
+        .unwrap();
+        writeln!(
+            &mut s,
+            "RIP: {:#018x}  EFLAGS: {:#018x}   O_RAX: {:#018x}",
+            self.inner.rip, self.inner.eflags, self.inner.orig_rax
+        )
+        .unwrap();
+        writeln!(
+            &mut s,
+            "CS:  {:#018x}      FS: {:#018x}      GS: {:#018x}",
+            self.inner.cs, self.inner.fs, self.inner.gs
+        )
+        .unwrap();
+        s
+    }
 }
 
 impl Process {

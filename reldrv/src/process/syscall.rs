@@ -256,7 +256,6 @@ pub(crate) mod tests {
         },
         unistd::{fork, getpid, gettid, getuid, ForkResult},
     };
-    use serial_test::serial;
 
     use super::super::OwnedProcess;
     use super::*;
@@ -285,7 +284,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[serial]
+
     fn test_process_syscall_injection_on_entry() {
         let process = trace(|| {
             let pid1 = getpid();
@@ -362,7 +361,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[serial]
+
     fn test_process_syscall_injection_on_exit() {
         let process = trace(|| {
             let pid1 = getpid();
@@ -436,7 +435,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[serial]
+
     fn test_process_syscall_injection_on_exit_with_clone() {
         let parent = trace(|| {
             let pid1 = getpid();
@@ -519,7 +518,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[serial]
+
     fn test_process_clone() {
         let parent = trace(|| {
             // syscall is injected here

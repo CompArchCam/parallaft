@@ -1,15 +1,16 @@
-use std::arch::x86_64::{CpuidResult, __cpuid_count};
+use std::arch::x86_64::__cpuid_count;
 
 use log::info;
 use nix::sys::signal::Signal;
-use reverie_syscalls::{Addr, MemoryAccess, Syscall};
+use reverie_syscalls::Syscall;
 use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    error::{Error, EventFlags, Result},
-    process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
+    error::{Error, Result, UnexpectedEventReason},
+    process::{memory::instructions, Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::SavedTrapEvent,
+    signal_handlers::handle_nondeterministic_instruction,
     syscall_handlers::{
         is_execve_ok, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
     },
@@ -32,7 +33,8 @@ impl CpuidHandler {
             false,
             true,
         )?;
-        assert_eq!(ret, 0);
+
+        assert_eq!(ret, 0, "CPUID faulting is not supported on your machine");
         info!("Cpuid init done");
 
         Ok(())
@@ -40,63 +42,47 @@ impl CpuidHandler {
 }
 
 impl SignalHandler for CpuidHandler {
-    fn handle_signal<'s, 'p, 'segs, 'disp, 'scope, 'env, 'modules>(
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: &HandlerContext<'p, 'segs, 'disp, 'scope, 'env, 'modules>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
-        let process = context.process;
-
         if signal == Signal::SIGSEGV {
-            let regs = process.read_registers()?;
-            let instr: u64 = process.read_value(Addr::from_raw(regs.rip as _).unwrap())?;
+            let regs = context.process().read_registers()?;
 
-            let get_cpuid = || {
+            if context.process().instr_eq(regs.ip(), instructions::CPUID) {
+                info!("{} Trap: Cpuid", context.child);
+
                 let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                unsafe { __cpuid_count(leaf, subleaf) }
-            };
 
-            if instr & 0xffff == 0xa20f {
-                info!("[PID {: >8}] Trap: Cpuid", process.pid);
-
-                // cpuid
-                let cpuid = context
-                    .segments
-                    .lookup_segment_with::<Result<CpuidResult>>(
-                        process.pid,
-                        |mut segment, is_main| {
-                            if is_main {
-                                let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-                                let cpuid = get_cpuid();
-
-                                // add to the log
-                                segment
-                                    .trap_event_log
-                                    .push_back(SavedTrapEvent::Cpuid(leaf, subleaf, cpuid));
-
-                                Ok(cpuid)
-                            } else {
-                                // replay from the log
-                                let event = segment
-                                    .trap_event_log
-                                    .pop_front()
-                                    .ok_or(Error::UnexpectedTrap(EventFlags::IS_EXCESS))?;
-
-                                if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid) = event {
-                                    assert_eq!(regs.cpuid_leaf_subleaf(), (leaf, subleaf));
-                                    Ok(cpuid)
-                                } else {
-                                    Err(Error::UnexpectedTrap(EventFlags::IS_INCORRECT))
-                                }
+                let cpuid = handle_nondeterministic_instruction(
+                    context.child,
+                    context.check_coord,
+                    || unsafe { __cpuid_count(leaf, subleaf) },
+                    |cpuid| SavedTrapEvent::Cpuid(leaf, subleaf, cpuid),
+                    |event| {
+                        if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {
+                            if regs.cpuid_leaf_subleaf() != (leaf, subleaf) {
+                                return Err(Error::UnexpectedTrap(
+                                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                                ));
                             }
-                        },
-                    )
-                    .unwrap_or_else(|| Ok(get_cpuid()))?;
+                            Ok(cpuid_saved)
+                        } else {
+                            Err(Error::UnexpectedTrap(
+                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                            ))
+                        }
+                    },
+                )?;
 
-                process.write_registers(regs.with_cpuid_result(cpuid).with_offsetted_ip(2))?;
+                context.process().write_registers(
+                    regs.with_cpuid_result(cpuid)
+                        .with_offsetted_ip(instructions::CPUID.length() as _),
+                )?;
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
@@ -111,11 +97,11 @@ impl StandardSyscallHandler for CpuidHandler {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: &HandlerContext,
+        context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             // arch_prctl cpuid is cleared after every execve
-            Self::enable_cpuid_faulting(context.process)?;
+            Self::enable_cpuid_faulting(context.process())?;
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
