@@ -191,29 +191,29 @@ impl Process {
         saved_instr: Option<InjectedInstructionContext>,
     ) -> Result<()> {
         let process = Process::new(pid);
-        let mut saved_regs = saved_regs;
 
         if restart_old_syscall {
+            let mut saved_regs = saved_regs;
+
             assert!(saved_instr.is_none());
 
             // jump back to the previous instruction
-            debug_assert_eq!(
-                process.instr_at(
-                    saved_regs.ip() - instructions::SYSCALL.length(),
-                    instructions::SYSCALL.length()
-                ),
+            debug_assert!(process.instr_eq(
+                saved_regs.ip() - instructions::SYSCALL.length(),
                 instructions::SYSCALL
-            );
+            ));
             saved_regs = saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize));
 
             #[cfg(target_arch = "x86_64")]
             {
                 saved_regs.inner.rax = saved_regs.inner.orig_rax;
             }
-        }
 
-        // restore the registers
-        process.write_registers(saved_regs)?;
+            // restore the registers
+            process.write_registers(saved_regs)?;
+        } else {
+            process.write_registers(saved_regs)?;
+        }
 
         if let Some(saved_instr) = saved_instr {
             process.instr_restore(saved_instr)?;
@@ -238,6 +238,8 @@ impl Process {
                     matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
                 );
             }
+
+            process.write_registers(saved_regs)?;
         }
 
         // restore the signal mask
@@ -256,6 +258,8 @@ pub(crate) mod tests {
         },
         unistd::{fork, getpid, gettid, getuid, ForkResult},
     };
+
+    use crate::process::SyscallDir;
 
     use super::super::OwnedProcess;
     use super::*;
@@ -284,7 +288,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-
     fn test_process_syscall_injection_on_entry() {
         let process = trace(|| {
             let pid1 = getpid();
@@ -338,8 +341,6 @@ pub(crate) mod tests {
             WaitStatus::PtraceSyscall(process.pid)
         );
 
-        dbg!(ptrace::getsyscallinfo(process.pid).unwrap());
-
         // gettid entry
         ptrace::syscall(process.pid, None).unwrap();
         assert_eq!(
@@ -361,7 +362,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-
     fn test_process_syscall_injection_on_exit() {
         let process = trace(|| {
             let pid1 = getpid();
@@ -435,7 +435,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-
     fn test_process_syscall_injection_on_exit_with_clone() {
         let parent = trace(|| {
             let pid1 = getpid();
@@ -517,9 +516,7 @@ pub(crate) mod tests {
         assert_eq!(child.waitpid().unwrap(), WaitStatus::Exited(child.pid, 0));
     }
 
-    #[test]
-
-    fn test_process_clone() {
+    fn test_process_clone(restart_parent_syscall: bool, restart_child_syscall: bool) {
         let parent = trace(|| {
             // syscall is injected here
             getpid();
@@ -540,10 +537,7 @@ pub(crate) mod tests {
             Sysno::getpid
         );
 
-        assert!(matches!(
-            ptrace::getsyscallinfo(parent.pid).unwrap().op,
-            SyscallInfoOp::Entry { .. }
-        ));
+        assert_eq!(parent.syscall_dir().unwrap(), SyscallDir::Entry);
 
         let mut regs = parent.read_registers().unwrap();
 
@@ -582,14 +576,26 @@ pub(crate) mod tests {
 
         // clone the process
         let child = parent
-            .clone_process(CloneFlags::CLONE_PARENT, None, false, false)
+            .clone_process(
+                CloneFlags::CLONE_PARENT,
+                None,
+                restart_parent_syscall,
+                restart_child_syscall,
+            )
             .unwrap()
             .as_owned();
 
-        assert!(matches!(
-            ptrace::getsyscallinfo(parent.pid).unwrap().op,
-            SyscallInfoOp::Exit { .. }
-        ));
+        if restart_parent_syscall {
+            assert_eq!(parent.syscall_dir().unwrap(), SyscallDir::Entry);
+        } else {
+            assert_eq!(parent.syscall_dir().unwrap(), SyscallDir::Exit);
+        }
+
+        if restart_child_syscall {
+            assert_eq!(child.syscall_dir().unwrap(), SyscallDir::Entry);
+        } else {
+            assert_eq!(child.syscall_dir().unwrap(), SyscallDir::None);
+        }
 
         #[cfg(target_arch = "aarch64")]
         {
@@ -613,5 +619,25 @@ pub(crate) mod tests {
             child.waitpid().unwrap(),
             WaitStatus::Signaled(_, _, _)
         ));
+    }
+
+    #[test]
+    fn test_process_clone_restart_child_syscall() {
+        test_process_clone(false, true)
+    }
+
+    #[test]
+    fn test_process_clone_restart_parent_syscall() {
+        test_process_clone(true, false)
+    }
+
+    #[test]
+    fn test_process_clone_no_syscall_restart() {
+        test_process_clone(false, false)
+    }
+
+    #[test]
+    fn test_process_clone_restart_both_syscall() {
+        test_process_clone(true, true)
     }
 }
