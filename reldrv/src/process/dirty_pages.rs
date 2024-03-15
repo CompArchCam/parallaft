@@ -80,6 +80,22 @@ pub fn page_diff<'a>(
             {
                 if page1 != page2 {
                     info!("Page mismatch: {:?}", r.as_ptr());
+
+                    let mismatch_addr = page1
+                        .iter()
+                        .zip(page2.iter())
+                        .position(|(a, b)| a != b)
+                        .unwrap()
+                        & !0x8;
+
+                    let page1_word = &page1[mismatch_addr..mismatch_addr + 0x8];
+                    let page2_word = &page2[mismatch_addr..mismatch_addr + 0x8];
+
+                    info!(
+                        "{:02X?} != {:02X?} @ offset {:?}",
+                        page1_word, page2_word, mismatch_addr as *const u8
+                    );
+
                     trace!("Page data 1:\n{:?}", page1.hex_dump());
                     trace!("Page data 2:\n{:?}", page2.hex_dump());
                 }
