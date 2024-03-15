@@ -263,6 +263,7 @@ fn main() {
             sample_memory_usage: cli.sample_memory_usage,
             memory_sample_includes_rt: cli.memory_sample_includes_rt,
             memory_sample_interval: cli.memory_sample_interval,
+            is_test: false,
         },
     );
 

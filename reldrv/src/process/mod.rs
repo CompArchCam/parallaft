@@ -26,6 +26,8 @@ use nix::{
     unistd::{getpid, Pid},
 };
 
+use self::memory::instructions;
+
 lazy_static! {
     pub static ref PAGESIZE: usize = procfs::page_size() as _;
     pub static ref PAGEMASK: usize = !(*PAGESIZE - 1);
@@ -34,6 +36,23 @@ lazy_static! {
 pub struct Process {
     pub pid: Pid,
     procfs: Lazy<procfs::ProcResult<procfs::process::Process>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SyscallDir {
+    Entry,
+    Exit,
+    None,
+}
+
+impl SyscallDir {
+    pub fn is_entry(&self) -> bool {
+        *self == SyscallDir::Entry
+    }
+
+    pub fn is_exit(&self) -> bool {
+        *self == SyscallDir::Exit
+    }
 }
 
 impl Process {
@@ -85,6 +104,71 @@ impl Process {
 
     pub fn waitpid(&self) -> std::result::Result<WaitStatus, Errno> {
         waitpid(self.pid, None)
+    }
+
+    pub fn syscall_dir(&self) -> std::result::Result<SyscallDir, Errno> {
+        Ok(match ptrace::getsyscallinfo(self.pid)?.op {
+            ptrace::SyscallInfoOp::Entry { .. } => SyscallDir::Entry,
+            ptrace::SyscallInfoOp::Exit { .. } => SyscallDir::Exit,
+            _ => SyscallDir::None,
+        })
+    }
+
+    pub fn restart_to_syscall_entry_stop(&self, syscall_instr_ip: usize) -> Result<()> {
+        match self.syscall_dir()? {
+            SyscallDir::Entry => Ok(()),
+            SyscallDir::Exit => todo!("Process::setup_syscall_entry with syscall-exit-stop"),
+            SyscallDir::None => {
+                debug_assert!(self.instr_eq(syscall_instr_ip, instructions::SYSCALL));
+
+                self.modify_registers_with(|r| r.with_syscall_skipped().with_ip(syscall_instr_ip))?;
+                self.resume()?;
+
+                // Syscall entry
+                let status = self.waitpid()?;
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
+
+                Ok(())
+            }
+        }
+    }
+
+    pub fn restart_to_syscall_exit_stop(&self, syscall_instr_ip: usize) -> Result<()> {
+        match self.syscall_dir()? {
+            SyscallDir::Entry => todo!("Process::setup_syscall_exit with syscall-entry-stop"),
+            SyscallDir::Exit => Ok(()),
+            SyscallDir::None => {
+                debug_assert!(self.instr_eq(syscall_instr_ip, instructions::SYSCALL));
+
+                self.modify_registers_with(|r| r.with_syscall_skipped().with_ip(syscall_instr_ip))?;
+                self.resume()?;
+
+                // Syscall entry
+                let status = self.waitpid()?;
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
+
+                self.resume()?;
+
+                // Syscall exit
+                let status = self.waitpid()?;
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Exit);
+
+                Ok(())
+            }
+        }
+    }
+
+    pub fn seize(&self) -> std::result::Result<(), Errno> {
+        ptrace::seize(
+            self.pid,
+            ptrace::Options::PTRACE_O_TRACESYSGOOD
+                | ptrace::Options::PTRACE_O_TRACECLONE
+                | ptrace::Options::PTRACE_O_TRACEFORK
+                | ptrace::Options::PTRACE_O_EXITKILL,
+        )
     }
 }
 

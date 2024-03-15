@@ -12,7 +12,7 @@ use log::{debug, error, info, warn};
 
 use nix::errno::Errno;
 use nix::sched::CloneFlags;
-use nix::sys::ptrace::{self, SyscallInfoOp};
+use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitStatus};
 
@@ -94,6 +94,10 @@ impl<P: Borrow<Process>> ProcessIdentity<P> {
 
     pub fn is_main(&self) -> bool {
         matches!(self, ProcessIdentity::Main { .. })
+    }
+
+    pub fn is_checker(&self) -> bool {
+        matches!(self, ProcessIdentity::Checker { .. })
     }
 }
 
@@ -306,7 +310,7 @@ where
                         break ExitReason::NormalExit(0);
                     }
 
-                    warn!("{child_ref} Signal: {sig}");
+                    info!("{child_ref} Signal: {sig}");
                     break ExitReason::Signalled(sig);
                 }
                 WaitStatus::Stopped(_, sig) => {
@@ -314,12 +318,7 @@ where
                 }
                 WaitStatus::PtraceSyscall(_) => {
                     // Tell if it is a syscall entry or exit
-                    let is_syscall_entry = match ptrace::getsyscallinfo(process.pid) {
-                        Ok(syscall_info) => {
-                            matches!(syscall_info.op, SyscallInfoOp::Entry { .. })
-                        }
-                        Err(err) => unreachable!("{err:?}"),
-                    };
+                    let is_syscall_entry = process.syscall_dir().unwrap().is_entry();
                     assert_eq!(is_syscall_entry, last_syscall_type.is_none());
 
                     let regs = process_ctx.process.read_registers().unwrap();
@@ -446,6 +445,7 @@ where
         's: 'scope,
         's: 'disp,
     {
+        info!("[M      ] Checkpoint");
         if self.options.no_fork {
             process.resume()?;
             return Ok(());
@@ -469,7 +469,7 @@ where
                 clone_flags,
                 None,
                 restart_old_syscall,
-                restart_old_syscall || in_chain,
+                in_chain && !is_finishing,
             )?
             .as_owned();
 
@@ -498,7 +498,7 @@ where
         match (in_chain, is_finishing) {
             (false, false) => {
                 // Start of the segment chain
-                info!("Protection on");
+                info!("[M      ] Protection on");
                 checker = Some(reference);
                 checkpoint = Checkpoint::initial(epoch_local, caller);
             }
@@ -506,21 +506,21 @@ where
                 // Middle of the segment chain
                 checker = Some(
                     reference
-                        .clone_process(clone_flags, None, restart_old_syscall, restart_old_syscall)?
+                        .clone_process(clone_flags, None, false, false)?
                         .as_owned(),
                 );
                 checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             (true, true) => {
                 // End of the segment chain
-                info!("Protection off");
+                info!("[M      ] Protection off");
                 checker = None;
                 checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             _ => unreachable!(),
         }
 
-        debug!("New checkpoint: {:?}", checkpoint);
+        debug!("New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
             self.add_checkpoint(segments_mut, checkpoint, checker, scope)
         })?;
@@ -541,6 +541,8 @@ where
         's: 'disp,
     {
         segment.with_upgraded(|segment| {
+            info!("[C{:>6}] Checkpoint", segment.nr);
+
             if self.options.no_state_cmp {
                 segment.mark_as_checked(false).unwrap();
             } else {
@@ -656,7 +658,7 @@ where
             |segment| {
                 self.dispatcher.handle_segment_created(&segment)?;
 
-                let checker = segment.checker().unwrap().clone().detach();
+                let checker = segment.checker().unwrap().clone().detach().expect("Failed to detach checker");
 
                 let segment_id = segment.nr;
                 let segment = ArcRwLockReadGuard::rwlock(&segment).clone();
@@ -677,8 +679,6 @@ where
                         }
 
                         loop {
-                            park();
-
                             let segment_locked = segment.read();
                             match &segment_locked.status {
                                 SegmentStatus::New { .. } => (),
@@ -696,9 +696,11 @@ where
                             }
 
                             drop(segment_locked);
+
+                            park();
                         }
 
-                        checker.attach();
+                        checker.attach().expect("Failed to reattach checker");
 
                         self.run_event_loop(
                             ProcessIdentity::Checker::<Process>(segment),
@@ -1046,7 +1048,6 @@ where
         if handled == SyscallHandlerExitAction::NextHandler {
             match sysno {
                 SYSNO_CHECKPOINT_TAKE => {
-                    info!("{child} Checkpoint");
                     self.handle_checkpoint(
                         child,
                         false,
@@ -1056,7 +1057,6 @@ where
                     )?;
                 }
                 SYSNO_CHECKPOINT_FINI => {
-                    info!("{child} Checkpoint finish");
                     self.handle_checkpoint(
                         child,
                         true,

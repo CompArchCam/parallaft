@@ -47,8 +47,7 @@ use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::pmu::PmuSegmentor;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
 
-use crate::process::detach::DetachedProcess;
-
+use crate::process::OwnedProcess;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
@@ -145,6 +144,9 @@ pub struct RelShellOptions {
     pub sample_memory_usage: bool,
     pub memory_sample_includes_rt: bool,
     pub memory_sample_interval: Duration,
+
+    // integration test
+    pub is_test: bool,
 }
 
 impl RelShellOptionsBuilder {
@@ -154,7 +156,7 @@ impl RelShellOptionsBuilder {
         #[cfg(target_arch = "x86_64")]
         options.no_cpuid_trap(true).no_rdtsc_trap(true);
 
-        options.max_nr_live_segments(1);
+        options.max_nr_live_segments(1).is_test(true);
 
         options
     }
@@ -162,7 +164,7 @@ impl RelShellOptionsBuilder {
     pub fn test_parallel_default() -> Self {
         let mut options = Self::test_serial_default();
 
-        options.max_nr_live_segments(8);
+        options.max_nr_live_segments(8).is_test(true);
 
         options
     }
@@ -174,14 +176,14 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         std::env::args_os().collect::<Vec<OsString>>()
     );
 
-    let child = DetachedProcess::new_owned(child_pid);
+    let child = OwnedProcess::new(child_pid);
 
     assert_eq!(
         waitpid(child.pid, Some(WaitPidFlag::WSTOPPED)).unwrap(),
         WaitStatus::Stopped(child_pid, Signal::SIGSTOP)
     );
 
-    let child = child.attach();
+    child.seize().expect("Failed to seize process with ptrace");
 
     let disp = Dispatcher::new();
 
@@ -212,6 +214,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             options.pmu_segmentation_skip_instructions,
             &options.main_cpu_set,
             &options.checker_cpu_set,
+            options.is_test,
         ));
     } else {
         disp.register_module(LegacyInferiorRtLib::new());

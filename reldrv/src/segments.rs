@@ -59,7 +59,9 @@ impl Checkpoint {
             epoch,
             caller,
             kind: CheckpointKind::Subsequent {
-                reference: Mutex::new(DetachedProcess::from(reference)),
+                reference: Mutex::new(
+                    DetachedProcess::detach_from(reference).expect("Failed to detach process"),
+                ),
             },
         }
     }
@@ -282,6 +284,19 @@ impl Segment {
             let checker = checker.deref();
             let mut reference = checkpoint_end.reference().unwrap();
 
+            info!("Comparing registers");
+
+            let checker_regs = checker.read_registers_precise()?;
+            let reference_registers = reference.borrow_with(|p2| p2.read_registers())??;
+
+            if checker_regs != reference_registers {
+                error!("Register differs for epoch {}", self.checkpoint_start.epoch);
+                info!("Checker registers:\n{}", checker_regs.dump());
+                info!("Reference registers:\n{}", reference_registers.dump());
+
+                return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
+            }
+
             let checker_writable_ranges = checker.get_writable_ranges()?;
             let reference_writable_ranges = reference.get_writable_ranges()?;
 
@@ -306,27 +321,12 @@ impl Segment {
 
             info!("Comparing {} dirty pages", nr_dirty_pages);
 
-            if !page_diff(checker, (*reference).as_ref(), &dpa_merged)? {
+            if !reference.borrow_with(|reference_borrowed| {
+                page_diff(checker, (*reference_borrowed).as_ref(), &dpa_merged)
+            })?? {
                 error!("Memory differs for epoch {}", self.checkpoint_start.epoch);
                 return Ok((Err(CheckFailReason::MemoryMismatch), nr_dirty_pages));
             }
-
-            info!("Memory check passed");
-            info!("Comparing registers");
-
-            let checker_regs = checker.read_registers_precise()?;
-            let reference_registers = reference.borrow_with(|p2| p2.read_registers())?;
-
-            if checker_regs != reference_registers {
-                error!("Register differs for epoch {}", self.checkpoint_start.epoch);
-                info!("Checker registers:\n{}", checker_regs.dump());
-                info!("Reference registers:\n{}", reference_registers.dump());
-
-                return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
-            }
-
-            info!("Register check passed");
-            info!("All check passed");
 
             Ok((Ok(()), nr_dirty_pages))
         } else {

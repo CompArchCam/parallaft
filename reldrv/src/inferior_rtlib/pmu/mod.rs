@@ -21,6 +21,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     inferior_rtlib::ScheduleCheckpoint,
+    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
@@ -57,6 +58,7 @@ pub struct PmuSegmentor {
     skip_instructions: Option<u64>,
     main_pmu_type: PmuType,
     checker_pmu_type: PmuType,
+    is_test: bool,
 }
 
 enum MainState {
@@ -78,6 +80,7 @@ impl PmuSegmentor {
         skip_instructions: Option<u64>,
         main_cpu_set: &[usize],
         checker_cpu_set: &[usize],
+        is_test: bool,
     ) -> Self {
         let main_pmu_type = PmuType::detect(*main_cpu_set.get(0).unwrap_or(&0));
         let checker_pmu_type = PmuType::detect(*checker_cpu_set.get(0).unwrap_or(&0));
@@ -92,6 +95,7 @@ impl PmuSegmentor {
             skip_instructions,
             main_pmu_type,
             checker_pmu_type,
+            is_test,
         }
     }
 
@@ -279,11 +283,7 @@ impl SignalHandler for PmuSegmentor {
 
                 let mut take_checkpoint = false;
 
-                debug!(
-                    "[PID {: >8}] Trap: Perf @ IP = {:p}",
-                    context.process().pid,
-                    ip as *const u8
-                );
+                info!("{} Trap: Perf @ IP = {:p}", context.child, ip as *const u8);
 
                 if let ProcessIdentityRef::Main(process) = context.child {
                     let mut state = self.main_state.lock();
@@ -482,6 +482,23 @@ impl ScheduleCheckpoint for PmuSegmentor {
     }
 }
 
+impl ProcessLifetimeHook for PmuSegmentor {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        if self.is_test {
+            self.schedule_checkpoint(context.check_coord)?;
+        }
+        Ok(())
+    }
+}
+
 impl Module for PmuSegmentor {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -491,5 +508,6 @@ impl Module for PmuSegmentor {
         subs.install_standard_syscall_handler(self);
         subs.install_signal_handler(self);
         subs.install_schedule_checkpoint(self);
+        subs.install_process_lifetime_hook(self);
     }
 }
