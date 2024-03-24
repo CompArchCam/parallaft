@@ -299,19 +299,19 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             if check_coord.has_errors() {
                 exit_status = ExitReason::StateMismatch
             }
+
+            if let Some(ref output) = options.dump_stats {
+                let s = format!("{}\n", statistics::as_text(disp.statistics()));
+
+                match output {
+                    StatsOutput::File(path) => fs::write(path, s).unwrap(),
+                    StatsOutput::StdOut => print!("{}", s),
+                }
+            }
         }));
 
         if status.is_err() {
             check_coord.handle_panic();
-        }
-
-        if let Some(ref output) = options.dump_stats {
-            let s = format!("{}\n", statistics::as_text(disp.statistics()));
-
-            match output {
-                StatsOutput::File(path) => fs::write(path, s).unwrap(),
-                StatsOutput::StdOut => print!("{}", s),
-            }
         }
     });
 
