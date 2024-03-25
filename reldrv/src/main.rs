@@ -14,6 +14,7 @@ use git_version::git_version;
 
 use reldrv::check_coord::ExitReason;
 use reldrv::helpers::cpufreq::CpuFreqGovernor;
+use reldrv::inferior_rtlib::pmu::BranchCounterType;
 use reldrv::StatsOutput;
 use reldrv::{
     check_coord::CheckCoordinatorOptions, parent_work, statistics::perf::CounterKind,
@@ -136,6 +137,10 @@ struct CliArgs {
     /// In PMU-based segmentation, number of instructions to skip at the start of the main process execution before the first checkpoint.
     #[arg(long)]
     pmu_segmentation_skip_instructions: Option<u64>,
+
+    /// In PMU-based segmentation, type of branch to count.
+    #[arg(long, default_value = "all-excl-far")]
+    pmu_segmentation_branch_type: BranchCounterType,
 
     /// Dirty page tracker to use
     #[arg(long, default_value = "soft-dirty")]
@@ -269,6 +274,7 @@ fn main() {
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
             pmu_segmentation_skip_instructions: cli.pmu_segmentation_skip_instructions,
+            pmu_segmentation_branch_type: cli.pmu_segmentation_branch_type,
             sample_memory_usage: cli.sample_memory_usage,
             memory_sample_includes_rt: cli.memory_sample_includes_rt,
             memory_sample_interval: cli.memory_sample_interval,

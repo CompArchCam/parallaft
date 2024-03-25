@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use derive_builder::Builder;
+use inferior_rtlib::pmu::BranchCounterType;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
@@ -131,6 +132,7 @@ pub struct RelShellOptions {
     // enable automatic segmentation based on precise PMU interrupts
     pub pmu_segmentation: bool,
     pub pmu_segmentation_skip_instructions: Option<u64>,
+    pub pmu_segmentation_branch_type: BranchCounterType,
 
     // dirty page tracker backend to use
     pub dirty_page_tracker: DirtyPageAddressTrackerType,
@@ -219,6 +221,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             options.pmu_segmentation_skip_instructions,
             &options.main_cpu_set,
             &options.checker_cpu_set,
+            options.pmu_segmentation_branch_type,
             options.is_test,
         ));
     } else {

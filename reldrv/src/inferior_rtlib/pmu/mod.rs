@@ -10,6 +10,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use clap::ValueEnum;
 use lazy_init::Lazy;
 use log::{debug, info};
 
@@ -68,6 +69,7 @@ pub struct PmuSegmentor {
     is_test: bool,
     intel_core_atom_ty: Lazy<u32>,
     checkpoint_count: AtomicU64,
+    branch_counter_type: BranchCounterType,
 }
 
 enum MainState {
@@ -81,6 +83,14 @@ enum MainState {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum BranchCounterType {
+    #[default]
+    AllExclFar,
+    Cond,
+    CondTaken,
+}
+
 impl PmuSegmentor {
     const SIGVAL_MAGIC: usize = 0xdeadbeef;
 
@@ -89,6 +99,7 @@ impl PmuSegmentor {
         skip_instructions: Option<u64>,
         main_cpu_set: &[usize],
         checker_cpu_set: &[usize],
+        branch_counter_type: BranchCounterType,
         is_test: bool,
     ) -> Self {
         let main_pmu_type = PmuType::detect(*main_cpu_set.get(0).unwrap_or(&0));
@@ -107,6 +118,7 @@ impl PmuSegmentor {
             is_test,
             intel_core_atom_ty: Lazy::new(),
             checkpoint_count: AtomicU64::new(0),
+            branch_counter_type,
         }
     }
 
@@ -159,9 +171,9 @@ impl PmuSegmentor {
         pid: Pid,
         irq_period: Option<u64>,
     ) -> Box<dyn PmuCounter + Send> {
-        match self.pmu_type_for(role) {
+        match (self.pmu_type_for(role), self.branch_counter_type) {
             #[cfg(target_arch = "x86_64")]
-            PmuType::Amd => Box::new(PmuCounterDiff::new(
+            (PmuType::Amd, BranchCounterType::AllExclFar) => Box::new(PmuCounterDiff::new(
                 perf_counter(
                     Raw::new(0xc2 /* ex_ret_brn */),
                     pid,
@@ -170,7 +182,8 @@ impl PmuSegmentor {
                 perf_counter(Raw::new(0xc6 /* ex_ret_brn_far */), pid, None),
             )),
             #[cfg(target_arch = "x86_64")]
-            PmuType::IntelLakeCove | PmuType::IntelOther => {
+            (PmuType::IntelLakeCove, BranchCounterType::AllExclFar)
+            | (PmuType::IntelOther, BranchCounterType::AllExclFar) => {
                 Box::new(PmuCounterDiff::new(
                     perf_counter(
                         Raw::new(0x00c4 /* BR_INST_RETIRED.ALL_BRANCHES */),
@@ -181,7 +194,7 @@ impl PmuSegmentor {
                 ))
             }
             #[cfg(target_arch = "x86_64")]
-            PmuType::IntelMont { in_hybrid } => {
+            (PmuType::IntelMont { in_hybrid }, BranchCounterType::AllExclFar) => {
                 let perf_event_type = if in_hybrid {
                     self.intel_core_atom_ty() /* cpu_atom */
                 } else {
@@ -207,7 +220,52 @@ impl PmuSegmentor {
                     ),
                 ))
             }
-            _ => panic!("Unsupported PMU"),
+            #[cfg(target_arch = "x86_64")]
+            (PmuType::IntelLakeCove, BranchCounterType::Cond)
+            | (PmuType::IntelOther, BranchCounterType::Cond) => perf_counter(
+                Raw::new(0x11c4 /* BR_INST_RETIRED.COND */),
+                pid,
+                irq_period.map(|period| (period, SampleSkid::RequireZero)),
+            ),
+            #[cfg(target_arch = "x86_64")]
+            (PmuType::IntelMont { in_hybrid }, BranchCounterType::Cond) => {
+                let perf_event_type = if in_hybrid {
+                    self.intel_core_atom_ty() /* cpu_atom */
+                } else {
+                    0x04 /* cpu */
+                };
+
+                perf_counter(
+                    TypedRaw::new(perf_event_type, 0x7ec4 /* BR_INST_RETIRED.COND */),
+                    pid,
+                    irq_period.map(|period| (period, SampleSkid::RequireZero)),
+                )
+            }
+            #[cfg(target_arch = "x86_64")]
+            (PmuType::IntelLakeCove, BranchCounterType::CondTaken)
+            | (PmuType::IntelOther, BranchCounterType::CondTaken) => perf_counter(
+                Raw::new(0x01c4 /* BR_INST_RETIRED.COND_TAKEN */),
+                pid,
+                irq_period.map(|period| (period, SampleSkid::RequireZero)),
+            ),
+            #[cfg(target_arch = "x86_64")]
+            (PmuType::IntelMont { in_hybrid }, BranchCounterType::CondTaken) => {
+                let perf_event_type = if in_hybrid {
+                    self.intel_core_atom_ty() /* cpu_atom */
+                } else {
+                    0x04 /* cpu */
+                };
+
+                perf_counter(
+                    TypedRaw::new(
+                        perf_event_type,
+                        0xfec4, /* BR_INST_RETIRED.COND_TAKEN */
+                    ),
+                    pid,
+                    irq_period.map(|period| (period, SampleSkid::RequireZero)),
+                )
+            }
+            _ => panic!("Unsupported PMU and branch type combination"),
         }
     }
 
