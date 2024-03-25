@@ -157,6 +157,14 @@ struct CliArgs {
     #[arg(long, value_parser = parse_duration, default_value = "500")]
     memory_sample_interval: Duration,
 
+    /// Enable speculative store bypass misfeature
+    #[arg(long)]
+    enable_speculative_store_bypass_misfeature: bool,
+
+    /// Enable indirect branch speculation misfeature
+    #[arg(long)]
+    enable_indirect_branch_speculation_misfeature: bool,
+
     command: String,
     args: Vec<String>,
 }
@@ -264,6 +272,10 @@ fn main() {
             sample_memory_usage: cli.sample_memory_usage,
             memory_sample_includes_rt: cli.memory_sample_includes_rt,
             memory_sample_interval: cli.memory_sample_interval,
+            enable_speculative_store_bypass_misfeature: cli
+                .enable_speculative_store_bypass_misfeature,
+            enable_indirect_branch_speculation_misfeature: cli
+                .enable_indirect_branch_speculation_misfeature,
             is_test: false,
         },
     );

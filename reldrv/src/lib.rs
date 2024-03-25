@@ -42,6 +42,7 @@ use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 use crate::helpers::cpufreq::CpuFreqGovernor;
 use crate::helpers::cpufreq::CpuFreqSetter;
+use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
 use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
 use crate::inferior_rtlib::pmu::PmuSegmentor;
@@ -144,6 +145,10 @@ pub struct RelShellOptions {
     pub sample_memory_usage: bool,
     pub memory_sample_includes_rt: bool,
     pub memory_sample_interval: Duration,
+
+    // speculation control options
+    pub enable_speculative_store_bypass_misfeature: bool,
+    pub enable_indirect_branch_speculation_misfeature: bool,
 
     // integration test
     pub is_test: bool,
@@ -249,6 +254,11 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     disp.register_module(CheckpointSizeLimiter::new(
         options.checkpoint_size_watermark,
+    ));
+
+    disp.register_module(SpecCtrlSetter::new(
+        options.enable_speculative_store_bypass_misfeature,
+        options.enable_indirect_branch_speculation_misfeature,
     ));
 
     // Statistics
