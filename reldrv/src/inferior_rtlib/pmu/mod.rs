@@ -4,8 +4,9 @@ mod counter;
 mod perf_typed_raw;
 mod pmu_type;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
+use lazy_init::Lazy;
 use log::{debug, info};
 
 use nix::{
@@ -59,6 +60,7 @@ pub struct PmuSegmentor {
     main_pmu_type: PmuType,
     checker_pmu_type: PmuType,
     is_test: bool,
+    intel_core_atom_ty: Lazy<u32>,
 }
 
 enum MainState {
@@ -96,6 +98,7 @@ impl PmuSegmentor {
             main_pmu_type,
             checker_pmu_type,
             is_test,
+            intel_core_atom_ty: Lazy::new(),
         }
     }
 
@@ -104,6 +107,18 @@ impl PmuSegmentor {
             ProcessRole::Main => self.main_pmu_type,
             ProcessRole::Checker => self.checker_pmu_type,
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn intel_core_atom_ty(&self) -> u32 {
+        *self.intel_core_atom_ty.get_or_create(|| {
+            let path = Path::new("/sys/bus/event_source/devices/cpu_atom/type");
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        })
     }
 
     fn instr_counter(
@@ -115,7 +130,10 @@ impl PmuSegmentor {
         match self.pmu_type_for(role) {
             #[cfg(target_arch = "x86_64")]
             PmuType::IntelMont { in_hybrid: true } => perf_counter(
-                TypedRaw::new(0x08 /* cpu_atom */, 0xc0 /* instructions */),
+                TypedRaw::new(
+                    self.intel_core_atom_ty(), /* cpu_atom */
+                    0xc0,                      /* instructions */
+                ),
                 pid,
                 Some((period, SampleSkid::Arbitrary)),
             ),
@@ -157,7 +175,7 @@ impl PmuSegmentor {
             #[cfg(target_arch = "x86_64")]
             PmuType::IntelMont { in_hybrid } => {
                 let perf_event_type = if in_hybrid {
-                    0x08 /* cpu_atom */
+                    self.intel_core_atom_ty() /* cpu_atom */
                 } else {
                     0x04 /* cpu */
                 };
