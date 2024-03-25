@@ -3066,9 +3066,13 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Readlinkat {
         dirfd: i32,
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
+        #[buf_may_written_with_len = buf_len]
         buf: Option<AddrMut<libc::c_char>>,
         buf_len: usize,
     }
