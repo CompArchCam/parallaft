@@ -446,6 +446,10 @@ impl SignalHandler for PmuSegmentor {
                         }
                     };
 
+                    if take_checkpoint {
+                        self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     *state = Some(next_state);
                 } else {
                     let mut segment_info_map = self.segment_info_map.lock();
@@ -513,7 +517,6 @@ impl SignalHandler for PmuSegmentor {
                 }
 
                 if take_checkpoint {
-                    self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
                     return Ok(SignalHandlerExitAction::Checkpoint);
                 } else {
                     return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
