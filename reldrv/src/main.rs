@@ -10,6 +10,7 @@ use nix::unistd::{fork, ForkResult};
 
 use clap::Parser;
 use clap_num::maybe_hex;
+use git_version::git_version;
 
 use reldrv::check_coord::ExitReason;
 use reldrv::helpers::cpufreq::CpuFreqGovernor;
@@ -21,7 +22,7 @@ use reldrv::{
 use syscalls::{syscall, Sysno};
 
 #[derive(Parser, Debug)]
-#[command(version, about)]
+#[command(version = git_version!())]
 struct CliArgs {
     /// Main CPU set
     #[arg(short, long, use_value_delimiter = true)]
