@@ -585,6 +585,20 @@ impl ProcessLifetimeHook for PmuSegmentor {
         }
         Ok(())
     }
+
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        let segment_info_map = self.segment_info_map.lock();
+        assert!(segment_info_map.is_empty());
+        Ok(())
+    }
 }
 
 impl StatisticsProvider for PmuSegmentor {
