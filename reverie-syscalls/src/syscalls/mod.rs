@@ -721,6 +721,7 @@ impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Ioctl {
         match self.request() {
             ioctl::Request::TCSETS(_) => builder,
             ioctl::Request::TCGETS(t) => builder.may_write_object(t),
+            ioctl::Request::TIOCGWINSZ(t) => builder.may_write_object(t),
             _ => builder.may_write_anything(),
         }
         .build()
@@ -733,6 +734,7 @@ impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for Ioctl {
         match self.request() {
             ioctl::Request::TCSETS(t) => builder.may_read_object(t),
             ioctl::Request::TCGETS(_) => builder,
+            ioctl::Request::TIOCGWINSZ(_) => builder,
             _ => builder.may_read_anything(),
         }
         .build()
