@@ -4,7 +4,11 @@ mod counter;
 mod perf_typed_raw;
 mod pmu_type;
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use lazy_init::Lazy;
 use log::{debug, info};
@@ -25,6 +29,8 @@ use crate::{
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
+    statistics::StatisticsProvider,
+    statistics_list,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
@@ -61,6 +67,7 @@ pub struct PmuSegmentor {
     checker_pmu_type: PmuType,
     is_test: bool,
     intel_core_atom_ty: Lazy<u32>,
+    checkpoint_count: AtomicU64,
 }
 
 enum MainState {
@@ -99,6 +106,7 @@ impl PmuSegmentor {
             checker_pmu_type,
             is_test,
             intel_core_atom_ty: Lazy::new(),
+            checkpoint_count: AtomicU64::new(0),
         }
     }
 
@@ -447,6 +455,7 @@ impl SignalHandler for PmuSegmentor {
                 }
 
                 if take_checkpoint {
+                    self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
                     return Ok(SignalHandlerExitAction::Checkpoint);
                 } else {
                     return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
@@ -517,6 +526,16 @@ impl ProcessLifetimeHook for PmuSegmentor {
     }
 }
 
+impl StatisticsProvider for PmuSegmentor {
+    fn class_name(&self) -> &'static str {
+        "pmu_segmentor"
+    }
+
+    fn statistics(&self) -> Box<[(String, Box<dyn crate::statistics::StatisticValue>)]> {
+        statistics_list!(checkpoint_count = self.checkpoint_count.load(Ordering::Relaxed))
+    }
+}
+
 impl Module for PmuSegmentor {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -527,5 +546,6 @@ impl Module for PmuSegmentor {
         subs.install_signal_handler(self);
         subs.install_schedule_checkpoint(self);
         subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }
