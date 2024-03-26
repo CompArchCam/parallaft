@@ -6,6 +6,7 @@ mod pmu_type;
 
 use std::{
     collections::HashMap,
+    fmt::Debug,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -41,6 +42,7 @@ use self::{
     pmu_type::PmuType,
 };
 
+#[derive(Debug)]
 struct SegmentInfo {
     branches: u64,
     ip: usize,
@@ -57,6 +59,16 @@ enum CheckerState {
         breakpoint: Counter,
     },
     Done,
+}
+
+impl Debug for CheckerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CountingBranches { .. } => write!(f, "CountingBranches"),
+            Self::Stepping { .. } => write!(f, "Stepping"),
+            Self::Done => write!(f, "Done"),
+        }
+    }
 }
 
 pub struct PmuSegmentor {
@@ -81,6 +93,18 @@ enum MainState {
         instr_irq: Box<dyn PmuCounter + Send>,
         branch_counter: Box<dyn PmuCounter + Send>,
     },
+}
+
+impl Debug for MainState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::New => write!(f, "New"),
+            Self::SkippingInstructions { .. } => {
+                write!(f, "SkippingInstructions")
+            }
+            Self::CountingBranches { .. } => write!(f, "CountingBranches"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
