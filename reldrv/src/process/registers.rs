@@ -302,6 +302,15 @@ impl Registers {
         .unwrap();
         s
     }
+
+    pub fn strip_orig(mut self) -> Registers {
+        #[cfg(target_arch = "x86_64")]
+        {
+            self.orig_rax = 0;
+        }
+
+        self
+    }
 }
 
 impl Process {

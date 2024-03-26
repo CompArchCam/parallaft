@@ -286,8 +286,10 @@ impl Segment {
 
             info!("Comparing registers");
 
-            let checker_regs = checker.read_registers_precise()?;
-            let reference_registers = reference.borrow_with(|p2| p2.read_registers())??;
+            let checker_regs = checker.read_registers_precise()?.strip_orig();
+            let reference_registers = reference
+                .borrow_with(|p2| p2.read_registers())??
+                .strip_orig();
 
             if checker_regs != reference_registers {
                 error!("Register differs for epoch {}", self.checkpoint_start.epoch);
