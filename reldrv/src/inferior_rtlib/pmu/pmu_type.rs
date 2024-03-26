@@ -114,7 +114,7 @@ impl PmuType {
             #[cfg(target_arch = "x86_64")]
             PmuType::Amd => 2048,
             #[cfg(target_arch = "x86_64")]
-            PmuType::IntelLakeCove | PmuType::IntelMont { .. } | PmuType::IntelOther => 256,
+            PmuType::IntelLakeCove | PmuType::IntelMont { .. } | PmuType::IntelOther => 1024,
             #[cfg(target_arch = "aarch64")]
             PmuType::Armv8 => todo!(),
             _ => 0,
