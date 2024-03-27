@@ -1,7 +1,8 @@
-use std::arch::x86_64::__cpuid_count;
+use std::{arch::x86_64::__cpuid_count, collections::HashMap};
 
-use log::info;
+use log::{debug, info};
 use nix::sys::signal::Signal;
+use parking_lot::Mutex;
 use reverie_syscalls::Syscall;
 use syscalls::{syscall_args, Sysno};
 
@@ -18,11 +19,72 @@ use crate::{
 
 use super::{SignalHandler, SignalHandlerExitAction};
 
-pub struct CpuidHandler;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CpuidResultRegister {
+    Eax,
+    Ebx,
+    Ecx,
+    Edx,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuidOverride {
+    leaf: u32,
+    subleaf: Option<u32>,
+    register: CpuidResultRegister,
+    mask: u32,
+    value: u32,
+}
+
+impl CpuidOverride {
+    pub const fn new(
+        leaf: u32,
+        subleaf: Option<u32>,
+        register: CpuidResultRegister,
+        mask: u32,
+        value: u32,
+    ) -> Self {
+        Self {
+            leaf,
+            subleaf,
+            register,
+            mask,
+            value,
+        }
+    }
+}
+
+pub mod overrides {
+    use super::{CpuidOverride, CpuidResultRegister};
+
+    pub const NO_RDRAND: [CpuidOverride; 1] = [CpuidOverride::new(
+        1,
+        None,
+        CpuidResultRegister::Ecx,
+        1 << 30,
+        0,
+    )];
+
+    pub const NO_XSAVE: [CpuidOverride; 3] = [
+        CpuidOverride::new(1, None, CpuidResultRegister::Ecx, 1 << 26, 0), // Disable xsave
+        CpuidOverride::new(1, None, CpuidResultRegister::Ecx, 1 << 27, 0), // Disable osxsave
+        CpuidOverride::new(0xd, Some(0), CpuidResultRegister::Ebx, !0, 0), // Clear max size of xsave save area
+    ];
+}
+
+pub struct CpuidHandler {
+    overrides: Mutex<Vec<CpuidOverride>>,
+}
 
 impl CpuidHandler {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            overrides: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn set_overrides(&self, overrides: Vec<CpuidOverride>) {
+        *self.overrides.lock() = overrides;
     }
 
     fn enable_cpuid_faulting(process: &Process) -> Result<()> {
@@ -61,7 +123,47 @@ impl SignalHandler for CpuidHandler {
                 let cpuid = handle_nondeterministic_instruction(
                     context.child,
                     context.check_coord,
-                    || unsafe { __cpuid_count(leaf, subleaf) },
+                    || {
+                        // Apply overrides
+                        let mut overrides_map = HashMap::new();
+
+                        let ovs = self.overrides.lock();
+
+                        for o in ovs.iter() {
+                            if o.leaf == leaf && (o.subleaf == Some(subleaf) || o.subleaf == None) {
+                                let (mask, value) =
+                                    overrides_map.entry(o.register).or_insert_with(|| (0, 0));
+                                *mask |= o.mask;
+                                *value = (*value & !o.mask) | (o.mask & o.value);
+                            }
+                        }
+
+                        let mut result = unsafe { __cpuid_count(leaf, subleaf) };
+
+                        let old_result = result;
+
+                        let mut changed = false;
+
+                        for (reg, (mask, value)) in overrides_map.iter() {
+                            let reg = match reg {
+                                CpuidResultRegister::Eax => &mut result.eax,
+                                CpuidResultRegister::Ebx => &mut result.ebx,
+                                CpuidResultRegister::Ecx => &mut result.ecx,
+                                CpuidResultRegister::Edx => &mut result.edx,
+                            };
+                            *reg = (*reg & !mask) | (mask & value);
+                            changed = true;
+                        }
+
+                        if changed {
+                            debug!(
+                                "Cpuid override applied (leaf=0x{:x}, subleaf=0x{:x}): \n{:#?} -> {:#?}", leaf, subleaf,
+                                old_result, result
+                            );
+                        }
+
+                        result
+                    },
                     |cpuid| SavedTrapEvent::Cpuid(leaf, subleaf, cpuid),
                     |event| {
                         if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {

@@ -50,6 +50,7 @@ use crate::inferior_rtlib::pmu::PmuSegmentor;
 use crate::inferior_rtlib::relrtlib::RelRtLib;
 
 use crate::process::OwnedProcess;
+use crate::signal_handlers::cpuid;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
@@ -184,6 +185,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     );
 
     let child = OwnedProcess::new(child_pid);
+    let mut cpuid_overrides = Vec::from(cpuid::overrides::NO_RDRAND);
 
     assert_eq!(
         waitpid(child.pid, Some(WaitPidFlag::WSTOPPED)).unwrap(),
@@ -209,9 +211,11 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(RdtscHandler::new());
     }
 
+    let mut cpuid_handler = None;
+
     #[cfg(target_arch = "x86_64")]
     if !options.no_cpuid_trap {
-        disp.register_module(CpuidHandler::new());
+        cpuid_handler = Some(disp.register_module(CpuidHandler::new()));
     }
 
     // Segmentation
@@ -228,6 +232,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(LegacyInferiorRtLib::new());
         disp.register_module(RelRtLib::new(options.checkpoint_period));
     }
+
+    cpuid_handler.map(|handler| handler.set_overrides(cpuid_overrides));
 
     // Misc
     disp.register_module(VdsoRemover::new());
