@@ -220,7 +220,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     // Segmentation
     if options.pmu_segmentation {
-        disp.register_module(PmuSegmentor::new(
+        let segmentor = disp.register_module(PmuSegmentor::new(
             options.checkpoint_period,
             options.pmu_segmentation_skip_instructions,
             &options.main_cpu_set,
@@ -228,6 +228,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             options.pmu_segmentation_branch_type,
             options.is_test,
         ));
+
+        cpuid_overrides.extend(segmentor.get_cpuid_overrides());
     } else {
         disp.register_module(LegacyInferiorRtLib::new());
         disp.register_module(RelRtLib::new(options.checkpoint_period));

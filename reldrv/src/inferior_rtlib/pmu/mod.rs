@@ -30,7 +30,10 @@ use crate::{
     inferior_rtlib::ScheduleCheckpoint,
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     segments::{Segment, SegmentEventHandler, SegmentId},
-    signal_handlers::{SignalHandler, SignalHandlerExitAction},
+    signal_handlers::{
+        cpuid::{self, CpuidOverride},
+        SignalHandler, SignalHandlerExitAction,
+    },
     statistics::StatisticsProvider,
     statistics_list,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
@@ -144,6 +147,26 @@ impl PmuSegmentor {
             checkpoint_count: AtomicU64::new(0),
             branch_counter_type,
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_cpuid_overrides(&self) -> Vec<CpuidOverride> {
+        let mut results = Vec::new();
+
+        if self.main_pmu_type != self.checker_pmu_type
+            && (matches!(self.main_pmu_type, PmuType::IntelMont { in_hybrid: true })
+                || matches!(
+                    self.checker_pmu_type,
+                    PmuType::IntelMont { in_hybrid: true }
+                ))
+        {
+            // Quirk: Workaround Intel Gracemont microarchitecture overcounting xsave/xsavec instructions as conditional branch
+            results.extend(cpuid::overrides::NO_XSAVE);
+
+            info!("Disabling xsave instructions")
+        }
+
+        results
     }
 
     fn pmu_type_for(&self, role: ProcessRole) -> PmuType {
