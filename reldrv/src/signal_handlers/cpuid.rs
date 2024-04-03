@@ -101,6 +101,18 @@ impl CpuidHandler {
 
         Ok(())
     }
+
+    fn is_cpuid(sig: Signal, process: &Process) -> Result<bool> {
+        if sig == Signal::SIGSEGV {
+            let regs = process.read_registers()?;
+
+            if process.instr_eq(regs.ip(), instructions::CPUID) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
 }
 
 impl SignalHandler for CpuidHandler {
@@ -112,85 +124,82 @@ impl SignalHandler for CpuidHandler {
     where
         'disp: 'scope,
     {
-        if signal == Signal::SIGSEGV {
-            let regs = context.process().read_registers()?;
-
-            if context.process().instr_eq(regs.ip(), instructions::CPUID) {
-                info!("{} Trap: Cpuid", context.child);
-
-                let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
-
-                let cpuid = handle_nondeterministic_instruction(
-                    context.child,
-                    context.check_coord,
-                    || {
-                        // Apply overrides
-                        let mut overrides_map = HashMap::new();
-
-                        let ovs = self.overrides.lock();
-
-                        for o in ovs.iter() {
-                            if o.leaf == leaf && (o.subleaf == Some(subleaf) || o.subleaf == None) {
-                                let (mask, value) =
-                                    overrides_map.entry(o.register).or_insert_with(|| (0, 0));
-                                *mask |= o.mask;
-                                *value = (*value & !o.mask) | (o.mask & o.value);
-                            }
-                        }
-
-                        let mut result = unsafe { __cpuid_count(leaf, subleaf) };
-
-                        let old_result = result;
-
-                        let mut changed = false;
-
-                        for (reg, (mask, value)) in overrides_map.iter() {
-                            let reg = match reg {
-                                CpuidResultRegister::Eax => &mut result.eax,
-                                CpuidResultRegister::Ebx => &mut result.ebx,
-                                CpuidResultRegister::Ecx => &mut result.ecx,
-                                CpuidResultRegister::Edx => &mut result.edx,
-                            };
-                            *reg = (*reg & !mask) | (mask & value);
-                            changed = true;
-                        }
-
-                        if changed {
-                            debug!(
-                                "Cpuid override applied (leaf=0x{:x}, subleaf=0x{:x}): \n{:#?} -> {:#?}", leaf, subleaf,
-                                old_result, result
-                            );
-                        }
-
-                        result
-                    },
-                    |cpuid| SavedTrapEvent::Cpuid(leaf, subleaf, cpuid),
-                    |event| {
-                        if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {
-                            if regs.cpuid_leaf_subleaf() != (leaf, subleaf) {
-                                return Err(Error::UnexpectedTrap(
-                                    UnexpectedEventReason::IncorrectTypeOrArguments,
-                                ));
-                            }
-                            Ok(cpuid_saved)
-                        } else {
-                            Err(Error::UnexpectedTrap(
-                                UnexpectedEventReason::IncorrectTypeOrArguments,
-                            ))
-                        }
-                    },
-                )?;
-
-                context.process().write_registers(
-                    regs.with_cpuid_result(cpuid)
-                        .with_offsetted_ip(instructions::CPUID.length() as _),
-                )?;
-
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
-            }
+        if !Self::is_cpuid(signal, context.process())? {
+            return Ok(SignalHandlerExitAction::NextHandler);
         }
 
-        Ok(SignalHandlerExitAction::NextHandler)
+        info!("{} Trap: Cpuid", context.child);
+
+        let regs = context.process().read_registers()?;
+        let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
+
+        let cpuid = handle_nondeterministic_instruction(
+            context.child,
+            context.check_coord,
+            || {
+                // Apply overrides
+                let mut overrides_map = HashMap::new();
+
+                let ovs = self.overrides.lock();
+
+                for o in ovs.iter() {
+                    if o.leaf == leaf && (o.subleaf == Some(subleaf) || o.subleaf == None) {
+                        let (mask, value) =
+                            overrides_map.entry(o.register).or_insert_with(|| (0, 0));
+                        *mask |= o.mask;
+                        *value = (*value & !o.mask) | (o.mask & o.value);
+                    }
+                }
+
+                let mut result = unsafe { __cpuid_count(leaf, subleaf) };
+
+                let old_result = result;
+
+                let mut changed = false;
+
+                for (reg, (mask, value)) in overrides_map.iter() {
+                    let reg = match reg {
+                        CpuidResultRegister::Eax => &mut result.eax,
+                        CpuidResultRegister::Ebx => &mut result.ebx,
+                        CpuidResultRegister::Ecx => &mut result.ecx,
+                        CpuidResultRegister::Edx => &mut result.edx,
+                    };
+                    *reg = (*reg & !mask) | (mask & value);
+                    changed = true;
+                }
+
+                if changed {
+                    debug!(
+                        "Cpuid override applied (leaf=0x{:x}, subleaf=0x{:x}): \n{:#?} -> {:#?}",
+                        leaf, subleaf, old_result, result
+                    );
+                }
+
+                result
+            },
+            |cpuid| SavedTrapEvent::Cpuid(leaf, subleaf, cpuid),
+            |event| {
+                if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {
+                    if regs.cpuid_leaf_subleaf() != (leaf, subleaf) {
+                        return Err(Error::UnexpectedTrap(
+                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                        ));
+                    }
+                    Ok(cpuid_saved)
+                } else {
+                    Err(Error::UnexpectedTrap(
+                        UnexpectedEventReason::IncorrectTypeOrArguments,
+                    ))
+                }
+            },
+        )?;
+
+        context.process().write_registers(
+            regs.with_cpuid_result(cpuid)
+                .with_offsetted_ip(instructions::CPUID.length() as _),
+        )?;
+
+        Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior)
     }
 }
 
