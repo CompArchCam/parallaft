@@ -96,7 +96,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
         // Skip the syscall
         process.modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
-        if let Some(saved_syscall) = active_segment.replay.syscall_log.front() {
+        if let Some(saved_syscall) = active_segment.replay.peek_syscall() {
             if &saved_syscall.syscall != syscall {
                 return Err(Error::UnexpectedSyscall(
                     UnexpectedEventReason::IncorrectTypeOrArguments,

@@ -950,7 +950,7 @@ where
                         }
                     };
 
-                    segment.replay.syscall_log.push_back(saved_syscall);
+                    segment.replay.push_syscall(saved_syscall);
                 } else {
                     // outside protected region
                     if let Some(last_segment) = segments.last_segment() {
@@ -983,13 +983,12 @@ where
                 let saved_syscall = segment.with_upgraded(|segment| {
                     segment
                         .replay
-                        .syscall_log
-                        .pop_front()
+                        .next_syscall()
                         .expect("Unexpected ptrace event")
                 });
 
                 match saved_syscall.exit_action {
-                    SyscallExitAction::ReplicateMemoryWrites => match saved_syscall.kind {
+                    SyscallExitAction::ReplicateMemoryWrites => match &saved_syscall.kind {
                         SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
                             segment.checker().unwrap().modify_registers_with(|regs| {
                                 regs.with_syscall_ret_val(saved_syscall.ret_val)

@@ -124,8 +124,7 @@ impl StandardSyscallHandler for MmapHandler {
                 } else {
                     let saved_syscall = active_segment
                         .replay
-                        .syscall_log
-                        .front()
+                        .peek_syscall()
                         .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
                     if saved_syscall.syscall != syscall {
@@ -160,8 +159,7 @@ impl StandardSyscallHandler for MmapHandler {
             Syscall::Mremap(mut mremap) => {
                 let saved_syscall = active_segment
                     .replay
-                    .syscall_log
-                    .front()
+                    .peek_syscall()
                     .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
                 if saved_syscall.syscall != syscall {

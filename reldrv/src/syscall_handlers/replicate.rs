@@ -51,8 +51,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
                 .child
                 .unwrap_checker_segment()
                 .replay
-                .syscall_log
-                .front()
+                .peek_syscall()
                 .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
             if &saved_syscall.syscall != syscall {

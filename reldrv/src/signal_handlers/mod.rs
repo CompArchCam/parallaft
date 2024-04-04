@@ -60,7 +60,7 @@ where
                 // Main signal, inside protection zone
                 drop(segments);
                 ret = run_instr();
-                segment.replay.trap_event_log.push_back(create_event(ret));
+                segment.replay.push_trap_event(create_event(ret));
             } else {
                 // Main signal, outside protection zone
                 ret = run_instr();
@@ -69,11 +69,12 @@ where
         ProcessIdentityRef::Checker(segment) => {
             // Checker signal
             let event = segment.with_upgraded(|segment| {
-                segment
+                let r = segment
                     .replay
-                    .trap_event_log
-                    .pop_front()
-                    .ok_or(Error::UnexpectedTrap(UnexpectedEventReason::Excess))
+                    .next_trap_event()
+                    .ok_or(Error::UnexpectedTrap(UnexpectedEventReason::Excess))?;
+
+                Ok::<_, Error>(*r)
             })?;
 
             ret = replay_event(event)?;
