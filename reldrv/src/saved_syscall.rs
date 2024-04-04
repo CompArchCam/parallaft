@@ -113,8 +113,6 @@ pub enum SavedSyscallKind {
 
 #[derive(Debug)]
 pub struct SavedSyscall {
-    // pub sysno: Sysno,
-    // pub args: SyscallArgs,
     pub syscall: Syscall,
     pub ret_val: isize,
     pub kind: SavedSyscallKind,
