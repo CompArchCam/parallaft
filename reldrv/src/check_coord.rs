@@ -11,7 +11,6 @@ use derive_builder::Builder;
 use log::{debug, error, info, warn};
 
 use nix::errno::Errno;
-use nix::sched::CloneFlags;
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitStatus};
@@ -24,19 +23,9 @@ use scopeguard::defer;
 
 use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::process::dirty_pages::IgnoredPagesProvider;
-use crate::process::{
-    detach::ProcessDetachExt, OwnedProcess, Process, ProcessLifetimeHook,
-    ProcessLifetimeHookContext,
-};
-use crate::saved_syscall::{
-    SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind, SyscallExitAction,
-};
-use crate::segments::{
-    Checkpoint, CheckpointCaller, Segment, SegmentChains, SegmentEventHandler, SegmentId,
-    SegmentStatus,
-};
+use crate::process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
 use crate::syscall_handlers::{
     CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
@@ -44,6 +33,14 @@ use crate::syscall_handlers::{
     SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE,
 };
 use crate::throttlers::Throttler;
+use crate::types::chains::SegmentChains;
+use crate::types::checker::CheckerStatus;
+use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
+use crate::types::segment::{Segment, SegmentEventHandler, SegmentId, SegmentStatus};
+use crate::types::segment_record::saved_memory::SavedMemory;
+use crate::types::segment_record::saved_syscall::{
+    SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,
+};
 
 #[macro_export]
 macro_rules! ctx {
@@ -111,7 +108,7 @@ impl<T: Deref<Target = Segment>> ProcessIdentityRef<'_, T> {
     pub fn process(&self) -> Option<&Process> {
         match self {
             ProcessIdentityRef::Main(main) => Some(main),
-            ProcessIdentityRef::Checker(segment) => segment.checker(),
+            ProcessIdentityRef::Checker(segment) => segment.checker.process().map(|x| x.deref()),
         }
     }
 
@@ -451,8 +448,6 @@ where
             return Ok(());
         }
 
-        let clone_flags = CloneFlags::CLONE_PARENT | CloneFlags::CLONE_PTRACE;
-
         let mut segments = self.segments.upgradable_read();
         let in_chain = segments.in_chain();
 
@@ -464,14 +459,7 @@ where
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
-        let reference = process
-            .clone_process(
-                clone_flags,
-                None,
-                restart_old_syscall,
-                in_chain && !is_finishing,
-            )?
-            .as_owned();
+        let reference = process.fork(restart_old_syscall, true)?;
 
         self.dispatcher.handle_checkpoint_created_pre(
             process.pid,
@@ -492,37 +480,26 @@ where
 
         process.resume()?;
 
-        let checker;
-        let checkpoint;
+        let checkpoint = Checkpoint::new(epoch_local, reference, caller);
 
         match (in_chain, is_finishing) {
             (false, false) => {
                 // Start of the segment chain
                 info!("[M      ] Protection on");
-                checker = Some(reference);
-                checkpoint = Checkpoint::initial(epoch_local, caller);
             }
             (true, false) => {
                 // Middle of the segment chain
-                checker = Some(
-                    reference
-                        .clone_process(clone_flags, None, false, false)?
-                        .as_owned(),
-                );
-                checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             (true, true) => {
                 // End of the segment chain
                 info!("[M      ] Protection off");
-                checker = None;
-                checkpoint = Checkpoint::subsequent(epoch_local, reference, caller);
             }
             _ => unreachable!(),
         }
 
         debug!("New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
-            self.add_checkpoint(segments_mut, checkpoint, checker, scope)
+            self.add_checkpoint(segments_mut, checkpoint, is_finishing, scope)
         })?;
 
         if let Some(throttler) = throttler {
@@ -544,7 +521,7 @@ where
             info!("[C{:>6}] Checkpoint", segment.nr);
 
             if self.options.no_state_cmp {
-                segment.mark_as_checked(false).unwrap();
+                segment.mark_as_checked(false);
             } else {
                 match segment.check(
                     self.main.pid,
@@ -567,11 +544,11 @@ where
                             info!("Check passed");
                         }
 
-                        segment.mark_as_checked(result.is_err()).unwrap();
+                        segment.mark_as_checked(result.is_err());
                     }
                     Err(e) => {
                         error!("Failed to check: {:?}", e);
-                        segment.mark_as_checked(true).unwrap();
+                        segment.mark_as_checked(true);
                     }
                 }
             }
@@ -579,7 +556,7 @@ where
 
         UpgradableReadGuard::unlocked(segment, || {
             let mut segments = self.segments.write();
-            self.cleanup_committed_segments(&mut segments)
+            self.cleanup_committed_segments(&mut segments, true)
         })?;
 
         Ok(())
@@ -610,8 +587,12 @@ where
         }
     }
 
-    fn cleanup_committed_segments(&self, segments: &mut SegmentChains) -> Result<()> {
-        segments.cleanup_committed_segments(self.options.ignore_miscmp, |segment| {
+    fn cleanup_committed_segments(
+        &self,
+        segments: &mut SegmentChains,
+        keep_failed_segments: bool,
+    ) -> Result<()> {
+        segments.cleanup_committed_segments(keep_failed_segments, |segment| {
             self.dispatcher.handle_segment_removed(segment)
         })?;
 
@@ -625,7 +606,7 @@ where
         &'s self,
         segments: &mut SegmentChains,
         checkpoint: Checkpoint,
-        checker: Option<OwnedProcess>,
+        is_finishing: bool,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
@@ -634,15 +615,13 @@ where
     {
         segments.add_checkpoint(
             checkpoint,
-            checker,
-            |mut last_segment, checkpoint| {
+            is_finishing,
+            |mut last_segment, _| {
                 let ret = if self.options.no_checker_exec {
-                    last_segment.mark_as_checked(false).unwrap();
+                    last_segment.mark_as_checked(false);
 
                     Ok(true)
                 } else {
-                    self.dispatcher
-                        .handle_segment_ready(&mut last_segment, checkpoint.caller)?;
                     Ok(false)
                 };
 
@@ -658,8 +637,6 @@ where
             |segment| {
                 self.dispatcher.handle_segment_created(&segment)?;
 
-                let checker = segment.checker().unwrap().clone().detach().expect("Failed to detach checker");
-
                 let segment_id = segment.nr;
                 let segment = ArcRwLockReadGuard::rwlock(&segment).clone();
 
@@ -671,9 +648,9 @@ where
                         let segment_temp = segment.clone();
                         defer! {
                             let mut s = segment_temp.write();
-                            if let SegmentStatus::ReadyToCheck { .. } = s.status {
+                            if !matches!(s.checker.status, CheckerStatus::Checked(..)) {
                                 warn!("Checker worker possibly crashed without marking segment as checked");
-                                s.mark_as_checked(true).unwrap();
+                                s.checker.status = CheckerStatus::Crashed(Error::Panic)
                             }
                             self.workers.lock().remove(&segment_id).unwrap();
                         }
@@ -681,15 +658,11 @@ where
                         loop {
                             let segment_locked = segment.read();
                             match &segment_locked.status {
-                                SegmentStatus::New { .. } => (),
-                                SegmentStatus::ReadyToCheck { .. } => {
+                                SegmentStatus::Filling => (),
+                                SegmentStatus::Done(..) => {
                                     break;
                                 }
-                                SegmentStatus::Checked { .. } => {
-                                    info!("Checker {segment_id} already checked");
-                                    return;
-                                }
-                                SegmentStatus::Incomplete => {
+                                SegmentStatus::Crashed => {
                                     warn!("Main process fails to complete segment");
                                     return;
                                 }
@@ -700,7 +673,10 @@ where
                             park();
                         }
 
-                        checker.attach().expect("Failed to reattach checker");
+                        let mut segment_locked = segment.write();
+                        segment_locked.start_checker().unwrap();
+                        self.dispatcher.handle_segment_ready(&mut segment_locked).unwrap();
+                        drop(segment_locked);
 
                         self.run_event_loop(
                             ProcessIdentity::Checker::<Process>(segment),
@@ -720,7 +696,7 @@ where
                 Ok(())
             },
             |segment| self.dispatcher.handle_segment_chain_closed(&segment),
-            |segments| self.cleanup_committed_segments(segments),
+            |segments| self.cleanup_committed_segments(segments, true),
         )
     }
 
@@ -754,12 +730,24 @@ where
     }
 
     pub fn handle_panic(&self) {
-        // Mark all new segments as incomplete
+        // Mark all incomplete segments as crashed
         let segments = self.segments.write();
         for segment in &segments.list {
             let mut segment = segment.write();
-            if let SegmentStatus::New { .. } = segment.status {
-                segment.status = SegmentStatus::Incomplete;
+
+            match &segment.status {
+                SegmentStatus::Filling => {
+                    segment.status = SegmentStatus::Crashed;
+                }
+                SegmentStatus::Done(_) => {
+                    if matches!(
+                        segment.checker.status,
+                        CheckerStatus::Checking(..) | CheckerStatus::NotReady
+                    ) {
+                        segment.checker.status = CheckerStatus::Crashed(Error::Panic);
+                    }
+                }
+                _ => (),
             }
         }
 
@@ -813,7 +801,7 @@ where
                     drop(segments);
 
                     assert!(
-                        segment.replay.ongoing_syscall.is_none(),
+                        segment.record.ongoing_syscall.is_none(),
                         "Syscall double entry"
                     );
 
@@ -828,12 +816,12 @@ where
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                             saved_incomplete_syscall,
                         ) => {
-                            segment.replay.ongoing_syscall = Some(saved_incomplete_syscall);
+                            segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
                         }
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                             saved_incomplete_syscall,
                         ) => {
-                            segment.replay.ongoing_syscall = Some(saved_incomplete_syscall);
+                            segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
                             drop(segment);
 
                             self.handle_checkpoint(
@@ -909,7 +897,7 @@ where
                     let mut segment = segment.write();
 
                     let saved_incomplete_syscall = segment
-                        .replay
+                        .record
                         .ongoing_syscall
                         .take()
                         .expect("Unexpected ptrace event");
@@ -950,14 +938,14 @@ where
                         }
                     };
 
-                    segment.replay.push_syscall(saved_syscall);
+                    segment.record.push_syscall(saved_syscall);
                 } else {
                     // outside protected region
                     if let Some(last_segment) = segments.last_segment() {
                         let mut last_segment = last_segment.write_arc();
                         drop(segments);
 
-                        if let Some(ongoing_syscall) = last_segment.replay.ongoing_syscall.take() {
+                        if let Some(ongoing_syscall) = last_segment.record.ongoing_syscall.take() {
                             assert!(child.is_main());
                             assert_eq!(ongoing_syscall.exit_action, SyscallExitAction::Checkpoint);
                             drop(last_segment);
@@ -982,21 +970,25 @@ where
             ProcessIdentityRef::Checker(segment) => {
                 let saved_syscall = segment.with_upgraded(|segment| {
                     segment
-                        .replay
+                        .record
                         .next_syscall()
                         .expect("Unexpected ptrace event")
                 });
 
                 match saved_syscall.exit_action {
-                    SyscallExitAction::ReplicateMemoryWrites => match &saved_syscall.kind {
-                        SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
-                            segment.checker().unwrap().modify_registers_with(|regs| {
-                                regs.with_syscall_ret_val(saved_syscall.ret_val)
-                            })?;
-                            mem_written.dump(&mut process.clone())?;
+                    SyscallExitAction::ReplicateMemoryWrites => {
+                        match &saved_syscall.kind {
+                            SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
+                                segment.checker.process().unwrap().modify_registers_with(
+                                    |regs| regs.with_syscall_ret_val(saved_syscall.ret_val),
+                                )?;
+                                mem_written.dump(&mut process.clone())?;
+                            }
+                            _ => panic!(
+                                "Cannot replicate syscall effects with unknown memory effect"
+                            ),
                         }
-                        _ => panic!("Cannot replicate syscall effects with unknown memory effect"),
-                    },
+                    }
                     SyscallExitAction::ReplicateSyscall => {
                         assert_eq!(ret_val, saved_syscall.ret_val);
                     }

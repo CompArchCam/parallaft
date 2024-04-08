@@ -55,7 +55,7 @@ impl ProcessLifetimeHook for MemoryCollector {
                     for segment in &segments.list {
                         let segment = segment.read();
 
-                        if let Some(p) = segment.checker() {
+                        if let Some(p) = segment.checker.process() {
                             pids.push(p.pid);
                         }
 

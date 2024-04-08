@@ -7,7 +7,7 @@ use std::ops::Range;
 use crate::{
     check_coord::ProcessRole,
     error::Result,
-    segments::{Segment, SegmentId},
+    types::segment::{Segment, SegmentId},
 };
 
 #[derive(Debug, Clone, Copy, Default)]

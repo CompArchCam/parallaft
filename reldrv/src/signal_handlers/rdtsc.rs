@@ -12,9 +12,9 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
     process::{memory::instructions, ProcessLifetimeHook, ProcessLifetimeHookContext},
-    segments::SavedTrapEvent,
     signal_handlers::handle_nondeterministic_instruction,
     syscall_handlers::HandlerContext,
+    types::segment_record::saved_trap_event::SavedTrapEvent,
 };
 
 use super::{SignalHandler, SignalHandlerExitAction};

@@ -9,11 +9,11 @@ use crate::{
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-    segments::{Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
     syscall_handlers::HandlerContext,
+    types::segment::{Segment, SegmentEventHandler},
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
 use log::info;

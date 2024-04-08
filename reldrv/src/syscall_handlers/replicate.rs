@@ -3,7 +3,9 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
-    saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
+    types::segment_record::saved_syscall::{
+        SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
+    },
 };
 
 use super::{
@@ -50,7 +52,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
             let saved_syscall = context
                 .child
                 .unwrap_checker_segment()
-                .replay
+                .record
                 .peek_syscall()
                 .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 

@@ -8,8 +8,9 @@ use nix::sys::signal::Signal;
 
 use crate::check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard};
 use crate::error::{Error, Result, UnexpectedEventReason};
-use crate::segments::{SavedTrapEvent, Segment};
 use crate::syscall_handlers::HandlerContext;
+use crate::types::segment::Segment;
+use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
 
 pub enum SignalHandlerExitAction {
     /// Try the next handler. The signal is not handled by the current handler.
@@ -60,7 +61,7 @@ where
                 // Main signal, inside protection zone
                 drop(segments);
                 ret = run_instr();
-                segment.replay.push_trap_event(create_event(ret));
+                segment.record.push_trap_event(create_event(ret));
             } else {
                 // Main signal, outside protection zone
                 ret = run_instr();
@@ -70,7 +71,7 @@ where
             // Checker signal
             let event = segment.with_upgraded(|segment| {
                 let r = segment
-                    .replay
+                    .record
                     .next_trap_event()
                     .ok_or(Error::UnexpectedTrap(UnexpectedEventReason::Excess))?;
 

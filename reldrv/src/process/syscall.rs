@@ -10,7 +10,7 @@ use nix::{
 
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
-use super::{memory::InjectedInstructionContext, registers::Registers, Process};
+use super::{memory::InjectedInstructionContext, registers::Registers, OwnedProcess, Process};
 use crate::{error::Result, process::memory::instructions};
 
 impl Process {
@@ -176,6 +176,21 @@ impl Process {
         Ok(child)
     }
 
+    pub fn fork(
+        &self,
+        restart_parent_old_syscall: bool,
+        restart_child_old_syscall: bool,
+    ) -> Result<OwnedProcess> {
+        let process = self.clone_process(
+            CloneFlags::CLONE_PTRACE | CloneFlags::CLONE_PARENT,
+            None,
+            restart_parent_old_syscall,
+            restart_child_old_syscall,
+        )?;
+
+        Ok(OwnedProcess::new(process.pid))
+    }
+
     fn save_state(pid: Pid) -> Result<(Registers, u64)> {
         Ok((
             Process::new(pid).read_registers_precise()?,
@@ -261,7 +276,6 @@ pub(crate) mod tests {
 
     use crate::process::SyscallDir;
 
-    use super::super::OwnedProcess;
     use super::*;
 
     pub fn trace(f: impl FnOnce() -> i32) -> OwnedProcess {

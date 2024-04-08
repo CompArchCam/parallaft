@@ -15,8 +15,10 @@ use crate::{
     check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard},
     error::Result,
     process::Process,
-    saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::Segment,
+    types::{
+        segment::Segment,
+        segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
+    },
 };
 
 pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;

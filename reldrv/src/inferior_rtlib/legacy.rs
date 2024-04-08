@@ -7,9 +7,12 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     process::{dirty_pages::IgnoredPagesProvider, Process},
-    segments::{CheckpointCaller, Segment, SegmentEventHandler},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction, CUSTOM_SYSNO_START,
+    },
+    types::{
+        checkpoint::CheckpointCaller,
+        segment::{Segment, SegmentEventHandler},
     },
 };
 
@@ -49,18 +52,14 @@ impl LegacyInferiorRtLib {
 }
 
 impl SegmentEventHandler for LegacyInferiorRtLib {
-    fn handle_segment_ready(
-        &self,
-        segment: &mut Segment,
-        _checkpoint_end_caller: CheckpointCaller,
-    ) -> Result<()> {
+    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
         // TODO: handle errors more gracefully
-        let last_checker = segment.checker().unwrap();
+        let last_checker = segment.checker.process().unwrap();
         let checkpoint = segment.status.checkpoint_end().unwrap();
 
         // patch the checker's client_control struct
         if let Some(base_address) = self.client_control_addr.read().as_ref() {
-            let this_reference = checkpoint.reference().unwrap();
+            let this_reference = checkpoint.process.lock();
             let mut ctl: CliControl = this_reference.read_value(*base_address).unwrap();
             drop(this_reference);
 

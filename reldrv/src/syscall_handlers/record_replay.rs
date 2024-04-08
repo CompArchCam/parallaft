@@ -7,9 +7,11 @@ use reverie_syscalls::{
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
-    saved_syscall::{
-        SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedMemory, SavedSyscallKind,
-        SyscallExitAction,
+    types::segment_record::{
+        saved_memory::SavedMemory,
+        saved_syscall::{
+            SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,
+        },
     },
 };
 
@@ -96,7 +98,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
         // Skip the syscall
         process.modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
-        if let Some(saved_syscall) = active_segment.replay.peek_syscall() {
+        if let Some(saved_syscall) = active_segment.record.peek_syscall() {
             if &saved_syscall.syscall != syscall {
                 return Err(Error::UnexpectedSyscall(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
@@ -117,7 +119,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                     Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
                 }
             }
-        } else if let Some(incomplete_syscall) = &active_segment.replay.ongoing_syscall {
+        } else if let Some(incomplete_syscall) = &active_segment.record.ongoing_syscall {
             if &incomplete_syscall.syscall != syscall {
                 return Err(Error::UnexpectedSyscall(
                     UnexpectedEventReason::IncorrectTypeOrArguments,

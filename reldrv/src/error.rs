@@ -1,3 +1,5 @@
+use std::backtrace::Backtrace;
+
 use procfs::ProcError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,8 +18,12 @@ pub enum UnexpectedEventReason {
 pub enum Error {
     #[error("std::io error: `{0}`")]
     StdIO(#[from] std::io::Error),
-    #[error("nix error: `{0}`")]
-    Nix(#[from] nix::errno::Errno),
+    #[error("nix error: `{errno}`")]
+    Nix {
+        #[from]
+        errno: nix::errno::Errno,
+        backtrace: Backtrace,
+    },
     #[error("Proc error: `{0}`")]
     Proc(#[from] ProcError),
     #[error("Reverie error: `{0}`")]
@@ -36,6 +42,9 @@ pub enum Error {
 
     #[error("Other error")]
     Other,
+
+    #[error("Panic")]
+    Panic,
 
     #[error("Errno returned to user")]
     ReturnedToUser(nix::errno::Errno, String),

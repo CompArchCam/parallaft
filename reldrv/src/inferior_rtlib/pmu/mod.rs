@@ -29,7 +29,6 @@ use crate::{
     error::Result,
     inferior_rtlib::ScheduleCheckpoint,
     process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-    segments::{Segment, SegmentEventHandler, SegmentId},
     signal_handlers::{
         cpuid::{self, CpuidOverride},
         SignalHandler, SignalHandlerExitAction,
@@ -37,6 +36,7 @@ use crate::{
     statistics::StatisticsProvider,
     statistics_list,
     syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
+    types::segment::{Segment, SegmentEventHandler, SegmentId},
 };
 
 use self::{
@@ -76,7 +76,7 @@ impl Debug for CheckerState {
 
 pub struct PmuSegmentor {
     period: u64,
-    segment_info_map: Mutex<HashMap<Pid, SegmentInfo>>,
+    segment_info_map: Mutex<HashMap<SegmentId, SegmentInfo>>,
     main_state: Mutex<Option<MainState>>,
     skip_instructions: Option<u64>,
     main_pmu_type: PmuType,
@@ -332,7 +332,7 @@ impl PmuSegmentor {
 impl SegmentEventHandler for PmuSegmentor {
     fn handle_segment_checked(&self, segment: &Segment) -> Result<()> {
         let mut counters = self.segment_info_map.lock();
-        counters.remove(&segment.checker().unwrap().pid);
+        counters.remove(&segment.nr);
         Ok(())
     }
 
@@ -354,6 +354,25 @@ impl SegmentEventHandler for PmuSegmentor {
                 instr_irq.enable().unwrap();
             }
             _ => panic!("Invalid main state"),
+        }
+
+        Ok(())
+    }
+
+    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
+        if let Some(segment_info) = self.segment_info_map.lock().get_mut(&segment.nr) {
+            let checker_pid = segment.checker.process().unwrap().pid;
+
+            let new_state = CheckerState::CountingBranches {
+                branch_irq: self.branch_counter(
+                    ProcessRole::Checker,
+                    checker_pid,
+                    Some(segment_info.branches - self.checker_pmu_type.max_skid()),
+                ),
+                branch_counter: self.branch_counter(ProcessRole::Checker, checker_pid, None),
+            };
+
+            segment_info.state = Some(new_state);
         }
 
         Ok(())
@@ -416,151 +435,148 @@ impl SignalHandler for PmuSegmentor {
 
                 info!("{} Trap: Perf @ IP = {:p}", context.child, ip as *const u8);
 
-                if let ProcessIdentityRef::Main(process) = context.child {
-                    let mut state = self.main_state.lock();
+                match context.child {
+                    ProcessIdentityRef::Main(process) => {
+                        let mut state = self.main_state.lock();
 
-                    let next_state = match state.take().unwrap() {
-                        MainState::SkippingInstructions { .. } | MainState::New => {
-                            take_checkpoint = true;
+                        let next_state = match state.take().unwrap() {
+                            MainState::SkippingInstructions { .. } | MainState::New => {
+                                take_checkpoint = true;
 
-                            MainState::CountingBranches {
-                                instr_irq: self.instr_counter(
-                                    ProcessRole::Main,
-                                    process.pid,
-                                    self.period,
-                                ),
-                                branch_counter: self.branch_counter(
-                                    ProcessRole::Main,
-                                    process.pid,
-                                    None,
-                                ),
-                            }
-                        }
-                        MainState::CountingBranches {
-                            mut instr_irq,
-                            mut branch_counter,
-                        } => {
-                            instr_irq.disable().unwrap();
-                            branch_counter.disable().unwrap();
-                            let branches = branch_counter.read().unwrap();
-                            debug!("Main branches executed = {}", branches);
-
-                            if let Some(segment) =
-                                context.check_coord.segments.read().main_segment()
-                            {
-                                let segment = segment.read();
-                                let checker_pid = segment.checker().unwrap().pid;
-
-                                let mut segment_info_map = self.segment_info_map.lock();
-                                segment_info_map.insert(
-                                    checker_pid,
-                                    SegmentInfo {
-                                        branches,
-                                        ip,
-                                        state: Some(CheckerState::CountingBranches {
-                                            branch_irq: self.branch_counter(
-                                                ProcessRole::Checker,
-                                                checker_pid,
-                                                Some(branches - self.checker_pmu_type.max_skid()),
-                                            ),
-                                            branch_counter: self.branch_counter(
-                                                ProcessRole::Checker,
-                                                checker_pid,
-                                                None,
-                                            ),
-                                        }),
-                                    },
-                                );
-                            };
-
-                            take_checkpoint = true;
-
-                            #[cfg(target_arch = "x86_64")]
-                            process.modify_registers_with(|r| r.with_resume_flag_cleared())?;
-
-                            MainState::CountingBranches {
-                                instr_irq: self.instr_counter(
-                                    ProcessRole::Main,
-                                    process.pid,
-                                    self.period,
-                                ),
-                                branch_counter: self.branch_counter(
-                                    ProcessRole::Main,
-                                    process.pid,
-                                    None,
-                                ),
-                            }
-                        }
-                    };
-
-                    if take_checkpoint {
-                        self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
-                    }
-
-                    *state = Some(next_state);
-                } else {
-                    let mut segment_info_map = self.segment_info_map.lock();
-                    let segment_info = segment_info_map.get_mut(&context.process().pid).unwrap();
-
-                    let next_state = match segment_info.state.take().unwrap() {
-                        CheckerState::CountingBranches {
-                            mut branch_irq,
-                            mut branch_counter,
-                        } => {
-                            branch_irq.disable().unwrap();
-                            let branches = branch_counter.read().unwrap();
-                            let diff = segment_info.branches.wrapping_sub(branches) as i64;
-
-                            debug!("Checker branches executed = {} (diff = {})", branches, diff);
-
-                            if diff > 0 {
-                                CheckerState::Stepping {
-                                    branch_counter,
-                                    breakpoint: self
-                                        .breakpoint(context.process().pid, segment_info.ip),
+                                MainState::CountingBranches {
+                                    instr_irq: self.instr_counter(
+                                        ProcessRole::Main,
+                                        process.pid,
+                                        self.period,
+                                    ),
+                                    branch_counter: self.branch_counter(
+                                        ProcessRole::Main,
+                                        process.pid,
+                                        None,
+                                    ),
                                 }
-                            } else if diff == 0 {
-                                CheckerState::Done
-                            } else {
-                                panic!("Skid detected");
                             }
-                        }
-                        CheckerState::Stepping {
-                            mut branch_counter,
-                            breakpoint,
-                        } => {
-                            debug!("Breakpoint hit");
+                            MainState::CountingBranches {
+                                mut instr_irq,
+                                mut branch_counter,
+                            } => {
+                                instr_irq.disable().unwrap();
+                                branch_counter.disable().unwrap();
+                                let branches = branch_counter.read().unwrap();
+                                debug!("Main branches executed = {}", branches);
 
-                            let branches = branch_counter.read().unwrap();
-                            let diff = segment_info.branches.wrapping_sub(branches) as i64;
-                            debug!("Checker branches executed = {} (diff = {})", branches, diff);
+                                if let Some(segment) =
+                                    context.check_coord.segments.read().main_segment()
+                                {
+                                    let segment = segment.read();
 
-                            if diff > 0 {
-                                CheckerState::Stepping {
-                                    branch_counter,
-                                    breakpoint,
-                                }
-                            } else if diff == 0 {
+                                    let mut segment_info_map = self.segment_info_map.lock();
+                                    segment_info_map.insert(
+                                        segment.nr,
+                                        SegmentInfo {
+                                            branches,
+                                            ip,
+                                            state: None,
+                                        },
+                                    );
+                                };
+
+                                take_checkpoint = true;
+
                                 #[cfg(target_arch = "x86_64")]
-                                context
-                                    .process()
-                                    .modify_registers_with(|r| r.with_resume_flag_cleared())
-                                    .unwrap();
-                                CheckerState::Done
-                            } else {
-                                panic!("Unexpected breakpoint skid");
+                                process.modify_registers_with(|r| r.with_resume_flag_cleared())?;
+
+                                MainState::CountingBranches {
+                                    instr_irq: self.instr_counter(
+                                        ProcessRole::Main,
+                                        process.pid,
+                                        self.period,
+                                    ),
+                                    branch_counter: self.branch_counter(
+                                        ProcessRole::Main,
+                                        process.pid,
+                                        None,
+                                    ),
+                                }
                             }
+                        };
+
+                        if take_checkpoint {
+                            self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
                         }
-                        CheckerState::Done => panic!("Invalid state"),
-                    };
 
-                    let next_state = segment_info.state.insert(next_state);
-
-                    if matches!(next_state, CheckerState::Done) {
-                        take_checkpoint = true;
+                        *state = Some(next_state);
                     }
+                    ProcessIdentityRef::Checker(segment) => {
+                        let mut segment_info_map = self.segment_info_map.lock();
+                        let segment_info = segment_info_map.get_mut(&segment.nr).unwrap();
 
-                    // TODO: error handling
+                        let next_state = match segment_info.state.take().unwrap() {
+                            CheckerState::CountingBranches {
+                                mut branch_irq,
+                                mut branch_counter,
+                            } => {
+                                branch_irq.disable().unwrap();
+                                let branches = branch_counter.read().unwrap();
+                                let diff = segment_info.branches.wrapping_sub(branches) as i64;
+
+                                debug!(
+                                    "Checker branches executed = {} (diff = {})",
+                                    branches, diff
+                                );
+
+                                if diff > 0 {
+                                    CheckerState::Stepping {
+                                        branch_counter,
+                                        breakpoint: self
+                                            .breakpoint(context.process().pid, segment_info.ip),
+                                    }
+                                } else if diff == 0 {
+                                    CheckerState::Done
+                                } else {
+                                    panic!("Skid detected");
+                                }
+                            }
+                            CheckerState::Stepping {
+                                mut branch_counter,
+                                breakpoint,
+                            } => {
+                                debug!("Breakpoint hit");
+
+                                let branches = branch_counter.read().unwrap();
+                                let diff = segment_info.branches.wrapping_sub(branches) as i64;
+                                debug!(
+                                    "Checker branches executed = {} (diff = {})",
+                                    branches, diff
+                                );
+
+                                if diff > 0 {
+                                    CheckerState::Stepping {
+                                        branch_counter,
+                                        breakpoint,
+                                    }
+                                } else if diff == 0 {
+                                    #[cfg(target_arch = "x86_64")]
+                                    context
+                                        .process()
+                                        .modify_registers_with(|r| r.with_resume_flag_cleared())
+                                        .unwrap();
+                                    CheckerState::Done
+                                } else {
+                                    panic!("Unexpected breakpoint skid");
+                                }
+                            }
+                            CheckerState::Done => panic!("Invalid state"),
+                        };
+
+                        let next_state = segment_info.state.insert(next_state);
+
+                        if matches!(next_state, CheckerState::Done) {
+                            take_checkpoint = true;
+                        }
+
+                        // TODO: error handling
+                    }
                 }
 
                 if take_checkpoint {

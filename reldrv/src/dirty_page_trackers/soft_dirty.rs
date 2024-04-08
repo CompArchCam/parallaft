@@ -5,7 +5,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     process::Process,
-    segments::{Segment, SegmentEventHandler, SegmentId},
+    types::segment::{Segment, SegmentEventHandler, SegmentId},
 };
 
 use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
@@ -40,7 +40,7 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 ))
             }
             ProcessRole::Checker => {
-                let pages = ctx.segment.checker().unwrap().get_dirty_pages()?;
+                let pages = ctx.segment.checker.process().unwrap().get_dirty_pages()?;
                 Ok((
                     Box::new(pages),
                     DirtyPageAddressFlags {
@@ -58,7 +58,7 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
     ) -> Result<usize> {
         match role {
             ProcessRole::Main => Process::new(ctx.main_pid).nr_dirty_pages(),
-            ProcessRole::Checker => ctx.segment.checker().unwrap().nr_dirty_pages(),
+            ProcessRole::Checker => ctx.segment.checker.process().unwrap().nr_dirty_pages(),
         }
     }
 }
@@ -76,9 +76,9 @@ impl SegmentEventHandler for SoftDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_created(&self, segment: &Segment) -> Result<()> {
+    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
         if !self.dont_clear_soft_dirty {
-            segment.checker().unwrap().clear_dirty_page_bits()?;
+            segment.checker.process().unwrap().clear_dirty_page_bits()?;
         }
 
         Ok(())

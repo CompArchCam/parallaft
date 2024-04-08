@@ -7,7 +7,7 @@ use super::Throttler;
 use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
-    segments::SegmentChains,
+    types::chains::SegmentChains,
 };
 
 pub struct NrSegmentsBasedThrottler {

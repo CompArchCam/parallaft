@@ -5,7 +5,7 @@ use crate::{
     dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext},
     dispatcher::{Module, Subscribers},
     process::PAGESIZE,
-    segments::SegmentChains,
+    types::chains::SegmentChains,
 };
 
 use super::Throttler;

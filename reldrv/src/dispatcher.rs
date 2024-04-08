@@ -16,8 +16,6 @@ use crate::{
     error::Result,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, ProcessLifetimeHook, ProcessLifetimeHookContext},
-    saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
-    segments::{CheckpointCaller, Segment, SegmentChains, SegmentEventHandler, SegmentId},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{StatisticValue, StatisticsProvider},
     syscall_handlers::{
@@ -26,6 +24,11 @@ use crate::{
         SyscallHandlerExitAction,
     },
     throttlers::Throttler,
+    types::{
+        chains::SegmentChains,
+        segment::{Segment, SegmentEventHandler, SegmentId},
+        segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
+    },
 };
 
 macro_rules! generate_event_handler {
@@ -470,7 +473,7 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
 impl<'a, 'm> SegmentEventHandler for Dispatcher<'a, 'm> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, segment: &Segment));
     generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, segment: &Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, segment: &mut Segment, checkpoint_end_caller: CheckpointCaller));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, segment: &mut Segment));
     generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, segment: &Segment));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Segment));
     generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main_pid: Pid, last_segment_id: Option<SegmentId>));

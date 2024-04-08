@@ -11,11 +11,14 @@ use crate::{
     error::{Error, Result},
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
-    segments::{CheckpointCaller, Segment, SegmentEventHandler},
     signal_handlers::{SignalHandler, SignalHandlerExitAction},
     syscall_handlers::{
         CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction, CUSTOM_SYSNO_START,
         SYSNO_CHECKPOINT_TAKE,
+    },
+    types::{
+        checkpoint::CheckpointCaller,
+        segment::{Segment, SegmentEventHandler},
     },
 };
 
@@ -65,12 +68,8 @@ impl RelRtLib {
 }
 
 impl SegmentEventHandler for RelRtLib {
-    fn handle_segment_ready(
-        &self,
-        segment: &mut Segment,
-        _checkpoint_end_caller: CheckpointCaller,
-    ) -> Result<()> {
-        let last_checker = segment.checker().unwrap();
+    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
+        let last_checker = segment.checker.process().unwrap();
         let checkpoint = segment.status.checkpoint_end().unwrap();
 
         if checkpoint.caller == CheckpointCaller::Child {

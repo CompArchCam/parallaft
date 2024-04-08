@@ -8,7 +8,7 @@ use crate::{
     dirty_page_trackers::DirtyPageAddressFlags,
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
-    segments::{CheckpointCaller, Segment, SegmentEventHandler, SegmentId},
+    types::segment::{Segment, SegmentEventHandler, SegmentId},
 };
 
 use super::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
@@ -94,7 +94,7 @@ impl SegmentEventHandler for FptDirtyPageTracker {
     }
 
     fn handle_segment_created(&self, segment: &Segment) -> Result<()> {
-        let checker = segment.checker().unwrap();
+        let checker = segment.checker.process().unwrap();
         let mut fd =
             FptFd::new(checker.pid, FPT_BUFFER_SIZE, FPT_FLAGS, None).expect(MSG_FPT_INIT_FAILED);
 
@@ -106,11 +106,7 @@ impl SegmentEventHandler for FptDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_ready(
-        &self,
-        segment: &mut Segment,
-        _checkpoint_end_caller: CheckpointCaller,
-    ) -> Result<()> {
+    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
         let mut fd_map = self.fd_map.lock();
 
         let mut fd = fd_map

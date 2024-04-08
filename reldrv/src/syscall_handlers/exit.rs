@@ -3,7 +3,9 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    saved_syscall::{SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction},
+    types::segment_record::saved_syscall::{
+        SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
+    },
 };
 
 use super::{

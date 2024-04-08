@@ -8,7 +8,7 @@ use crate::{
     dirty_page_trackers::ExtraWritableRangesProvider,
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
-    saved_syscall::{
+    types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
     },
 };
@@ -123,7 +123,7 @@ impl StandardSyscallHandler for MmapHandler {
                     }
                 } else {
                     let saved_syscall = active_segment
-                        .replay
+                        .record
                         .peek_syscall()
                         .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
@@ -145,7 +145,8 @@ impl StandardSyscallHandler for MmapHandler {
 
                             let (new_sysno, new_args) = mmap.into_parts();
                             active_segment
-                                .checker()
+                                .checker
+                                .process()
                                 .unwrap()
                                 .modify_registers_with(|regs| {
                                     regs.with_sysno(new_sysno).with_syscall_args(new_args)
@@ -158,7 +159,7 @@ impl StandardSyscallHandler for MmapHandler {
             }
             Syscall::Mremap(mut mremap) => {
                 let saved_syscall = active_segment
-                    .replay
+                    .record
                     .peek_syscall()
                     .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
 
@@ -187,7 +188,8 @@ impl StandardSyscallHandler for MmapHandler {
 
                     let (new_sysno, new_args) = mremap.into_parts();
                     active_segment
-                        .checker()
+                        .checker
+                        .process()
                         .unwrap()
                         .modify_registers_with(|regs| {
                             regs.with_sysno(new_sysno).with_syscall_args(new_args)

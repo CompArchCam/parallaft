@@ -7,8 +7,8 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
     error::Error,
-    segments::SegmentChains,
     syscall_handlers::{CustomSyscallHandler, HandlerContext, SYSNO_CHECKPOINT_SYNC},
+    types::chains::SegmentChains,
 };
 
 pub struct CheckpointSyncThrottler {

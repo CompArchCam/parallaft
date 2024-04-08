@@ -1,4 +1,4 @@
-use crate::{check_coord::CheckCoordinator, segments::SegmentChains};
+use crate::{check_coord::CheckCoordinator, types::chains::SegmentChains};
 
 pub mod checkpoint_sync;
 pub mod memory;

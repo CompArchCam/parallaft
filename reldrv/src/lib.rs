@@ -1,3 +1,5 @@
+#![feature(error_generic_member_access)]
+
 pub mod check_coord;
 pub mod dirty_page_trackers;
 pub mod dispatcher;
@@ -5,13 +7,11 @@ pub mod error;
 pub mod helpers;
 pub mod inferior_rtlib;
 pub mod process;
-pub mod saved_syscall;
-pub mod segments;
 pub mod signal_handlers;
 pub mod statistics;
 pub mod syscall_handlers;
 pub mod throttlers;
-pub mod utils;
+pub mod types;
 
 use std::ffi::OsString;
 
