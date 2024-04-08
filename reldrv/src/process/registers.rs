@@ -311,6 +311,12 @@ impl Registers {
 
         self
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn strip_overflow_flag(mut self) -> Registers {
+        self.eflags &= !(1 << 11);
+        self
+    }
 }
 
 impl Process {

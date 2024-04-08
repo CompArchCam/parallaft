@@ -9,13 +9,14 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
+    events::{
+        signal::{SignalHandler, SignalHandlerExitAction},
+        syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
+    },
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
-    signal_handlers::{SignalHandler, SignalHandlerExitAction},
-    syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction, CUSTOM_SYSNO_START,
-        SYSNO_CHECKPOINT_TAKE,
-    },
+    syscall_handlers::{CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE},
     types::{
         checkpoint::CheckpointCaller,
         segment::{Segment, SegmentEventHandler},

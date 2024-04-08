@@ -7,17 +7,19 @@ use reverie_syscalls::{
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
+    events::{
+        syscall::{
+            StandardSyscallEntryCheckerHandlerExitAction,
+            StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+        },
+        HandlerContext,
+    },
     types::segment_record::{
         saved_memory::SavedMemory,
         saved_syscall::{
             SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,
         },
     },
-};
-
-use super::{
-    HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
-    StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
 };
 
 pub struct RecordReplaySyscallHandler {}

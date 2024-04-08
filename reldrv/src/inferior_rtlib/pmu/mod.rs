@@ -27,15 +27,16 @@ use crate::{
     check_coord::{CheckCoordinator, ProcessIdentityRef, ProcessRole},
     dispatcher::{Module, Subscribers},
     error::Result,
-    inferior_rtlib::ScheduleCheckpoint,
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-    signal_handlers::{
-        cpuid::{self, CpuidOverride},
-        SignalHandler, SignalHandlerExitAction,
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        signal::{SignalHandler, SignalHandlerExitAction},
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
     },
+    inferior_rtlib::ScheduleCheckpoint,
+    signal_handlers::cpuid::{self, CpuidOverride},
     statistics::StatisticsProvider,
     statistics_list,
-    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
     types::segment::{Segment, SegmentEventHandler, SegmentId},
 };
 
@@ -417,7 +418,7 @@ impl SignalHandler for PmuSegmentor {
         &'s self,
         signal: Signal,
         context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
-    ) -> Result<crate::signal_handlers::SignalHandlerExitAction>
+    ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {

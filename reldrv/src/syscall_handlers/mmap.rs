@@ -8,14 +8,17 @@ use crate::{
     dirty_page_trackers::ExtraWritableRangesProvider,
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
+    events::{
+        syscall::{
+            StandardSyscallEntryCheckerHandlerExitAction,
+            StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+            SyscallHandlerExitAction,
+        },
+        HandlerContext,
+    },
     types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
     },
-};
-
-use super::{
-    HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
-    StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
 
 pub struct MmapHandler {

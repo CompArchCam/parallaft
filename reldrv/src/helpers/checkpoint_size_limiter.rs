@@ -7,12 +7,14 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
     error::Result,
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        signal::{SignalHandler, SignalHandlerExitAction},
+        HandlerContext,
+    },
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-    signal_handlers::{SignalHandler, SignalHandlerExitAction},
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
-    syscall_handlers::HandlerContext,
     types::segment::{Segment, SegmentEventHandler},
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};

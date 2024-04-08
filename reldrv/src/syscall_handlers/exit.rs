@@ -3,14 +3,16 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
+    events::{
+        syscall::{
+            StandardSyscallEntryCheckerHandlerExitAction,
+            StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+        },
+        HandlerContext,
+    },
     types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
     },
-};
-
-use super::{
-    HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
-    StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
 };
 
 pub struct ExitHandler {}
@@ -54,7 +56,6 @@ impl StandardSyscallHandler for ExitHandler {
             _ => StandardSyscallEntryCheckerHandlerExitAction::NextHandler,
         })
     }
-
     // Exit syscall never exits
 }
 

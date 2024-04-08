@@ -9,15 +9,17 @@ use syscalls::{syscall_args, Sysno};
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
-    process::{memory::instructions, Process, ProcessLifetimeHook, ProcessLifetimeHookContext},
-    signal_handlers::handle_nondeterministic_instruction,
-    syscall_handlers::{
-        is_execve_ok, HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction,
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        signal::{SignalHandler, SignalHandlerExitAction},
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
     },
+    process::{memory::instructions, Process},
+    signal_handlers::handle_nondeterministic_instruction,
+    syscall_handlers::is_execve_ok,
     types::segment_record::saved_trap_event::SavedTrapEvent,
 };
-
-use super::{SignalHandler, SignalHandlerExitAction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CpuidResultRegister {

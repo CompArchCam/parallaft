@@ -24,14 +24,18 @@ use scopeguard::defer;
 use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
 use crate::error::{Error, Result};
-use crate::process::dirty_pages::IgnoredPagesProvider;
-use crate::process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext};
-use crate::signal_handlers::{SignalHandler, SignalHandlerExitAction};
-use crate::syscall_handlers::{
-    CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
+use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::syscall::{
+    CustomSyscallHandler, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
-    SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE,
 };
+use crate::events::{
+    signal::{SignalHandler, SignalHandlerExitAction},
+    HandlerContext,
+};
+use crate::process::dirty_pages::IgnoredPagesProvider;
+use crate::process::Process;
+use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
 use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;

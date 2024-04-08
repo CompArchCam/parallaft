@@ -5,10 +5,15 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        syscall::{
+            StandardSyscallHandler,
+            SyscallHandlerExitAction,
+        },
+        HandlerContext,
+    },
 };
-
-use super::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction};
 
 pub struct RseqHandler {}
 

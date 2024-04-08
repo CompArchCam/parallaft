@@ -14,15 +14,19 @@ use crate::{
         ExtraWritableRangesProvider,
     },
     error::Result,
-    inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::{dirty_pages::IgnoredPagesProvider, ProcessLifetimeHook, ProcessLifetimeHookContext},
-    signal_handlers::{SignalHandler, SignalHandlerExitAction},
-    statistics::{StatisticValue, StatisticsProvider},
-    syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, StandardSyscallEntryCheckerHandlerExitAction,
-        StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
-        SyscallHandlerExitAction,
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        signal::{SignalHandler, SignalHandlerExitAction},
+        syscall::{
+            CustomSyscallHandler, StandardSyscallEntryCheckerHandlerExitAction,
+            StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+            SyscallHandlerExitAction,
+        },
+        HandlerContext,
     },
+    inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
+    process::dirty_pages::IgnoredPagesProvider,
+    statistics::{StatisticValue, StatisticsProvider},
     throttlers::Throttler,
     types::{
         chains::SegmentChains,

@@ -2,8 +2,8 @@ use reverie_syscalls::Syscall;
 
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::{Error, Result};
-
-use super::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction};
+use crate::events::syscall::{StandardSyscallHandler, SyscallHandlerExitAction};
+use crate::events::HandlerContext;
 
 pub struct CloneHandler {}
 

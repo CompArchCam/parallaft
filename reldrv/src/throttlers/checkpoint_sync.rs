@@ -7,7 +7,11 @@ use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
     error::Error,
-    syscall_handlers::{CustomSyscallHandler, HandlerContext, SYSNO_CHECKPOINT_SYNC},
+    events::{
+        syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
+    },
+    syscall_handlers::SYSNO_CHECKPOINT_SYNC,
     types::chains::SegmentChains,
 };
 
@@ -45,9 +49,9 @@ impl CustomSyscallHandler for CheckpointSyncThrottler {
         sysno: usize,
         _args: syscalls::SyscallArgs,
         context: HandlerContext,
-    ) -> crate::error::Result<crate::syscall_handlers::SyscallHandlerExitAction> {
+    ) -> crate::error::Result<SyscallHandlerExitAction> {
         if sysno != SYSNO_CHECKPOINT_SYNC {
-            return Ok(crate::syscall_handlers::SyscallHandlerExitAction::NextHandler);
+            return Ok(SyscallHandlerExitAction::NextHandler);
         }
 
         if context.check_coord.segments.read().in_chain() {
@@ -59,7 +63,7 @@ impl CustomSyscallHandler for CheckpointSyncThrottler {
 
         self.sync_active
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(crate::syscall_handlers::SyscallHandlerExitAction::ContinueInferior)
+        Ok(SyscallHandlerExitAction::ContinueInferior)
     }
 }
 

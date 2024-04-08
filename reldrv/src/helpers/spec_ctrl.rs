@@ -4,7 +4,7 @@ use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
 };
 
 pub struct SpecCtrlSetter {

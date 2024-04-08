@@ -5,8 +5,8 @@ use log::info;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
+    events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     process::Process,
-    process::{ProcessLifetimeHook, ProcessLifetimeHookContext},
 };
 
 pub struct AffinitySetter<'a> {

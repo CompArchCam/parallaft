@@ -4,6 +4,7 @@ pub mod check_coord;
 pub mod dirty_page_trackers;
 pub mod dispatcher;
 pub mod error;
+pub mod events;
 pub mod helpers;
 pub mod inferior_rtlib;
 pub mod process;

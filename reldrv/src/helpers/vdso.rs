@@ -4,8 +4,11 @@ use reverie_syscalls::{MemoryAccess, Syscall};
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
+    events::{
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
+    },
     process::Process,
-    syscall_handlers::{HandlerContext, StandardSyscallHandler, SyscallHandlerExitAction},
 };
 
 pub struct VdsoRemover;

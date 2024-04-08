@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
-use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 
 #[derive(Debug, Clone, Copy)]
 pub enum CpuFreqGovernor {

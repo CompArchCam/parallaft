@@ -4,43 +4,11 @@ pub mod cpuid;
 #[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
-use nix::sys::signal::Signal;
 
 use crate::check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard};
 use crate::error::{Error, Result, UnexpectedEventReason};
-use crate::syscall_handlers::HandlerContext;
 use crate::types::segment::Segment;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
-
-pub enum SignalHandlerExitAction {
-    /// Try the next handler. The signal is not handled by the current handler.
-    NextHandler,
-
-    /// Continue the inferior without suppresing the signal.
-    ContinueInferior,
-
-    /// Suppress the signal and continue the inferior
-    SuppressSignalAndContinueInferior,
-
-    /// Skip ptrace syscall.
-    SkipPtraceSyscall,
-
-    /// Checkpoint.
-    Checkpoint,
-}
-
-pub trait SignalHandler {
-    fn handle_signal<'s, 'disp, 'scope, 'env>(
-        &'s self,
-        _signal: Signal,
-        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
-    ) -> Result<SignalHandlerExitAction>
-    where
-        'disp: 'scope,
-    {
-        Ok(SignalHandlerExitAction::NextHandler)
-    }
-}
 
 pub fn handle_nondeterministic_instruction<R>(
     child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,

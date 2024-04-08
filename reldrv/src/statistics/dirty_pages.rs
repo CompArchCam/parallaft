@@ -1,5 +1,5 @@
 use crate::dispatcher::Subscribers;
-use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::statistics_list;
 use crate::{dispatcher::Module, error::Result};
 

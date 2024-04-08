@@ -3,9 +3,11 @@ use reverie_syscalls::Syscall;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
+    events::{
+        syscall::{StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler},
+        HandlerContext,
+    },
 };
-
-use super::{HandlerContext, StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler};
 
 pub struct ExecveHandler {}
 

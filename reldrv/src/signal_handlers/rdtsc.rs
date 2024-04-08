@@ -11,13 +11,15 @@ use syscalls::{syscall_args, Sysno};
 use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
-    process::{memory::instructions, ProcessLifetimeHook, ProcessLifetimeHookContext},
+    events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        signal::{SignalHandler, SignalHandlerExitAction},
+        HandlerContext,
+    },
+    process::memory::instructions,
     signal_handlers::handle_nondeterministic_instruction,
-    syscall_handlers::HandlerContext,
     types::segment_record::saved_trap_event::SavedTrapEvent,
 };
-
-use super::{SignalHandler, SignalHandlerExitAction};
 
 pub struct RdtscHandler;
 

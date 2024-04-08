@@ -6,10 +6,12 @@ use syscalls::SyscallArgs;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    process::{dirty_pages::IgnoredPagesProvider, Process},
-    syscall_handlers::{
-        CustomSyscallHandler, HandlerContext, SyscallHandlerExitAction, CUSTOM_SYSNO_START,
+    events::{
+        syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
     },
+    process::{dirty_pages::IgnoredPagesProvider, Process},
+    syscall_handlers::CUSTOM_SYSNO_START,
     types::{
         checkpoint::CheckpointCaller,
         segment::{Segment, SegmentEventHandler},

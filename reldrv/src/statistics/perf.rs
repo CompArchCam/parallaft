@@ -6,7 +6,7 @@ use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, DynamicBuilder, H
 
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
-use crate::process::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::statistics::StatisticsProvider;
 
 use super::StatisticValue;

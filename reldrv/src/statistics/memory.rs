@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use super::{RunningAverage, StatisticValue, StatisticsProvider};
 use crate::dispatcher::{Halt, Subscribers};
-use crate::process::{Process, ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::process::Process;
 use crate::statistics_list;
 use crate::{dispatcher::Module, error::Result};
 
