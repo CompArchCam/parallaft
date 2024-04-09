@@ -4,7 +4,6 @@ pub mod cpuid;
 #[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
-
 use crate::check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard};
 use crate::error::{Error, Result, UnexpectedEventReason};
 use crate::types::segment::Segment;

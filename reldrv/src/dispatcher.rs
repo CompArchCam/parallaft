@@ -16,6 +16,7 @@ use crate::{
     error::Result,
     events::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{
             CustomSyscallHandler, StandardSyscallEntryCheckerHandlerExitAction,
@@ -30,7 +31,7 @@ use crate::{
     throttlers::Throttler,
     types::{
         chains::SegmentChains,
-        segment::{Segment, SegmentEventHandler, SegmentId},
+        segment::{Segment, SegmentId},
         segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     },
 };

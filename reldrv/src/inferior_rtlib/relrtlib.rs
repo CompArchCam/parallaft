@@ -10,6 +10,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::{
+        segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
@@ -17,10 +18,7 @@ use crate::{
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
     syscall_handlers::{CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE},
-    types::{
-        checkpoint::CheckpointCaller,
-        segment::{Segment, SegmentEventHandler},
-    },
+    types::{checkpoint::CheckpointCaller, segment::Segment},
 };
 
 use super::ScheduleCheckpoint;

@@ -30,6 +30,7 @@ use crate::events::syscall::{
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
 };
 use crate::events::{
+    segment::SegmentEventHandler,
     signal::{SignalHandler, SignalHandlerExitAction},
     HandlerContext,
 };
@@ -40,7 +41,7 @@ use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
-use crate::types::segment::{Segment, SegmentEventHandler, SegmentId, SegmentStatus};
+use crate::types::segment::{Segment, SegmentId, SegmentStatus};
 use crate::types::segment_record::saved_memory::SavedMemory;
 use crate::types::segment_record::saved_syscall::{
     SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,

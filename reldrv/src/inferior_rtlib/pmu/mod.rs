@@ -29,6 +29,7 @@ use crate::{
     error::Result,
     events::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
@@ -37,7 +38,7 @@ use crate::{
     signal_handlers::cpuid::{self, CpuidOverride},
     statistics::StatisticsProvider,
     statistics_list,
-    types::segment::{Segment, SegmentEventHandler, SegmentId},
+    types::segment::{Segment, SegmentId},
 };
 
 use self::{

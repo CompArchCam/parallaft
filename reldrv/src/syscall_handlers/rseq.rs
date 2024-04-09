@@ -7,10 +7,7 @@ use crate::{
     error::Result,
     events::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-        syscall::{
-            StandardSyscallHandler,
-            SyscallHandlerExitAction,
-        },
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
 };

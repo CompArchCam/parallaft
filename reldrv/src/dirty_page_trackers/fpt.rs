@@ -8,7 +8,8 @@ use crate::{
     dirty_page_trackers::DirtyPageAddressFlags,
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
-    types::segment::{Segment, SegmentEventHandler, SegmentId},
+    events::segment::SegmentEventHandler,
+    types::segment::{Segment, SegmentId},
 };
 
 use super::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};

@@ -6,9 +6,7 @@ pub mod record_replay;
 pub mod replicate;
 pub mod rseq;
 
-
 use reverie_syscalls::Syscall;
-
 
 pub const SYSNO_CHECKPOINT_TAKE: usize = 0xff77;
 pub const SYSNO_CHECKPOINT_FINI: usize = 0xff78;

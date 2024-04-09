@@ -4,8 +4,9 @@ use crate::{
     check_coord::ProcessRole,
     dispatcher::Module,
     error::Result,
+    events::segment::SegmentEventHandler,
     process::Process,
-    types::segment::{Segment, SegmentEventHandler, SegmentId},
+    types::segment::{Segment, SegmentId},
 };
 
 use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext};

@@ -6,13 +6,11 @@ mod stats;
 mod syscall;
 mod unwind;
 
-use crate::{
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
+use std::fmt::Debug;
 use std::ops::Deref;
-use std::{fmt::Debug};
 
 use nix::{
     errno::Errno,

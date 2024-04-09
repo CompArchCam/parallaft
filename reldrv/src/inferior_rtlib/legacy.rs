@@ -7,15 +7,13 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::{
+        segment::SegmentEventHandler,
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
     process::{dirty_pages::IgnoredPagesProvider, Process},
     syscall_handlers::CUSTOM_SYSNO_START,
-    types::{
-        checkpoint::CheckpointCaller,
-        segment::{Segment, SegmentEventHandler},
-    },
+    types::{checkpoint::CheckpointCaller, segment::Segment},
 };
 
 const SYSNO_SET_CLI_CONTROL_ADDR: usize = CUSTOM_SYSNO_START;
