@@ -728,11 +728,21 @@ where
         while !self.is_all_finished() && !self.has_errors() {
             park();
         }
-        self.dispatcher.handle_all_fini(ProcessLifetimeHookContext {
-            process: &self.main,
-            check_coord: self,
-            scope,
-        })
+        self.dispatcher
+            .handle_all_fini(ProcessLifetimeHookContext {
+                process: &self.main,
+                check_coord: self,
+                scope,
+            })?;
+
+        // Cancel all checkers
+        self.segments.read().mark_all_filling_segments_as_crashed();
+        let workers = self.workers.lock();
+        for (_, worker) in workers.iter() {
+            worker.thread.unpark();
+        }
+
+        Ok(())
     }
 
     pub fn handle_panic(&self) {

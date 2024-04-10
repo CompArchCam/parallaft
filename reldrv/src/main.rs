@@ -290,6 +290,7 @@ fn main() {
             #[cfg(target_arch = "x86_64")]
             enable_intel_hybrid_workaround: cli.enable_intel_hybrid_workaround,
             is_test: false,
+            extra_modules: Vec::new(),
         },
     );
 

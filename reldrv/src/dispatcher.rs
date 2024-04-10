@@ -205,6 +205,15 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
         m.subscribe_all(&mut self.subscribers.write());
         unsafe { &*(m.as_ref() as *const _ as *const T) }
     }
+
+    pub fn register_module_boxed<'s>(&'s self, module: Box<dyn Module>)
+    where
+        's: 'a,
+    {
+        self.modules
+            .alloc(module)
+            .subscribe_all(&mut self.subscribers.write());
+    }
 }
 
 impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {

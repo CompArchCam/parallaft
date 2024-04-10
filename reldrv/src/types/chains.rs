@@ -167,4 +167,14 @@ impl SegmentChains {
             })
             .sum()
     }
+
+    /// Mark all filling segments as crashed
+    pub fn mark_all_filling_segments_as_crashed(&self) {
+        for segment in &self.list {
+            let mut segment = segment.write();
+            if matches!(segment.status, SegmentStatus::Filling) {
+                segment.status = SegmentStatus::Crashed;
+            }
+        }
+    }
 }

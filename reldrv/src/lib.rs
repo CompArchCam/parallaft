@@ -17,13 +17,16 @@ pub mod types;
 
 use std::ffi::OsString;
 
+use std::fmt::Debug;
 use std::fs;
 use std::ops::Deref;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use derivative::Derivative;
 use derive_builder::Builder;
+use dispatcher::Module;
 use inferior_rtlib::pmu::BranchCounterType;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -89,8 +92,9 @@ pub enum StatsOutput {
     StdOut,
 }
 
-#[derive(Debug, Default, Builder)]
-#[builder(default)]
+#[derive(Default, Builder, Derivative)]
+#[derivative(Debug)]
+#[builder(default, pattern = "owned")]
 pub struct RelShellOptions {
     /// Dump statistics
     pub dump_stats: Option<StatsOutput>,
@@ -162,26 +166,28 @@ pub struct RelShellOptions {
 
     // integration test
     pub is_test: bool,
+
+    // extra modules
+    #[derivative(Debug = "ignore")]
+    pub extra_modules: Vec<Box<dyn Module + Sync>>,
 }
 
 impl RelShellOptionsBuilder {
     pub fn test_serial_default() -> Self {
-        let mut options = Self::default();
+        let mut options = Self::default().max_nr_live_segments(1).is_test(true);
 
         #[cfg(target_arch = "x86_64")]
-        options.no_cpuid_trap(true).no_rdtsc_trap(true);
-
-        options.max_nr_live_segments(1).is_test(true);
+        {
+            options = options.no_cpuid_trap(true).no_rdtsc_trap(true);
+        }
 
         options
     }
 
     pub fn test_parallel_default() -> Self {
-        let mut options = Self::test_serial_default();
-
-        options.max_nr_live_segments(8).is_test(true);
-
-        options
+        Self::test_serial_default()
+            .max_nr_live_segments(8)
+            .is_test(true)
     }
 }
 
@@ -311,6 +317,11 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     #[cfg(target_arch = "x86_64")]
     if options.enable_intel_hybrid_workaround {
         disp.register_module(IntelHybridWorkaround::new());
+    }
+
+    // Extras
+    for module in options.extra_modules {
+        disp.register_module_boxed(module);
     }
 
     let mut exit_status = ExitReason::Panic;
