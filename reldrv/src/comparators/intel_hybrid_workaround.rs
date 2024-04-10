@@ -5,19 +5,19 @@ use log::info;
 use crate::{
     dispatcher::{Module, Subscribers},
     events::comparator::{RegisterComparator, RegisterComparsionResult},
-    process::registers::{Eflags, Registers},
+    process::registers::Registers,
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
 };
 
 pub struct IntelHybridWorkaround {
-    nr_eflags_overflow_flag_mismatches: AtomicUsize,
+    nr_eflags_mismatches: AtomicUsize,
 }
 
 impl IntelHybridWorkaround {
     pub fn new() -> Self {
         Self {
-            nr_eflags_overflow_flag_mismatches: AtomicUsize::new(0),
+            nr_eflags_mismatches: AtomicUsize::new(0),
         }
     }
 }
@@ -29,13 +29,15 @@ impl RegisterComparator for IntelHybridWorkaround {
         ref_registers: &mut Registers,
     ) -> crate::error::Result<RegisterComparsionResult> {
         // Shift instructions may give different OF
-        if chk_registers.eflags & Eflags::OF.bits() != ref_registers.eflags & Eflags::OF.bits() {
-            info!("Overflow flag mismatch, ignoring");
-            self.nr_eflags_overflow_flag_mismatches
+        if chk_registers.eflags != ref_registers.eflags {
+            info!(
+                "Eflags mismatch, ignoring: {:#018x} != {:#018x}",
+                chk_registers.eflags, ref_registers.eflags
+            );
+            self.nr_eflags_mismatches
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            chk_registers.eflags &= !Eflags::OF.bits();
-            ref_registers.eflags &= !Eflags::OF.bits();
+            chk_registers.eflags = ref_registers.eflags;
         }
 
         Ok(RegisterComparsionResult::NoResult)
@@ -49,8 +51,8 @@ impl StatisticsProvider for IntelHybridWorkaround {
 
     fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
         statistics_list!(
-            nr_eflags_overflow_flag_mismatches = self
-                .nr_eflags_overflow_flag_mismatches
+            nr_eflags_mismatches = self
+                .nr_eflags_mismatches
                 .load(std::sync::atomic::Ordering::Relaxed)
         )
     }
