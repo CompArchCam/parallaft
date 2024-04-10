@@ -1,4 +1,5 @@
 use crate::error::Result;
+use bitflags::bitflags;
 use nix::libc::{self, user_regs_struct};
 use std::{
     mem::MaybeUninit,
@@ -7,6 +8,36 @@ use std::{
 use syscalls::{SyscallArgs, Sysno};
 
 use super::Process;
+
+#[cfg(target_arch = "x86_64")]
+const fn bit(i: u32) -> u64 {
+    1 << i
+}
+
+#[cfg(target_arch = "x86_64")]
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Eflags: u64 {
+        const CF = bit(0);
+        const PF = bit(2);
+        const AF = bit(4);
+        const ZF = bit(6);
+        const SF = bit(7);
+        const TF = bit(8);
+        const IF = bit(9);
+        const DF = bit(10);
+        const OF = bit(11);
+        const IOPL = bit(12) | bit(13);
+        const NT = bit(14);
+        const MD = bit(15);
+        const RF = bit(16);
+        const VM = bit(17);
+        const AC = bit(18);
+        const VIF = bit(19);
+        const VIP = bit(20);
+        const ID = bit(21);
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::CpuidResult;

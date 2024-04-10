@@ -15,6 +15,7 @@ use crate::{
     },
     error::Result,
     events::{
+        comparator::{RegisterComparator, RegisterComparsionResult},
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
@@ -26,7 +27,7 @@ use crate::{
         HandlerContext,
     },
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::dirty_pages::IgnoredPagesProvider,
+    process::{dirty_pages::IgnoredPagesProvider, registers::Registers},
     statistics::{StatisticValue, StatisticsProvider},
     throttlers::Throttler,
     types::{
@@ -70,6 +71,7 @@ pub struct Subscribers<'a> {
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
     halt_hooks: Vec<&'a (dyn Halt + Sync)>,
     stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
+    register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
 }
 
 impl<'a> Subscribers<'a> {
@@ -88,6 +90,7 @@ impl<'a> Subscribers<'a> {
             extra_writable_ranges_providers: Vec::new(),
             halt_hooks: Vec::new(),
             stats_providers: Vec::new(),
+            register_comparators: Vec::new(),
         }
     }
 
@@ -159,6 +162,10 @@ impl<'a> Subscribers<'a> {
 
     pub fn install_stats_providers(&mut self, provider: &'a (dyn StatisticsProvider + Sync)) {
         self.stats_providers.push(provider)
+    }
+
+    pub fn install_register_comparator(&mut self, comparator: &'a (dyn RegisterComparator + Sync)) {
+        self.register_comparators.push(comparator)
     }
 }
 
@@ -562,6 +569,24 @@ impl StatisticsProvider for Dispatcher<'_, '_> {
                     .map(|(stat_name, value)| (format!("{}.{}", ss.class_name(), stat_name), value))
             })
             .collect()
+    }
+}
+
+impl RegisterComparator for Dispatcher<'_, '_> {
+    fn compare_registers(
+        &self,
+        chk_registers: &mut Registers,
+        ref_registers: &mut Registers,
+    ) -> Result<RegisterComparsionResult> {
+        for comparator in &self.subscribers.read().register_comparators {
+            let result = comparator.compare_registers(chk_registers, ref_registers)?;
+
+            if result != RegisterComparsionResult::NoResult {
+                return Ok(result);
+            }
+        }
+
+        Ok(RegisterComparsionResult::NoResult)
     }
 }
 

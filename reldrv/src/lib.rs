@@ -1,6 +1,7 @@
 #![feature(error_generic_member_access)]
 
 pub mod check_coord;
+pub mod comparators;
 pub mod dirty_page_trackers;
 pub mod dispatcher;
 pub mod error;
@@ -36,6 +37,7 @@ use clap::ValueEnum;
 
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
 use crate::check_coord::{ExitReason, ProcessIdentity};
+use crate::comparators::intel_hybrid_workaround::IntelHybridWorkaround;
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::{Dispatcher, Halt};
@@ -153,6 +155,10 @@ pub struct RelShellOptions {
     // speculation control options
     pub enable_speculative_store_bypass_misfeature: bool,
     pub enable_indirect_branch_speculation_misfeature: bool,
+
+    #[cfg(target_arch = "x86_64")]
+    // Intel hybrid workaround
+    pub enable_intel_hybrid_workaround: bool,
 
     // integration test
     pub is_test: bool,
@@ -299,6 +305,12 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         DirtyPageAddressTrackerType::Fpt => {
             disp.register_module(FptDirtyPageTracker::new());
         }
+    }
+
+    // Misc
+    #[cfg(target_arch = "x86_64")]
+    if options.enable_intel_hybrid_workaround {
+        disp.register_module(IntelHybridWorkaround::new());
     }
 
     let mut exit_status = ExitReason::Panic;

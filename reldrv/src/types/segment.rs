@@ -10,6 +10,7 @@ use parking_lot::MutexGuard;
 use crate::check_coord::ProcessRole;
 use crate::dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
 use crate::error::{Error, Result};
+use crate::events::comparator::{RegisterComparator, RegisterComparsionResult};
 use crate::process::detach::DetachedProcess;
 use crate::process::dirty_pages::{filter_writable_addresses, merge_page_addresses, page_diff};
 use crate::process::OwnedProcess;
@@ -121,6 +122,7 @@ impl Segment {
         ignored_pages: &[usize],
         extra_writable_ranges: &[Range<usize>],
         dirty_page_tracker: &(dyn DirtyPageAddressTracker + Sync),
+        comparator: &impl RegisterComparator,
     ) -> Result<(std::result::Result<(), CheckFailReason>, usize)> {
         let checkpoint_end = if let SegmentStatus::Done(checkpoint_end) = &self.status {
             checkpoint_end
@@ -174,17 +176,28 @@ impl Segment {
 
         info!("Comparing registers");
 
-        let checker_regs = checker_process.read_registers_precise()?.strip_orig();
-        let reference_registers = reference
+        let mut checker_regs = checker_process.read_registers_precise()?.strip_orig();
+        let mut reference_registers = reference
             .borrow_with(|p2| p2.read_registers())??
             .strip_orig();
 
-        if checker_regs != reference_registers {
-            error!("Register differs for epoch {}", self.checkpoint_start.epoch);
-            info!("Checker registers:\n{}", checker_regs.dump());
-            info!("Reference registers:\n{}", reference_registers.dump());
+        let reg_cmp_result =
+            comparator.compare_registers(&mut checker_regs, &mut reference_registers)?;
 
-            return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
+        match reg_cmp_result {
+            RegisterComparsionResult::NoResult => {
+                if checker_regs != reference_registers {
+                    error!("Register differs for epoch {}", self.checkpoint_start.epoch);
+                    info!("Checker registers:\n{}", checker_regs.dump());
+                    info!("Reference registers:\n{}", reference_registers.dump());
+
+                    return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
+                }
+            }
+            RegisterComparsionResult::Pass => (),
+            RegisterComparsionResult::Fail => {
+                return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages))
+            }
         }
 
         let checker_writable_ranges = checker_process.get_writable_ranges()?;

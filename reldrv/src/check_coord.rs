@@ -533,6 +533,7 @@ where
                     &self.dispatcher.get_ignored_pages(),
                     &self.dispatcher.get_extra_writable_ranges(),
                     self.dispatcher,
+                    self.dispatcher,
                 ) {
                     Ok((result, _nr_dirty_pages)) => {
                         self.dispatcher.handle_segment_checked(&segment).unwrap();

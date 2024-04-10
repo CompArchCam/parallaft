@@ -170,6 +170,11 @@ struct CliArgs {
     #[arg(long)]
     enable_indirect_branch_speculation_misfeature: bool,
 
+    #[cfg(target_arch = "x86_64")]
+    /// Enable Intel hybrid CPU workaround
+    #[arg(long)]
+    enable_intel_hybrid_workaround: bool,
+
     command: String,
     args: Vec<String>,
 }
@@ -282,6 +287,8 @@ fn main() {
                 .enable_speculative_store_bypass_misfeature,
             enable_indirect_branch_speculation_misfeature: cli
                 .enable_indirect_branch_speculation_misfeature,
+            #[cfg(target_arch = "x86_64")]
+            enable_intel_hybrid_workaround: cli.enable_intel_hybrid_workaround,
             is_test: false,
         },
     );

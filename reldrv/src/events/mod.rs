@@ -1,3 +1,4 @@
+pub mod comparator;
 pub mod process_lifetime;
 pub mod segment;
 pub mod signal;

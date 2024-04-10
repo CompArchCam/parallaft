@@ -1,7 +1,7 @@
 pub mod detach;
 pub mod dirty_pages;
 pub mod memory;
-mod registers;
+pub mod registers;
 mod stats;
 mod syscall;
 mod unwind;
