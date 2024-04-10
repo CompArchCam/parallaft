@@ -256,7 +256,10 @@ impl Segment {
     pub fn has_errors(&self) -> bool {
         if matches!(self.status, SegmentStatus::Crashed) {
             true
-        } else if matches!(self.checker.status, CheckerStatus::Crashed(..)) {
+        } else if matches!(
+            self.checker.status,
+            CheckerStatus::Crashed(..) | CheckerStatus::Checked(Some(..))
+        ) {
             true
         } else {
             false

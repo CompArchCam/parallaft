@@ -272,10 +272,10 @@ where
         // Dispatch init
         match child {
             ProcessIdentity::Main(_) => {
-                self.dispatcher.handle_main_init(process_ctx).unwrap();
+                self.dispatcher.handle_main_init(process_ctx)?;
             }
             ProcessIdentity::Checker(_) => {
-                self.dispatcher.handle_checker_init(process_ctx).unwrap();
+                self.dispatcher.handle_checker_init(process_ctx)?;
             }
         }
 
@@ -316,14 +316,14 @@ where
                     break ExitReason::Signalled(sig);
                 }
                 WaitStatus::Stopped(_, sig) => {
-                    self.handle_signal(&mut child_ref, sig, scope).unwrap();
+                    self.handle_signal(&mut child_ref, sig, scope)?;
                 }
                 WaitStatus::PtraceSyscall(_) => {
                     // Tell if it is a syscall entry or exit
-                    let is_syscall_entry = process.syscall_dir().unwrap().is_entry();
+                    let is_syscall_entry = process.syscall_dir()?.is_entry();
                     assert_eq!(is_syscall_entry, last_syscall_type.is_none());
 
-                    let regs = process_ctx.process.read_registers().unwrap();
+                    let regs = process_ctx.process.read_registers()?;
 
                     match last_syscall_type {
                         None => {
@@ -331,8 +331,7 @@ where
                             if let Some(sysno) = regs.sysno() {
                                 let syscall = Syscall::from_raw(sysno, regs.syscall_args());
                                 // Standard syscall entry
-                                self.handle_syscall_entry(&mut child_ref, syscall, scope)
-                                    .unwrap();
+                                self.handle_syscall_entry(&mut child_ref, syscall, scope)?;
 
                                 drop(child_ref);
 
@@ -344,8 +343,7 @@ where
                                     regs.sysno_raw(),
                                     regs.syscall_args(),
                                     scope,
-                                )
-                                .unwrap();
+                                )?;
 
                                 last_syscall_type = Some(SyscallType::Custom);
                             }
@@ -357,8 +355,7 @@ where
                                 syscall,
                                 regs.syscall_ret_val(),
                                 scope,
-                            )
-                            .unwrap();
+                            )?;
 
                             last_syscall_type = None;
                         }
@@ -368,8 +365,7 @@ where
                                 &mut child_ref,
                                 regs.syscall_ret_val(),
                                 scope,
-                            )
-                            .unwrap();
+                            )?;
 
                             last_syscall_type = None;
                         }
@@ -383,22 +379,19 @@ where
         // Dispatch fini and extra checks on segment status
         match &child {
             ProcessIdentity::Main(_) => {
-                self.dispatcher
-                    .handle_main_fini(
-                        match exit_reason {
-                            ExitReason::NormalExit(ret) => ret,
-                            _ => -1,
-                        }, /* todo */
-                        process_ctx,
-                    )
-                    .unwrap();
+                self.dispatcher.handle_main_fini(
+                    match exit_reason {
+                        ExitReason::NormalExit(ret) => ret,
+                        _ => -1,
+                    }, /* todo */
+                    process_ctx,
+                )?;
             }
             ProcessIdentity::Checker(segment) => {
                 assert!(segment.read().is_checked());
 
                 self.dispatcher
-                    .handle_checker_fini(None /* todo */, process_ctx)
-                    .unwrap()
+                    .handle_checker_fini(None /* todo */, process_ctx)?
             }
         }
 
@@ -607,6 +600,54 @@ where
         Ok(())
     }
 
+    fn checker_worker_work<'s, 'scope, 'env>(
+        &'s self,
+        segment: Arc<RwLock<Segment>>,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+    {
+        let segment_temp = segment.clone();
+        defer! {
+            let mut s = segment_temp.write();
+            if !matches!(s.checker.status, CheckerStatus::Checked(..)) {
+                warn!("Checker worker possibly crashed without marking segment as checked");
+                s.checker.status = CheckerStatus::Crashed(Error::Panic);
+                self.main_thread.unpark();
+            }
+            self.workers.lock().remove(&s.nr).unwrap();
+        }
+
+        loop {
+            let segment_locked = segment.read();
+            match &segment_locked.status {
+                SegmentStatus::Filling => (),
+                SegmentStatus::Done(..) => {
+                    break;
+                }
+                SegmentStatus::Crashed => {
+                    warn!("Main process fails to complete segment");
+                    return Err(Error::Cancelled);
+                }
+            }
+
+            drop(segment_locked);
+
+            park();
+        }
+
+        let mut segment_locked = segment.write();
+        segment_locked.start_checker()?;
+        self.dispatcher.handle_segment_ready(&mut segment_locked)?;
+        drop(segment_locked);
+
+        self.run_event_loop(ProcessIdentity::Checker::<Process>(segment), scope)?;
+
+        Ok(())
+    }
+
     /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
     fn add_checkpoint<'s, 'scope, 'env>(
         &'s self,
@@ -651,44 +692,9 @@ where
                 let jh = std::thread::Builder::new()
                     .name(format!("checker-{segment_id}"))
                     .spawn_scoped(scope, move || {
-                        let segment_temp = segment.clone();
-                        defer! {
-                            let mut s = segment_temp.write();
-                            if !matches!(s.checker.status, CheckerStatus::Checked(..)) {
-                                warn!("Checker worker possibly crashed without marking segment as checked");
-                                s.checker.status = CheckerStatus::Crashed(Error::Panic)
-                            }
-                            self.workers.lock().remove(&segment_id).unwrap();
+                        if let Err(e) = self.checker_worker_work(segment, scope) {
+                            error!("Checker worker crashed with error: {e:?}");
                         }
-
-                        loop {
-                            let segment_locked = segment.read();
-                            match &segment_locked.status {
-                                SegmentStatus::Filling => (),
-                                SegmentStatus::Done(..) => {
-                                    break;
-                                }
-                                SegmentStatus::Crashed => {
-                                    warn!("Main process fails to complete segment");
-                                    return;
-                                }
-                            }
-
-                            drop(segment_locked);
-
-                            park();
-                        }
-
-                        let mut segment_locked = segment.write();
-                        segment_locked.start_checker().unwrap();
-                        self.dispatcher.handle_segment_ready(&mut segment_locked).unwrap();
-                        drop(segment_locked);
-
-                        self.run_event_loop(
-                            ProcessIdentity::Checker::<Process>(segment),
-                            scope,
-                        )
-                        .unwrap();
                     })
                     .unwrap();
 

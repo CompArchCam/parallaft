@@ -209,6 +209,11 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     let disp = Dispatcher::new();
 
+    // Extras
+    for module in options.extra_modules {
+        disp.register_module_boxed(module);
+    }
+
     // Syscall handlers
     disp.register_module(RseqHandler::new());
     disp.register_module(CloneHandler::new());
@@ -317,11 +322,6 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     #[cfg(target_arch = "x86_64")]
     if options.enable_intel_hybrid_workaround {
         disp.register_module(IntelHybridWorkaround::new());
-    }
-
-    // Extras
-    for module in options.extra_modules {
-        disp.register_module_boxed(module);
     }
 
     let mut exit_status = ExitReason::Panic;

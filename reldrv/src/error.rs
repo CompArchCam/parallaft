@@ -33,6 +33,8 @@ pub enum Error {
     InvalidState,
     #[error("Not handled")]
     NotHandled,
+    #[error("Operation cancelled")]
+    Cancelled,
     #[error("Unexpected syscall made by the inferior")]
     UnexpectedSyscall(UnexpectedEventReason),
     #[error("Unexpected trap made by the inferior")]
