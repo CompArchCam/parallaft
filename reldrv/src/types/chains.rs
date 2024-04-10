@@ -34,12 +34,7 @@ impl SegmentChains {
     pub fn nr_live_segments(&self) -> usize {
         self.list
             .iter()
-            .filter(|s| {
-                matches!(
-                    s.read_recursive().checker.status,
-                    CheckerStatus::Checking(..) | CheckerStatus::Checked(..)
-                )
-            })
+            .filter(|s| matches!(s.read_recursive().status, SegmentStatus::Done(..)))
             .count()
     }
 
