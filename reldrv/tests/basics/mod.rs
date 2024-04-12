@@ -1,6 +1,8 @@
 use std::arch::asm;
 
-use crate::common::{checkpoint_fini, checkpoint_take, trace};
+use reldrv::RelShellOptionsBuilder;
+
+use crate::common::{checkpoint_fini, checkpoint_take, trace, trace_w_options};
 
 #[test]
 fn basic_checkpointing() {
@@ -20,6 +22,23 @@ fn basic_checkpointing_twice() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .expect()
+}
+
+#[test]
+fn basic_checkpointing_ten_times_parallel() {
+    trace_w_options(
+        || {
+            for _ in 0..10 {
+                checkpoint_take();
+            }
+            checkpoint_fini();
+            Ok::<_, ()>(())
+        },
+        RelShellOptionsBuilder::test_parallel_default()
+            .build()
+            .unwrap(),
+    )
     .expect()
 }
 

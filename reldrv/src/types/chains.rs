@@ -32,10 +32,7 @@ impl SegmentChains {
 
     /// Get the number of live segments in this segment chain.
     pub fn nr_live_segments(&self) -> usize {
-        self.list
-            .iter()
-            .filter(|s| matches!(s.read_recursive().status, SegmentStatus::Done(..)))
-            .count()
+        self.list.len()
     }
 
     /// Check if there are any checking errors in this segment chain.

@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use std::sync::Arc;
 use std::thread::{park, Scope, Thread};
@@ -166,6 +166,7 @@ pub struct CheckCoordinator<'disp, 'modules> {
     pub dispatcher: &'disp Dispatcher<'disp, 'modules>,
     workers: Mutex<HashMap<SegmentId, Worker>>,
     main_thread: Thread,
+    aborting: AtomicBool,
 }
 
 #[derive(Debug, Default, Clone, Builder)]
@@ -190,6 +191,7 @@ pub enum ExitReason {
     UnexpectedlyDies,
     StateMismatch,
     Panic,
+    Aborted,
 }
 
 impl ExitReason {
@@ -197,6 +199,7 @@ impl ExitReason {
         match self {
             ExitReason::NormalExit(c) => *c,
             ExitReason::Signalled(sig) => 128 + (*sig as i32),
+            ExitReason::Aborted => 252,
             ExitReason::StateMismatch => 253,
             ExitReason::UnexpectedlyDies => 254,
             ExitReason::Panic => 255,
@@ -243,6 +246,7 @@ where
             dispatcher,
             workers: Mutex::new(HashMap::new()),
             main_thread: std::thread::current(),
+            aborting: AtomicBool::new(false),
         }
     }
 
@@ -293,11 +297,8 @@ where
 
             let mut child_ref = child.upgradable_read_arc();
 
-            if child_ref.is_main() {
-                // todo select! with waitpid
-                if self.has_errors() {
-                    break ExitReason::StateMismatch;
-                }
+            if child_ref.is_main() && self.aborting.load(Ordering::SeqCst) {
+                break ExitReason::Panic;
             }
 
             match status {
@@ -412,7 +413,7 @@ where
                 park();
             });
 
-            if !self.options.ignore_miscmp && segments.has_errors() {
+            if self.aborting.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -420,9 +421,9 @@ where
                 info!("Unthrottled");
                 break;
             }
-            if segments.nr_live_segments() == 0 {
+            if segments.nr_live_segments() <= 1 {
                 panic!(
-                    "Deadlock detected: unthrottle not called after the number of live segments reaching zero"
+                    "Deadlock detected: unthrottle not called after the number of live segments reaching one"
                 );
             }
         }
@@ -535,6 +536,7 @@ where
                             if self.options.ignore_miscmp {
                                 warn!("Check fails");
                             } else {
+                                self.aborting.store(true, Ordering::SeqCst);
                                 error!("Check fails");
                             }
 
@@ -615,6 +617,7 @@ where
             if !matches!(s.checker.status, CheckerStatus::Checked(..)) {
                 warn!("Checker worker possibly crashed without marking segment as checked");
                 s.checker.status = CheckerStatus::Crashed(Error::Panic);
+                self.aborting.store(true, Ordering::SeqCst);
                 self.main_thread.unpark();
             }
             self.workers.lock().remove(&s.nr).unwrap();
@@ -731,7 +734,8 @@ where
         's: 'scope,
         's: 'disp,
     {
-        while !self.is_all_finished() && !self.has_errors() {
+        while !self.is_all_finished() && !self.has_errors() && !self.aborting.load(Ordering::SeqCst)
+        {
             park();
         }
         self.dispatcher

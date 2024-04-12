@@ -28,7 +28,7 @@ impl Throttler for NrSegmentsBasedThrottler {
             return false;
         }
 
-        if segments.nr_live_segments() >= self.max_nr_live_segments - 1 {
+        if segments.nr_live_segments() > self.max_nr_live_segments {
             info!("Throttling due to too many live segments");
             true
         } else {
@@ -37,7 +37,7 @@ impl Throttler for NrSegmentsBasedThrottler {
     }
 
     fn should_unthrottle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
-        if segments.nr_live_segments() < self.max_nr_live_segments {
+        if segments.nr_live_segments() <= self.max_nr_live_segments {
             true
         } else {
             false
