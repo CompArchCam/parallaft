@@ -188,8 +188,8 @@ impl Segment {
             RegisterComparsionResult::NoResult => {
                 if checker_regs != reference_registers {
                     error!("Register differs for epoch {}", self.checkpoint_start.epoch);
-                    info!("Checker registers:\n{}", checker_regs.dump());
-                    info!("Reference registers:\n{}", reference_registers.dump());
+                    error!("Checker registers:\n{}", checker_regs.dump());
+                    error!("Reference registers:\n{}", reference_registers.dump());
 
                     return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
                 }
