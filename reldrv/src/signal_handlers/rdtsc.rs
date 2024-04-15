@@ -23,6 +23,12 @@ use crate::{
 
 pub struct RdtscHandler;
 
+impl Default for RdtscHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RdtscHandler {
     pub fn new() -> Self {
         Self {}
@@ -48,7 +54,7 @@ impl SignalHandler for RdtscHandler {
                     context.child,
                     context.check_coord,
                     || unsafe { _rdtsc() },
-                    |tsc| SavedTrapEvent::Rdtsc(tsc),
+                    SavedTrapEvent::Rdtsc,
                     |event| {
                         if let SavedTrapEvent::Rdtsc(tsc) = event {
                             Ok(tsc)

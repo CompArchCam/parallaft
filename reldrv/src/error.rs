@@ -54,11 +54,11 @@ pub enum Error {
 
 impl Error {
     pub fn is_potentially_caused_by_skids(&self) -> bool {
-        match self {
-            Error::UnexpectedSyscall(UnexpectedEventReason::Excess) => true,
-            Error::UnexpectedTrap(UnexpectedEventReason::Excess) => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Error::UnexpectedSyscall(UnexpectedEventReason::Excess)
+                | Error::UnexpectedTrap(UnexpectedEventReason::Excess)
+        )
     }
 }
 
@@ -75,7 +75,7 @@ impl IgnoreNotSupportedErrorExt for Result<()> {
                 Error::NotSupported(_) => Ok(()),
                 e => Err(e),
             },
-            |x| Ok(x),
+            Ok,
         )
     }
 }

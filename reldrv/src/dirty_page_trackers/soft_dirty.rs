@@ -24,11 +24,11 @@ impl SoftDirtyPageTracker {
 }
 
 impl DirtyPageAddressTracker for SoftDirtyPageTracker {
-    fn take_dirty_pages_addresses<'a>(
+    fn take_dirty_pages_addresses(
         &self,
         _segment_id: SegmentId,
         role: ProcessRole,
-        ctx: &DirtyPageAddressTrackerContext<'a>,
+        ctx: &DirtyPageAddressTrackerContext<'_>,
     ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)> {
         match role {
             ProcessRole::Main => {
@@ -52,10 +52,10 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
         }
     }
 
-    fn nr_dirty_pages<'a>(
+    fn nr_dirty_pages(
         &self,
         role: ProcessRole,
-        ctx: &DirtyPageAddressTrackerContext<'a>,
+        ctx: &DirtyPageAddressTrackerContext<'_>,
     ) -> Result<usize> {
         match role {
             ProcessRole::Main => Process::new(ctx.main_pid).nr_dirty_pages(),

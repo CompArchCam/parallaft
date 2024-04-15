@@ -26,7 +26,7 @@ impl MemoryBasedThrottler {
         nr_dirty_pages_current_segment: usize,
         segments: &SegmentChains,
     ) -> usize {
-        (nr_dirty_pages_current_segment + segments.nr_dirty_pages()) * *PAGESIZE as usize * 2
+        (nr_dirty_pages_current_segment + segments.nr_dirty_pages()) * { *PAGESIZE } * 2
     }
 }
 
@@ -42,7 +42,7 @@ impl Throttler for MemoryBasedThrottler {
                 .nr_dirty_pages(
                     ProcessRole::Main,
                     &DirtyPageAddressTrackerContext {
-                        segment: &*segments.last_segment().unwrap().read(), // TODO: Not needed
+                        segment: &segments.last_segment().unwrap().read(), // TODO: Not needed
                         main_pid: check_coord.main.pid,
                     },
                 )

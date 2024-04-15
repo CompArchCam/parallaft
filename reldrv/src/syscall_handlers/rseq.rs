@@ -14,6 +14,12 @@ use crate::{
 
 pub struct RseqHandler {}
 
+impl Default for RseqHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RseqHandler {
     pub fn new() -> Self {
         Self {}

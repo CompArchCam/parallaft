@@ -74,6 +74,12 @@ pub struct Subscribers<'a> {
     register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
 }
 
+impl<'a> Default for Subscribers<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> Subscribers<'a> {
     pub fn new() -> Self {
         Self {
@@ -174,6 +180,12 @@ pub struct Dispatcher<'a, 'm> {
     subscribers: RwLock<Subscribers<'a>>,
 }
 
+impl<'a, 'm> Default for Dispatcher<'a, 'm> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a, 'm> Dispatcher<'a, 'm> {
     pub fn new() -> Self {
         Self {
@@ -187,13 +199,12 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
         segments: &SegmentChains,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
-        for &handler in &self.subscribers.read().throttlers {
-            if handler.should_throttle(segments, check_coord) {
-                return Some(handler);
-            }
-        }
-
-        None
+        self.subscribers
+            .read()
+            .throttlers
+            .iter()
+            .find(|&&handler| handler.should_throttle(segments, check_coord))
+            .copied()
     }
 
     pub fn register_module<'s, T>(&'s self, module: T) -> &T

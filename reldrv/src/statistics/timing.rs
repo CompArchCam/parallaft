@@ -28,6 +28,12 @@ pub struct TimingCollector {
     exit_status: Mutex<Option<i32>>,
 }
 
+impl Default for TimingCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TimingCollector {
     pub fn new() -> TimingCollector {
         TimingCollector {

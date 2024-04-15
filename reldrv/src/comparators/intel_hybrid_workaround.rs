@@ -14,6 +14,12 @@ pub struct IntelHybridWorkaround {
     nr_eflags_mismatches: AtomicUsize,
 }
 
+impl Default for IntelHybridWorkaround {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IntelHybridWorkaround {
     pub fn new() -> Self {
         Self {

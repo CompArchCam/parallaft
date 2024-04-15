@@ -16,12 +16,18 @@ use super::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
 
 const FPT_BUFFER_SIZE: usize = 2 * 1024 * 1024; // 2M entries (16MB buffer)
 const FPT_FLAGS: FptFlags = FptFlags::ALLOW_REALLOC;
-const MSG_FPT_INIT_FAILED: &'static str = "Failed to initialise FPT dirty page tracker";
+const MSG_FPT_INIT_FAILED: &str = "Failed to initialise FPT dirty page tracker";
 
 pub struct FptDirtyPageTracker {
     fd_main: Mutex<Option<FptFd>>,
     fd_map: Mutex<HashMap<SegmentId, FptFd>>,
     record_map: Mutex<HashMap<(SegmentId, ProcessRole), FptRecord>>,
+}
+
+impl Default for FptDirtyPageTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FptDirtyPageTracker {
@@ -35,11 +41,11 @@ impl FptDirtyPageTracker {
 }
 
 impl DirtyPageAddressTracker for FptDirtyPageTracker {
-    fn take_dirty_pages_addresses<'a>(
+    fn take_dirty_pages_addresses(
         &self,
         segment_id: SegmentId,
         role: ProcessRole,
-        _ctx: &DirtyPageAddressTrackerContext<'a>,
+        _ctx: &DirtyPageAddressTrackerContext<'_>,
     ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)> {
         let mut record_map = self.record_map.lock();
 
@@ -50,10 +56,10 @@ impl DirtyPageAddressTracker for FptDirtyPageTracker {
         Ok((Box::new(record), DirtyPageAddressFlags::default()))
     }
 
-    fn nr_dirty_pages<'a>(
+    fn nr_dirty_pages(
         &self,
         role: ProcessRole,
-        ctx: &DirtyPageAddressTrackerContext<'a>,
+        ctx: &DirtyPageAddressTrackerContext<'_>,
     ) -> Result<usize> {
         Ok(match role {
             ProcessRole::Main => {

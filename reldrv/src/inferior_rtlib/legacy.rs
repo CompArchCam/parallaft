@@ -43,6 +43,12 @@ pub struct LegacyInferiorRtLib {
     client_control_addr: RwLock<Option<usize>>,
 }
 
+impl Default for LegacyInferiorRtLib {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LegacyInferiorRtLib {
     pub fn new() -> Self {
         Self {

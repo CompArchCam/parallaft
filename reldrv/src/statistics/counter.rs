@@ -20,6 +20,12 @@ pub struct CounterCollector {
     syscall_count: AtomicU64,
 }
 
+impl Default for CounterCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CounterCollector {
     pub fn new() -> CounterCollector {
         CounterCollector {

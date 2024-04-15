@@ -131,8 +131,8 @@ impl PmuSegmentor {
         branch_counter_type: BranchCounterType,
         is_test: bool,
     ) -> Self {
-        let main_pmu_type = PmuType::detect(*main_cpu_set.get(0).unwrap_or(&0));
-        let checker_pmu_type = PmuType::detect(*checker_cpu_set.get(0).unwrap_or(&0));
+        let main_pmu_type = PmuType::detect(*main_cpu_set.first().unwrap_or(&0));
+        let checker_pmu_type = PmuType::detect(*checker_cpu_set.first().unwrap_or(&0));
 
         info!("Detected PMU type for main = {:?}", main_pmu_type);
         info!("Detected PMU type for checker = {:?}", checker_pmu_type);
@@ -182,7 +182,7 @@ impl PmuSegmentor {
     fn intel_core_atom_ty(&self) -> u32 {
         *self.intel_core_atom_ty.get_or_create(|| {
             let path = Path::new("/sys/bus/event_source/devices/cpu_atom/type");
-            std::fs::read_to_string(&path)
+            std::fs::read_to_string(path)
                 .unwrap()
                 .trim()
                 .parse()
@@ -527,16 +527,14 @@ impl SignalHandler for PmuSegmentor {
                                     branches, diff
                                 );
 
-                                if diff > 0 {
-                                    CheckerState::Stepping {
+                                match diff.cmp(&0) {
+                                    std::cmp::Ordering::Greater => CheckerState::Stepping {
                                         branch_counter,
                                         breakpoint: self
                                             .breakpoint(context.process().pid, segment_info.ip),
-                                    }
-                                } else if diff == 0 {
-                                    CheckerState::Done
-                                } else {
-                                    panic!("Skid detected");
+                                    },
+                                    std::cmp::Ordering::Equal => CheckerState::Done,
+                                    std::cmp::Ordering::Less => panic!("Skid detected"),
                                 }
                             }
                             CheckerState::Stepping {
@@ -552,20 +550,22 @@ impl SignalHandler for PmuSegmentor {
                                     branches, diff
                                 );
 
-                                if diff > 0 {
-                                    CheckerState::Stepping {
+                                match diff.cmp(&0) {
+                                    std::cmp::Ordering::Greater => CheckerState::Stepping {
                                         branch_counter,
                                         breakpoint,
+                                    },
+                                    std::cmp::Ordering::Equal => {
+                                        #[cfg(target_arch = "x86_64")]
+                                        context
+                                            .process()
+                                            .modify_registers_with(|r| r.with_resume_flag_cleared())
+                                            .unwrap();
+                                        CheckerState::Done
                                     }
-                                } else if diff == 0 {
-                                    #[cfg(target_arch = "x86_64")]
-                                    context
-                                        .process()
-                                        .modify_registers_with(|r| r.with_resume_flag_cleared())
-                                        .unwrap();
-                                    CheckerState::Done
-                                } else {
-                                    panic!("Unexpected breakpoint skid");
+                                    std::cmp::Ordering::Less => {
+                                        panic!("Unexpected breakpoint skid")
+                                    }
                                 }
                             }
                             CheckerState::Done => panic!("Invalid state"),

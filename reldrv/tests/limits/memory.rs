@@ -9,7 +9,7 @@ use reldrv::{process::PAGESIZE, RelShellOptionsBuilder};
 fn limit() {
     trace_w_options::<reldrv::error::Error>(
         || {
-            let size = (*PAGESIZE * 256) as usize;
+            let size = *PAGESIZE * 256;
 
             let addr = unsafe {
                 mman::mmap::<OwnedFd>(
@@ -29,7 +29,7 @@ fn limit() {
 
             checkpoint_take();
 
-            for chunk in buf.chunks_mut(*PAGESIZE as usize) {
+            for chunk in buf.chunks_mut(*PAGESIZE) {
                 rt.try_yield();
                 chunk[0] = 0xde;
                 chunk[1] = 0xad;

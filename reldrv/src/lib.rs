@@ -253,7 +253,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(RelRtLib::new(options.checkpoint_period));
     }
 
-    cpuid_handler.map(|handler| handler.set_overrides(cpuid_overrides));
+    if let Some(handler) = cpuid_handler {
+        handler.set_overrides(cpuid_overrides)
+    }
 
     // Misc
     disp.register_module(VdsoRemover::new());
@@ -346,7 +348,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             }
 
             if let Some(ref output) = options.dump_stats {
-                let s = format!("{}\n", statistics::as_text(disp.statistics()));
+                let s = format!("{}\n", statistics::as_text(&disp.statistics()));
 
                 match output {
                     StatsOutput::File(path) => fs::write(path, s).unwrap(),

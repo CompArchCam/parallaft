@@ -28,12 +28,7 @@ pub fn merge_page_addresses(
     pages.extend(page_addresses_p2);
 
     let pages = pages
-        .difference(
-            &ignored_pages
-                .into_iter()
-                .map(|&x| x)
-                .collect::<HashSet<usize>>(),
-        )
+        .difference(&ignored_pages.iter().copied().collect::<HashSet<usize>>())
         .cloned()
         .collect::<HashSet<usize>>();
 
@@ -44,24 +39,24 @@ pub fn filter_writable_addresses(
     mut addresses: HashSet<usize>,
     writable_regions: &[Range<usize>],
 ) -> HashSet<usize> {
-    addresses.retain(|a| writable_regions.into_iter().any(|r| r.contains(a)));
+    addresses.retain(|a| writable_regions.iter().any(|r| r.contains(a)));
     addresses
 }
 
 /// Compare the given pages of two processes' memory.
 /// Returns if the pages are equal, and the number of pages compared.
-pub fn page_diff<'a>(
+pub fn page_diff(
     p1_memory: &impl MemoryAccess,
     p2_memory: &impl MemoryAccess,
     page_addresses: &HashSet<usize>,
 ) -> Result<bool> {
-    let page_size = *PAGESIZE as usize;
+    let page_size = { *PAGESIZE };
 
     let mut buf_p1 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
     let mut buf_p2 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
 
     let remote_iovs: Vec<IoSlice> = page_addresses
-        .into_iter()
+        .iter()
         .map(|&p| IoSlice::new(unsafe { slice::from_raw_parts(p as _, page_size) }))
         .collect();
 

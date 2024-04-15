@@ -37,11 +37,7 @@ impl Throttler for NrSegmentsBasedThrottler {
     }
 
     fn should_unthrottle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
-        if segments.nr_live_segments() <= self.max_nr_live_segments {
-            true
-        } else {
-            false
-        }
+        segments.nr_live_segments() <= self.max_nr_live_segments
     }
 }
 

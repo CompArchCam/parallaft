@@ -39,7 +39,7 @@ impl SegmentStatus {
         *self = SegmentStatus::Done(checkpoint);
     }
 
-    pub fn checkpoint_end<'a>(&'a self) -> Option<&'a Arc<Checkpoint>> {
+    pub fn checkpoint_end(&self) -> Option<&Arc<Checkpoint>> {
         match self {
             SegmentStatus::Done(ckpt) => Some(ckpt),
             _ => None,
@@ -74,7 +74,7 @@ impl Eq for Segment {}
 
 impl PartialOrd for Segment {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.nr.partial_cmp(&other.nr)
+        Some(self.cmp(other))
     }
 }
 
@@ -145,22 +145,12 @@ impl Segment {
         let (dpa_main, dpa_main_flags) =
             dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Main, &ctx)?;
 
-        let dpa_main = dpa_main
-            .as_ref()
-            .as_ref()
-            .into_iter()
-            .map(|&x| x)
-            .collect::<Vec<usize>>();
+        let dpa_main = dpa_main.as_ref().as_ref().to_vec();
 
         let (dpa_checker, dpa_checker_flags) =
             dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Checker, &ctx)?;
 
-        let dpa_checker = dpa_checker
-            .as_ref()
-            .as_ref()
-            .into_iter()
-            .map(|&x| x)
-            .collect::<Vec<usize>>();
+        let dpa_checker = dpa_checker.as_ref().as_ref().to_vec();
 
         self.dirty_page_addresses_main = dpa_main;
         self.dirty_page_addresses_checker = dpa_checker;
@@ -213,8 +203,8 @@ impl Segment {
 
         if !dpa_main_flags.contains_writable_only || !dpa_checker_flags.contains_writable_only {
             let writable_ranges = checker_writable_ranges
-                .into_iter()
-                .chain(extra_writable_ranges.into_iter())
+                .iter()
+                .chain(extra_writable_ranges)
                 .cloned()
                 .collect::<Vec<_>>();
 
@@ -244,26 +234,21 @@ impl Segment {
     }
 
     /// Get the reference process at the start of the segment.
-    pub fn reference_start<'a>(&'a self) -> MutexGuard<'a, DetachedProcess<OwnedProcess>> {
+    pub fn reference_start(&self) -> MutexGuard<'_, DetachedProcess<OwnedProcess>> {
         self.checkpoint_start.process.lock()
     }
 
     /// Get the reference process at the end of the segment, it it exists.
-    pub fn reference_end<'a>(&'a self) -> Option<MutexGuard<'a, DetachedProcess<OwnedProcess>>> {
+    pub fn reference_end(&self) -> Option<MutexGuard<'_, DetachedProcess<OwnedProcess>>> {
         self.status.checkpoint_end().map(|c| c.process.lock())
     }
 
     pub fn has_errors(&self) -> bool {
-        if matches!(self.status, SegmentStatus::Crashed) {
-            true
-        } else if matches!(
-            self.checker.status,
-            CheckerStatus::Crashed(..) | CheckerStatus::Checked(Some(..))
-        ) {
-            true
-        } else {
-            false
-        }
+        matches!(self.status, SegmentStatus::Crashed)
+            || matches!(
+                self.checker.status,
+                CheckerStatus::Crashed(..) | CheckerStatus::Checked(Some(..))
+            )
     }
 
     pub fn is_checked(&self) -> bool {

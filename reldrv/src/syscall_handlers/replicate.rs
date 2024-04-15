@@ -17,6 +17,12 @@ use crate::{
 
 pub struct ReplicatedSyscallHandler {}
 
+impl Default for ReplicatedSyscallHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplicatedSyscallHandler {
     pub fn new() -> Self {
         Self {}

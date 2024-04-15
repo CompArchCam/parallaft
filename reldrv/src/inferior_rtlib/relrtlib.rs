@@ -122,11 +122,9 @@ impl CustomSyscallHandler for RelRtLib {
                 .handle_ready_to_schedule_checkpoint(context.check_coord)?;
 
             return Ok(SyscallHandlerExitAction::ContinueInferior);
-        } else if sysno == SYSNO_CHECKPOINT_TAKE {
-            if context.child.is_main() {
-                if let Some(c) = self.perf_counter.lock().as_mut() {
-                    c.enable()?;
-                }
+        } else if sysno == SYSNO_CHECKPOINT_TAKE && context.child.is_main() {
+            if let Some(c) = self.perf_counter.lock().as_mut() {
+                c.enable()?;
             }
         }
 
@@ -170,8 +168,8 @@ impl ScheduleCheckpoint for RelRtLib {
 
         let process = &check_coord.main;
 
-        let c = self.get_counter(&process)?;
-        self.set_counter(&process, -1_i64 as u64)?;
+        let c = self.get_counter(process)?;
+        self.set_counter(process, -1_i64 as u64)?;
         *self.saved_counter_value.lock() = c;
 
         self.perf_counter.lock().as_mut().unwrap().disable()?;
@@ -184,8 +182,8 @@ impl IgnoredPagesProvider for RelRtLib {
     fn get_ignored_pages(&self) -> Box<[usize]> {
         self.counter_addr
             .read()
-            .map(|addr| vec![addr & (!((*PAGESIZE - 1) as usize))])
-            .unwrap_or(vec![])
+            .map(|addr| vec![addr & (!{ *PAGESIZE - 1 })])
+            .unwrap_or_default()
             .into_boxed_slice()
     }
 }

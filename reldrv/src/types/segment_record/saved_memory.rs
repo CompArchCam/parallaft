@@ -14,11 +14,11 @@ impl SavedMemory {
         memory: &M,
         iovecs: &[RemoteIoVec],
     ) -> Result<Self, reverie_syscalls::Errno> {
-        let mut buf: Vec<u8> = vec![0; iovecs.into_iter().map(|&iov| iov.len).sum()];
+        let mut buf: Vec<u8> = vec![0; iovecs.iter().map(|&iov| iov.len).sum()];
 
         memory.read_vectored(
             &iovecs
-                .into_iter()
+                .iter()
                 .map(|&iov| {
                     IoSlice::new(unsafe { ::std::slice::from_raw_parts(iov.base as _, iov.len) })
                 })
@@ -42,7 +42,7 @@ impl SavedMemory {
             &[IoSlice::new(&self.buf)],
             &mut self
                 .iovecs
-                .into_iter()
+                .iter()
                 .map(|iov| {
                     IoSliceMut::new(unsafe {
                         ::std::slice::from_raw_parts_mut(iov.base as _, iov.len)

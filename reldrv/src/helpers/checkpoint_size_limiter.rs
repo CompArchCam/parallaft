@@ -56,7 +56,9 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
         }
 
         let mut fpt_fd = self.fpt_fd.lock();
-        fpt_fd.take().map(drop);
+        if let Some(a) = fpt_fd.take() {
+            drop(a)
+        }
 
         Ok(())
     }
@@ -73,20 +75,18 @@ impl SignalHandler for CheckpointSizeLimiter {
     {
         if signal == Signal::SIGTRAP {
             let siginfo = ptrace::getsiginfo(context.process().pid)?;
-            match siginfo.si_code {
-                TRAP_FPT_WATERMARK_USER => {
-                    info!("Trap: FPT");
-                    self.num_triggers.fetch_add(1, Ordering::SeqCst);
 
-                    context
-                        .check_coord
-                        .dispatcher
-                        .schedule_checkpoint(context.check_coord)
-                        .unwrap();
+            if siginfo.si_code == TRAP_FPT_WATERMARK_USER {
+                info!("Trap: FPT");
+                self.num_triggers.fetch_add(1, Ordering::SeqCst);
 
-                    return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
-                }
-                _ => (),
+                context
+                    .check_coord
+                    .dispatcher
+                    .schedule_checkpoint(context.check_coord)
+                    .unwrap();
+
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
             }
         }
 
@@ -96,19 +96,17 @@ impl SignalHandler for CheckpointSizeLimiter {
 
 impl SegmentEventHandler for CheckpointSizeLimiter {
     fn handle_segment_created(&self, _segment: &Segment) -> Result<()> {
-        self.fpt_fd
-            .lock()
-            .as_mut()
-            .map(|fd| fd.clear_fault().unwrap());
+        if let Some(fd) = self.fpt_fd.lock().as_mut() {
+            fd.clear_fault().unwrap()
+        }
 
         Ok(())
     }
 
     fn handle_segment_chain_closed(&self, _segment: &Segment) -> Result<()> {
-        self.fpt_fd
-            .lock()
-            .as_mut()
-            .map(|fd| fd.clear_fault().unwrap());
+        if let Some(fd) = self.fpt_fd.lock().as_mut() {
+            fd.clear_fault().unwrap()
+        }
 
         Ok(())
     }

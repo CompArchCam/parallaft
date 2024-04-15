@@ -41,7 +41,9 @@ pub fn trace_w_options<E>(
 ) -> ExitReason {
     setup();
 
-    let ret = match unsafe { fork().unwrap() } {
+    // TODO: ensure there are no leftover processes
+
+    match unsafe { fork().unwrap() } {
         ForkResult::Parent { child } => parent_work(child, options),
         ForkResult::Child => {
             raise(Signal::SIGSTOP).unwrap();
@@ -51,11 +53,7 @@ pub fn trace_w_options<E>(
             };
             std::process::exit(code);
         }
-    };
-
-    // TODO: ensure there are no leftover processes
-
-    ret
+    }
 }
 
 #[must_use]

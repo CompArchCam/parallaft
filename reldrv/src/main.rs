@@ -242,12 +242,10 @@ fn main() {
             dump_stats: {
                 if let Some(path) = cli.stats_output {
                     Some(StatsOutput::File(path))
+                } else if cli.dump_stats {
+                    Some(StatsOutput::StdOut)
                 } else {
-                    if cli.dump_stats {
-                        Some(StatsOutput::StdOut)
-                    } else {
-                        None
-                    }
+                    None
                 }
             },
             check_coord_flags: CheckCoordinatorOptions {

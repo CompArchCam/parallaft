@@ -42,7 +42,7 @@ impl Process {
                 // handle syscall exit
                 debug_assert_eq!(
                     self.instr_at(
-                        saved_regs.ip() as usize - instructions::SYSCALL.length(),
+                        saved_regs.ip() - instructions::SYSCALL.length(),
                         instructions::SYSCALL.length()
                     ),
                     instructions::SYSCALL

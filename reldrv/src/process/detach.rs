@@ -19,13 +19,9 @@ fn attach(process: &Process, state: &SavedState) -> Result<()> {
 
     process.instr_restore(state.instr)?;
 
-    match state.syscall_dir {
-        SyscallDir::Entry => {
-            process.restart_to_syscall_entry_stop(
-                state.registers.ip() - instructions::SYSCALL.length(),
-            )?;
-        }
-        _ => (),
+    if state.syscall_dir == SyscallDir::Entry {
+        process
+            .restart_to_syscall_entry_stop(state.registers.ip() - instructions::SYSCALL.length())?;
     }
 
     process.write_registers(state.registers)?;
@@ -86,7 +82,7 @@ impl<T: AsRef<Process>> DetachedProcess<T> {
     }
 
     pub fn attach(self) -> Result<T> {
-        attach(&self.inner.as_ref(), &self.state)?;
+        attach(self.inner.as_ref(), &self.state)?;
         Ok(self.inner)
     }
 

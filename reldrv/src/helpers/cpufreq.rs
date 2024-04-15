@@ -118,9 +118,9 @@ impl<'a> CpuFreqSetter<'a> {
 
         for &cpu in self
             .main_cpu_set
-            .into_iter()
-            .chain(self.checker_cpu_set.into_iter())
-            .chain(self.shell_cpu_set.into_iter())
+            .iter()
+            .chain(self.checker_cpu_set.iter())
+            .chain(self.shell_cpu_set.iter())
         {
             cpu_old_freq_governor.insert(
                 cpu,

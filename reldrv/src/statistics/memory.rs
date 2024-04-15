@@ -46,50 +46,45 @@ impl ProcessLifetimeHook for MemoryCollector {
         info!("Memory sampler started");
 
         let (tx, rx) = channel();
-        context.scope.spawn(move || loop {
-            // TODO: join handle
-            match rx.recv_timeout(self.interval) {
-                Err(RecvTimeoutError::Timeout) => {
-                    let segments = context.check_coord.segments.read();
-                    let mut pids = vec![context.check_coord.main.pid];
+        context.scope.spawn(move || {
+            while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(self.interval) {
+                // TODO: join handle
+                let segments = context.check_coord.segments.read();
+                let mut pids = vec![context.check_coord.main.pid];
 
-                    for segment in &segments.list {
-                        let segment = segment.read();
+                for segment in &segments.list {
+                    let segment = segment.read();
 
-                        if let Some(p) = segment.checker.process() {
-                            pids.push(p.pid);
-                        }
-
-                        if let Some(p) = segment.reference_end() {
-                            pids.push(p.pid);
-                        };
+                    if let Some(p) = segment.checker.process() {
+                        pids.push(p.pid);
                     }
 
-                    if self.include_rt {
-                        pids.push(Process::shell().pid);
-                    }
-
-                    drop(segments);
-
-                    let pss = pids
-                        .iter()
-                        .map(|&pid| Process::new(pid).pss().unwrap_or(0)) // Process may die at this point
-                        .sum::<usize>();
-
-                    debug!("Sampled PSS = {}", pss);
-
-                    self.pss_average.update(pss as _);
-                    let mut pss_peak = self.pss_peak.lock();
-
-                    if pss > *pss_peak {
-                        *pss_peak = pss;
-                    }
-
-                    self.num_samples.fetch_add(1, Ordering::SeqCst);
+                    if let Some(p) = segment.reference_end() {
+                        pids.push(p.pid);
+                    };
                 }
-                _ => {
-                    break;
+
+                if self.include_rt {
+                    pids.push(Process::shell().pid);
                 }
+
+                drop(segments);
+
+                let pss = pids
+                    .iter()
+                    .map(|&pid| Process::new(pid).pss().unwrap_or(0)) // Process may die at this point
+                    .sum::<usize>();
+
+                debug!("Sampled PSS = {}", pss);
+
+                self.pss_average.update(pss as _);
+                let mut pss_peak = self.pss_peak.lock();
+
+                if pss > *pss_peak {
+                    *pss_peak = pss;
+                }
+
+                self.num_samples.fetch_add(1, Ordering::SeqCst);
             }
         });
 

@@ -74,9 +74,7 @@ pub enum ProcessIdentity<P: Borrow<Process>> {
 }
 
 impl<P: Borrow<Process>> ProcessIdentity<P> {
-    pub fn upgradable_read_arc<'s>(
-        &'s self,
-    ) -> ProcessIdentityRef<'s, UpgradableReadGuard<Segment>> {
+    pub fn upgradable_read_arc(&self) -> ProcessIdentityRef<'_, UpgradableReadGuard<Segment>> {
         match self {
             ProcessIdentity::Main(p) => ProcessIdentityRef::Main(p.borrow()),
             ProcessIdentity::Checker(segment) => {
@@ -85,7 +83,7 @@ impl<P: Borrow<Process>> ProcessIdentity<P> {
         }
     }
 
-    pub fn read_arc_recursive<'s>(&'s self) -> ProcessIdentityRef<'s, ReadGuard<Segment>> {
+    pub fn read_arc_recursive(&self) -> ProcessIdentityRef<'_, ReadGuard<Segment>> {
         match self {
             ProcessIdentity::Main(p) => ProcessIdentityRef::Main(p.borrow()),
             ProcessIdentity::Checker(segment) => {
@@ -287,13 +285,11 @@ where
 
         // Main loop
         let exit_reason = loop {
-            let status;
-
-            match waitpid(process.pid, None) {
-                Ok(s) => status = s,
+            let status = match waitpid(process.pid, None) {
+                Ok(s) => s,
                 Err(Errno::ECHILD) => break ExitReason::UnexpectedlyDies,
                 Err(e) => panic!("waitpid error {e:?}"),
-            }
+            };
 
             let mut child_ref = child.upgradable_read_arc();
 
@@ -373,7 +369,7 @@ where
                     }
                 }
                 WaitStatus::StillAlive => continue,
-                ws @ _ => unreachable!("{ws:?}"),
+                ws => unreachable!("{ws:?}"),
             }
         };
 
@@ -427,7 +423,7 @@ where
                 break;
             }
 
-            if throttler.should_unthrottle(&segments, self) {
+            if throttler.should_unthrottle(segments, self) {
                 info!("Unthrottled");
                 break;
             }
@@ -479,13 +475,11 @@ where
             },
         )?;
 
-        let throttler;
-
-        if in_chain {
-            throttler = self.dispatcher.dispatch_throttle(&segments, self);
+        let throttler = if in_chain {
+            self.dispatcher.dispatch_throttle(&segments, self)
         } else {
-            throttler = None;
-        }
+            None
+        };
 
         process.resume()?;
 
@@ -540,7 +534,7 @@ where
                     self.dispatcher,
                 ) {
                     Ok((result, _nr_dirty_pages)) => {
-                        self.dispatcher.handle_segment_checked(&segment).unwrap();
+                        self.dispatcher.handle_segment_checked(segment).unwrap();
 
                         if result.is_err() {
                             if self.options.ignore_miscmp {
@@ -947,7 +941,7 @@ where
                                 SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
                                     mem_written_ranges,
                                     ..
-                                } => SavedMemory::save(&process, &mem_written_ranges)?,
+                                } => SavedMemory::save(&process, mem_written_ranges)?,
                                 _ => panic!(),
                             };
 

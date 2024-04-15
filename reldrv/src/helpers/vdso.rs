@@ -13,6 +13,12 @@ use crate::{
 
 pub struct VdsoRemover;
 
+impl Default for VdsoRemover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VdsoRemover {
     pub fn new() -> Self {
         info!("vDSO remover initialized");

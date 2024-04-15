@@ -25,6 +25,12 @@ pub struct MmapHandler {
     extra_writable_ranges: Mutex<HashSet<Range<usize>>>,
 }
 
+impl Default for MmapHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MmapHandler {
     pub fn new() -> Self {
         Self {
@@ -67,7 +73,7 @@ impl StandardSyscallHandler for MmapHandler {
                             regs.with_syscall_args(mmap.into_parts().1)
                         })?;
 
-                        return Ok(
+                        Ok(
                             StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                                 SavedIncompleteSyscall {
                                     syscall,
@@ -75,7 +81,7 @@ impl StandardSyscallHandler for MmapHandler {
                                     exit_action: SyscallExitAction::Checkpoint,
                                 },
                             ),
-                        );
+                        )
                     } else {
                         panic!("Mmap unexpected fd");
                     }

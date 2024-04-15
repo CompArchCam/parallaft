@@ -61,7 +61,7 @@ impl<'i> Display for DisplayProxy<'i> {
     }
 }
 
-pub fn as_text(stats: Box<[(String, Box<dyn StatisticValue>)]>) -> String {
+pub fn as_text(stats: &[(String, Box<dyn StatisticValue>)]) -> String {
     stats
         .iter()
         .map(|(k, v)| format!("{}={}", k, DisplayProxy::new(v.as_ref())))
@@ -71,6 +71,12 @@ pub fn as_text(stats: Box<[(String, Box<dyn StatisticValue>)]>) -> String {
 
 pub struct RunningAverage {
     data: Mutex<(f64, usize)>,
+}
+
+impl Default for RunningAverage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RunningAverage {

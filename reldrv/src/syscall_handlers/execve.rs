@@ -11,6 +11,12 @@ use crate::{
 
 pub struct ExecveHandler {}
 
+impl Default for ExecveHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExecveHandler {
     pub fn new() -> Self {
         Self {}

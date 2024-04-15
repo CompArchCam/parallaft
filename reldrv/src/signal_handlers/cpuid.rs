@@ -78,6 +78,12 @@ pub struct CpuidHandler {
     overrides: Mutex<Vec<CpuidOverride>>,
 }
 
+impl Default for CpuidHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CpuidHandler {
     pub fn new() -> Self {
         Self {
@@ -145,7 +151,7 @@ impl SignalHandler for CpuidHandler {
                 let ovs = self.overrides.lock();
 
                 for o in ovs.iter() {
-                    if o.leaf == leaf && (o.subleaf == Some(subleaf) || o.subleaf == None) {
+                    if o.leaf == leaf && (o.subleaf == Some(subleaf) || o.subleaf.is_none()) {
                         let (mask, value) =
                             overrides_map.entry(o.register).or_insert_with(|| (0, 0));
                         *mask |= o.mask;

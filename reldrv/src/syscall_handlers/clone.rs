@@ -7,6 +7,12 @@ use crate::events::HandlerContext;
 
 pub struct CloneHandler {}
 
+impl Default for CloneHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CloneHandler {
     pub fn new() -> Self {
         Self {}

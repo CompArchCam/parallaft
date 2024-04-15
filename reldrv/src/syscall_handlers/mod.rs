@@ -14,5 +14,5 @@ pub const SYSNO_CHECKPOINT_SYNC: usize = 0xff79;
 pub const CUSTOM_SYSNO_START: usize = 0xff7a;
 
 pub fn is_execve_ok(syscall: &Syscall, ret_val: isize) -> bool {
-    return matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) && ret_val == 0;
+    matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) && ret_val == 0
 }

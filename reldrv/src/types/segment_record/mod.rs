@@ -18,6 +18,12 @@ pub struct SegmentRecord {
     pub trap_event_pos: usize,
 }
 
+impl Default for SegmentRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SegmentRecord {
     pub fn new() -> Self {
         Self {
@@ -35,13 +41,11 @@ impl SegmentRecord {
     }
 
     pub fn peek_syscall(&self) -> Option<Arc<SavedSyscall>> {
-        self.syscall_log.get(self.syscall_pos).map(|x| x.clone())
+        self.syscall_log.get(self.syscall_pos).cloned()
     }
 
     pub fn peek_trap_event(&self) -> Option<Arc<SavedTrapEvent>> {
-        self.trap_event_log
-            .get(self.trap_event_pos)
-            .map(|x| x.clone())
+        self.trap_event_log.get(self.trap_event_pos).cloned()
     }
 
     pub fn next_syscall(&mut self) -> Option<Arc<SavedSyscall>> {

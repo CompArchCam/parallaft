@@ -254,7 +254,7 @@ impl Registers {
 
     #[cfg(target_arch = "x86_64")]
     pub fn with_resume_flag_cleared(mut self) -> Self {
-        self.eflags = !(1 << 16) & self.eflags;
+        self.eflags &= !(1 << 16);
 
         self
     }

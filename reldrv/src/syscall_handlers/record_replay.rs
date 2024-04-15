@@ -24,6 +24,12 @@ use crate::{
 
 pub struct RecordReplaySyscallHandler {}
 
+impl Default for RecordReplaySyscallHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RecordReplaySyscallHandler {
     pub fn new() -> Self {
         Self {}

@@ -17,6 +17,12 @@ use crate::{
 
 pub struct ExitHandler {}
 
+impl Default for ExitHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExitHandler {
     pub fn new() -> Self {
         Self {}

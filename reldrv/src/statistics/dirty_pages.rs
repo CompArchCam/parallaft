@@ -9,6 +9,12 @@ pub struct DirtyPageStatsCollector {
     avg: RunningAverage,
 }
 
+impl Default for DirtyPageStatsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DirtyPageStatsCollector {
     pub fn new() -> Self {
         Self {

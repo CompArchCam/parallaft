@@ -19,6 +19,12 @@ pub struct CheckpointSyncThrottler {
     sync_active: AtomicBool,
 }
 
+impl Default for CheckpointSyncThrottler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CheckpointSyncThrottler {
     pub fn new() -> Self {
         Self {

@@ -21,6 +21,12 @@ pub struct SegmentChains {
     in_chain: bool,
 }
 
+impl Default for SegmentChains {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SegmentChains {
     pub fn new() -> Self {
         Self {
@@ -49,11 +55,11 @@ impl SegmentChains {
     }
 
     pub fn last_segment(&self) -> Option<Arc<RwLock<Segment>>> {
-        self.list.back().map(|s| s.clone())
+        self.list.back().cloned()
     }
 
     pub fn first_segment(&self) -> Option<Arc<RwLock<Segment>>> {
-        self.list.front().map(|s| s.clone())
+        self.list.front().cloned()
     }
 
     pub fn in_chain(&self) -> bool {
@@ -143,7 +149,7 @@ impl SegmentChains {
 
     pub fn main_segment(&self) -> Option<Arc<RwLock<Segment>>> {
         if self.in_chain {
-            self.list.back().map(|segment| segment.clone())
+            self.list.back().cloned()
         } else {
             None
         }
