@@ -380,6 +380,16 @@ where
         // Dispatch fini and extra checks on segment status
         match &child {
             ProcessIdentity::Main(_) => {
+                if self
+                    .segments
+                    .read_recursive()
+                    .list
+                    .iter()
+                    .any(|x| matches!(x.read_recursive().status, SegmentStatus::Filling))
+                {
+                    panic!("Main crashed without marking segment status as crashed");
+                }
+
                 self.dispatcher.handle_main_fini(
                     match exit_reason {
                         ExitReason::NormalExit(ret) => ret,
