@@ -2605,6 +2605,8 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Tgkill {
         tgid: libc::pid_t,
         tid: libc::pid_t,
