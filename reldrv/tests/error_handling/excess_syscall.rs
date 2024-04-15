@@ -65,5 +65,5 @@ fn excess_syscall_on_1st() {
             .build()
             .unwrap(),
     )
-    .expect_state_mismatch()
+    .expect_panic()
 }

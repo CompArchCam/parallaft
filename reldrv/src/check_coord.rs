@@ -294,7 +294,7 @@ where
             let mut child_ref = child.upgradable_read_arc();
 
             if child_ref.is_main() && self.aborting.load(Ordering::SeqCst) {
-                break ExitReason::Panic;
+                break ExitReason::Aborted;
             }
 
             match status {
@@ -383,7 +383,8 @@ where
                     .iter()
                     .any(|x| matches!(x.read_recursive().status, SegmentStatus::Filling))
                 {
-                    panic!("Main crashed without marking segment status as crashed");
+                    info!("Main crashed without marking segment status as crashed");
+                    return Ok(ExitReason::Aborted);
                 }
 
                 self.dispatcher.handle_main_fini(
@@ -549,7 +550,7 @@ where
                             info!("Check passed");
                         }
 
-                        segment.mark_as_checked(result.is_err());
+                        segment.checker.mark_as_checked(result.err());
                     }
                     Err(e) => {
                         error!("Failed to check: {:?}", e);
@@ -794,6 +795,10 @@ where
     /// Check if any checker has errors unless IGNORE_CHECK_ERRORS is set.
     pub fn has_errors(&self) -> bool {
         !self.options.ignore_miscmp && self.segments.read().has_errors()
+    }
+
+    pub fn has_state_mismatches(&self) -> bool {
+        self.segments.read_recursive().has_state_mismatches()
     }
 
     pub fn handle_syscall_entry<'s, 'scope, 'env>(

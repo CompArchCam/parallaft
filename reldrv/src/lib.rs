@@ -343,8 +343,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
             check_coord.wait_until_and_handle_completion(scope).unwrap();
 
-            if check_coord.has_errors() {
-                exit_status = ExitReason::StateMismatch
+            if check_coord.has_state_mismatches() {
+                exit_status = ExitReason::StateMismatch;
+            } else if check_coord.has_errors() {
+                exit_status = ExitReason::Panic;
             }
 
             if let Some(ref output) = options.dump_stats {

@@ -46,6 +46,12 @@ impl SegmentChains {
         self.list.iter().any(|segment| segment.read().has_errors())
     }
 
+    pub fn has_state_mismatches(&self) -> bool {
+        self.list
+            .iter()
+            .any(|segment| segment.read_recursive().has_state_mismatches())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
     }

@@ -251,6 +251,10 @@ impl Segment {
             )
     }
 
+    pub fn has_state_mismatches(&self) -> bool {
+        matches!(self.checker.status, CheckerStatus::Checked(Some(..)))
+    }
+
     pub fn is_checked(&self) -> bool {
         self.checker.is_finished()
     }
