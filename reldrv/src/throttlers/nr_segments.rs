@@ -28,7 +28,7 @@ impl Throttler for NrSegmentsBasedThrottler {
             return false;
         }
 
-        if segments.nr_live_segments() > self.max_nr_live_segments {
+        if segments.nr_live_segments() >= self.max_nr_live_segments {
             info!("Throttling due to too many live segments");
             true
         } else {
