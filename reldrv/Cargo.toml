@@ -35,6 +35,7 @@ tempfile = "3"
 
 [profile.release]
 debug = true
+panic = 'abort'
 
 [features]
 default = ["intel_cat"]
