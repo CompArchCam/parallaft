@@ -123,13 +123,15 @@ impl SegmentChains {
     pub fn cleanup_committed_segments(
         &mut self,
         keep_failed_segments: bool,
+        until: Option<SegmentId>,
         on_segment_removed: impl Fn(&Segment) -> Result<()>,
     ) -> Result<()> {
         loop {
             let mut should_break = true;
             let front = self.list.front();
             if let Some(front) = front {
-                let front = front.read();
+                let front = front.read_recursive();
+                let front_id = front.nr;
                 if front.checker.is_finished() {
                     if keep_failed_segments
                         && matches!(
@@ -143,6 +145,11 @@ impl SegmentChains {
                     mem::drop(front);
                     self.list.pop_front();
                     should_break = false;
+                }
+                if let Some(until) = until {
+                    if front_id >= until {
+                        break;
+                    }
                 }
             }
             if should_break {

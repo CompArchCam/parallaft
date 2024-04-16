@@ -560,9 +560,11 @@ where
             }
         });
 
+        let segment_id = segment.nr;
+
         UpgradableReadGuard::unlocked(segment, || {
             let mut segments = self.segments.write();
-            self.cleanup_committed_segments(&mut segments, true)
+            self.cleanup_committed_segments(&mut segments, true, Some(segment_id))
         })?;
 
         Ok(())
@@ -597,8 +599,9 @@ where
         &self,
         segments: &mut SegmentChains,
         keep_failed_segments: bool,
+        until: Option<SegmentId>,
     ) -> Result<()> {
-        segments.cleanup_committed_segments(keep_failed_segments, |segment| {
+        segments.cleanup_committed_segments(keep_failed_segments, until, |segment| {
             self.dispatcher.handle_segment_removed(segment)
         })?;
 
@@ -716,7 +719,7 @@ where
                 Ok(())
             },
             |segment| self.dispatcher.handle_segment_chain_closed(&segment),
-            |segments| self.cleanup_committed_segments(segments, true),
+            |segments| self.cleanup_committed_segments(segments, true, None),
         )
     }
 
