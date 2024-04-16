@@ -554,7 +554,7 @@ where
                     }
                     Err(e) => {
                         error!("Failed to check: {:?}", e);
-                        segment.mark_as_checked(true);
+                        segment.checker.mark_as_crashed(e);
                     }
                 }
             }
