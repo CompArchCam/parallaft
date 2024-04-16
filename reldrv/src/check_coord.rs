@@ -547,7 +547,7 @@ where
 
                             // self.main.dump_memory_maps();
                         } else {
-                            info!("Check passed");
+                            info!("[C{:>6}] Check passed", segment.nr);
                         }
 
                         segment.checker.mark_as_checked(result.err());
