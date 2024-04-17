@@ -123,33 +123,38 @@ impl SegmentChains {
     pub fn cleanup_committed_segments(
         &mut self,
         keep_failed_segments: bool,
-        until: Option<SegmentId>,
+        is_opportunistic: bool,
         on_segment_removed: impl Fn(&Segment) -> Result<()>,
     ) -> Result<()> {
         loop {
             let mut should_break = true;
             let front = self.list.front();
             if let Some(front) = front {
-                let front = front.read_recursive();
-                let front_id = front.nr;
-                if front.checker.is_finished() {
+                let front_locked;
+
+                if is_opportunistic {
+                    if let Some(front) = front.try_read_recursive() {
+                        front_locked = front;
+                    } else {
+                        break;
+                    }
+                } else {
+                    front_locked = front.read_recursive();
+                }
+
+                if front_locked.checker.is_finished() {
                     if keep_failed_segments
                         && matches!(
-                            front.checker.status,
+                            front_locked.checker.status,
                             CheckerStatus::Checked(Some(..)) | CheckerStatus::Crashed(..)
                         )
                     {
                         break;
                     }
-                    on_segment_removed(&front)?;
-                    mem::drop(front);
+                    on_segment_removed(&front_locked)?;
+                    mem::drop(front_locked);
                     self.list.pop_front();
                     should_break = false;
-                }
-                if let Some(until) = until {
-                    if front_id >= until {
-                        break;
-                    }
                 }
             }
             if should_break {
