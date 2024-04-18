@@ -44,7 +44,7 @@ impl ProcessLifetimeHook for CheckpointSizeLimiter {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -68,7 +68,7 @@ impl SignalHandler for CheckpointSizeLimiter {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

@@ -25,7 +25,7 @@ pub trait SignalHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
+        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

@@ -168,7 +168,7 @@ impl<'a> CpuFreqSetter<'a> {
 impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -199,7 +199,7 @@ impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

@@ -64,7 +64,7 @@ impl StandardSyscallHandler for CounterCollector {
 impl ProcessLifetimeHook for CounterCollector {
     fn handle_all_fini<'s, 'scope, 'disp, 'modules>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, 'modules>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, 'modules, '_>,
     ) -> Result<()>
     where
         's: 'scope,

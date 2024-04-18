@@ -127,7 +127,7 @@ impl SignalHandler for CpuidHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -230,7 +230,7 @@ impl StandardSyscallHandler for CpuidHandler {
 impl ProcessLifetimeHook for CpuidHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

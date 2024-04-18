@@ -27,7 +27,7 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         nr_dirty_pages: Option<usize>,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

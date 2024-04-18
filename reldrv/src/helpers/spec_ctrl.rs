@@ -27,7 +27,7 @@ impl SpecCtrlSetter {
 impl ProcessLifetimeHook for SpecCtrlSetter {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> crate::error::Result<()>
     where
         's: 'scope,

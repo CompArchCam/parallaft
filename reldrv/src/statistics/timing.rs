@@ -103,7 +103,7 @@ impl StandardSyscallHandler for TimingCollector {
 impl ProcessLifetimeHook for TimingCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -118,7 +118,7 @@ impl ProcessLifetimeHook for TimingCollector {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -134,7 +134,7 @@ impl ProcessLifetimeHook for TimingCollector {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

@@ -136,7 +136,7 @@ impl SignalHandler for RelRtLib {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

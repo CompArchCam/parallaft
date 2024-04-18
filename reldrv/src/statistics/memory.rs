@@ -36,7 +36,7 @@ impl MemoryCollector {
 impl ProcessLifetimeHook for MemoryCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -95,7 +95,7 @@ impl ProcessLifetimeHook for MemoryCollector {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

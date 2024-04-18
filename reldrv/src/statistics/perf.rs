@@ -153,7 +153,7 @@ impl PerfStatsCollector {
 impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -181,7 +181,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,

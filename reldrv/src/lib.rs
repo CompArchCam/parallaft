@@ -13,6 +13,7 @@ pub mod signal_handlers;
 pub mod statistics;
 pub mod syscall_handlers;
 pub mod throttlers;
+pub mod tracing;
 pub mod types;
 
 use std::ffi::OsString;
@@ -78,6 +79,7 @@ use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
+use crate::tracing::Tracer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum DirtyPageAddressTrackerType {
@@ -305,6 +307,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         ));
     }
 
+    let tracer = disp.register_module(Tracer::new());
+
     // Throttlers
     disp.register_module(MemoryBasedThrottler::new(options.memory_overhead_watermark));
     disp.register_module(NrSegmentsBasedThrottler::new(options.max_nr_live_segments));
@@ -328,8 +332,12 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     let mut exit_status = ExitReason::Panic;
 
-    let check_coord =
-        CheckCoordinator::new(child.deref().clone(), options.check_coord_flags, &disp);
+    let check_coord = CheckCoordinator::new(
+        child.deref().clone(),
+        options.check_coord_flags,
+        &disp,
+        tracer,
+    );
 
     info!("Shell PID = {}", getpid());
 

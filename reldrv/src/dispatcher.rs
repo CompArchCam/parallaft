@@ -230,7 +230,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -246,7 +246,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -263,7 +263,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         nr_dirty_pages: Option<usize>,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -279,7 +279,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -296,7 +296,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         ret_val: i32,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_>,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope,
@@ -482,7 +482,7 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

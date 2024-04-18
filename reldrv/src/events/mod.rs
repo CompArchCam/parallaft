@@ -12,13 +12,13 @@ use crate::{
     types::segment::Segment,
 };
 
-pub struct HandlerContext<'id, 'process, 'disp, 'scope, 'env, 'modules> {
+pub struct HandlerContext<'id, 'process, 'disp, 'scope, 'env, 'modules, 'tracer> {
     pub child: &'id mut ProcessIdentityRef<'process, UpgradableReadGuard<Segment>>,
-    pub check_coord: &'disp CheckCoordinator<'disp, 'modules>,
+    pub check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     pub scope: &'scope Scope<'scope, 'env>,
 }
 
-impl HandlerContext<'_, '_, '_, '_, '_, '_> {
+impl HandlerContext<'_, '_, '_, '_, '_, '_, '_> {
     pub fn process(&self) -> &Process {
         self.child.process().unwrap()
     }

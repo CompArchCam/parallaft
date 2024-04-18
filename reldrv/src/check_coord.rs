@@ -38,6 +38,7 @@ use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::Process;
 use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
 use crate::throttlers::Throttler;
+use crate::tracing::{self, Tracer};
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
@@ -156,7 +157,7 @@ struct Worker {
     thread: Thread,
 }
 
-pub struct CheckCoordinator<'disp, 'modules> {
+pub struct CheckCoordinator<'disp, 'modules, 'tracer> {
     pub segments: Arc<RwLock<SegmentChains>>,
     pub main: Process,
     pub epoch: AtomicU32,
@@ -165,6 +166,7 @@ pub struct CheckCoordinator<'disp, 'modules> {
     workers: Mutex<HashMap<SegmentId, Worker>>,
     main_thread: Thread,
     aborting: AtomicBool,
+    tracer: &'tracer Tracer,
 }
 
 #[derive(Debug, Default, Clone, Builder)]
@@ -227,7 +229,7 @@ enum SyscallType {
     Custom,
 }
 
-impl<'disp, 'modules> CheckCoordinator<'disp, 'modules>
+impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer>
 where
     'modules: 'disp,
 {
@@ -235,6 +237,7 @@ where
         main: Process,
         options: CheckCoordinatorOptions,
         dispatcher: &'disp Dispatcher<'disp, 'modules>,
+        tracer: &'tracer Tracer,
     ) -> Self {
         Self {
             segments: Arc::new(RwLock::new(SegmentChains::new())),
@@ -245,6 +248,7 @@ where
             workers: Mutex::new(HashMap::new()),
             main_thread: std::thread::current(),
             aborting: AtomicBool::new(false),
+            tracer,
         }
     }
 
@@ -448,6 +452,7 @@ where
         's: 'scope,
         's: 'disp,
     {
+        let checkpointing_tracer = self.tracer.trace(tracing::Event::Checkpointing);
         info!("[M      ] Checkpoint");
         if self.options.no_fork {
             process.resume()?;
@@ -465,8 +470,11 @@ where
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
+        let forking_tracer = self.tracer.trace(tracing::Event::Forking);
         let reference = process.fork(restart_old_syscall, true)?;
+        forking_tracer.end();
 
+        let dirty_page_tracking_tracer = self.tracer.trace(tracing::Event::DirtyPageTracking);
         self.dispatcher.handle_checkpoint_created_pre(
             process.pid,
             if segments.next_id == 0 {
@@ -475,6 +483,7 @@ where
                 Some(segments.next_id - 1)
             },
         )?;
+        dirty_page_tracking_tracer.end();
 
         let throttler = if in_chain {
             self.dispatcher.dispatch_throttle(&segments, self)
@@ -483,6 +492,7 @@ where
         };
 
         process.resume()?;
+        checkpointing_tracer.end();
 
         let checkpoint = Checkpoint::new(epoch_local, reference, caller);
 
@@ -507,6 +517,7 @@ where
         })?;
 
         if let Some(throttler) = throttler {
+            let _ = self.tracer.trace(tracing::Event::Throttling);
             self.wait_until_unthrottled(throttler, &mut segments);
         }
 
@@ -816,6 +827,13 @@ where
         's: 'scope,
         's: 'disp,
     {
+        let syscall_entry_handling_tracer = match child {
+            ProcessIdentityRef::Main(_) => {
+                Some(self.tracer.trace(tracing::Event::SyscallEntryHandling))
+            }
+            ProcessIdentityRef::Checker(_) => None,
+        };
+
         let process = child.process().unwrap().clone(); // hack
 
         let mut skip_ptrace_syscall = false;
@@ -863,6 +881,7 @@ where
                         ) => {
                             segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
                             drop(segment);
+                            drop(syscall_entry_handling_tracer);
 
                             self.handle_checkpoint(
                                 child,
@@ -915,6 +934,13 @@ where
         's: 'scope,
         's: 'disp,
     {
+        let syscall_exit_handling_tracer = match child {
+            ProcessIdentityRef::Main(_) => {
+                Some(self.tracer.trace(tracing::Event::SyscallExitHandling))
+            }
+            ProcessIdentityRef::Checker(_) => None,
+        };
+
         let process = child.process().unwrap().clone();
         let mut skip_ptrace_syscall = false;
 
@@ -994,6 +1020,8 @@ where
                             process.modify_registers_with(|regs| {
                                 regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
                             })?;
+
+                            drop(syscall_exit_handling_tracer);
 
                             self.handle_checkpoint(
                                 child,
@@ -1134,9 +1162,16 @@ where
         's: 'scope,
         's: 'disp,
     {
+        let signal_handling_tracer = match child {
+            ProcessIdentityRef::Main(_) => Some(self.tracer.trace(tracing::Event::SignalHandling)),
+            ProcessIdentityRef::Checker(_) => None,
+        };
+
         let result = self
             .dispatcher
             .handle_signal(sig, ctx!(child, scope, self))?;
+
+        drop(signal_handling_tracer);
 
         let process = child.process().unwrap();
         let pid = process.pid;
