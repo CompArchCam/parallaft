@@ -517,8 +517,9 @@ where
         })?;
 
         if let Some(throttler) = throttler {
-            let _ = self.tracer.trace(tracing::Event::Throttling);
+            let throttling_tracer = self.tracer.trace(tracing::Event::Throttling);
             self.wait_until_unthrottled(throttler, &mut segments);
+            throttling_tracer.end();
         }
 
         Ok(())
