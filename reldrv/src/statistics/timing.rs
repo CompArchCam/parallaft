@@ -1,5 +1,5 @@
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -11,110 +11,200 @@ use crate::{
     error::Result,
     events::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        segment::SegmentEventHandler,
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    statistics_list,
+    types::segment::Segment,
 };
 
 use super::{StatisticValue, StatisticsProvider};
 
-pub struct TimingCollector {
-    utime: AtomicU64,
-    stime: AtomicU64,
-    start_time: Mutex<Option<Instant>>,
-    main_wall_time: Mutex<Option<Duration>>,
-    all_wall_time: Mutex<Option<Duration>>,
+// Event hierarchy:
+// * MainCheckpointing
+//   * MainDirtyPageTracking
+//   * MainForking
+//   * MainThrottling [?]
+//   * [other]
+// * CheckerStarting
+// * CheckerWall
+//   * CheckerUser
+//   * CheckerSys
+//   * CheckerSyscallEntryHandling
+//   * CheckerSyscallExitHandling
+//   * CheckerSignalHandling
+//   * CheckerComparing
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub enum Event {
+    // Main events
+    MainCheckpointing,
+    MainDirtyPageTracking,
+    MainForking,
+    MainThrottling,
+    MainSyscallEntryHandling,
+    MainSyscallExitHandling,
+    MainSignalHandling,
+
+    MainUser,
+    MainSys,
+    MainWall,
+
+    // CheckerEvents
+    CheckerStarting,
+    CheckerSyscallEntryHandling,
+    CheckerSyscallExitHandling,
+    CheckerSignalHandling,
+    CheckerComparing,
+
+    CheckerUser,
+    CheckerSys,
+    CheckerWall,
+
+    // Misc
+    AllWall,
+}
+
+impl Event {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Event::MainCheckpointing => "main_checkpointing",
+            Event::MainDirtyPageTracking => "main_dirty_page_tracking",
+            Event::MainForking => "main_forking",
+            Event::MainThrottling => "main_throttling",
+            Event::MainSyscallEntryHandling => "main_syscall_entry_handling",
+            Event::MainSyscallExitHandling => "main_syscall_exit_handling",
+            Event::MainSignalHandling => "main_signal_handling",
+
+            Event::MainUser => "main_user",
+            Event::MainSys => "main_sys",
+            Event::MainWall => "main_wall",
+
+            Event::CheckerStarting => "checker_starting",
+            Event::CheckerSyscallEntryHandling => "checker_syscall_entry_handling",
+            Event::CheckerSyscallExitHandling => "checker_syscall_exit_handling",
+            Event::CheckerSignalHandling => "checker_signal_handling",
+            Event::CheckerComparing => "checker_comparing",
+
+            Event::CheckerUser => "checker_user",
+            Event::CheckerSys => "checker_sys",
+            Event::CheckerWall => "checker_wall",
+
+            Event::AllWall => "all_wall",
+        }
+    }
+}
+
+pub struct Tracer {
+    durations: Mutex<HashMap<Event, Duration>>,
     exit_status: Mutex<Option<i32>>,
 }
 
-impl Default for TimingCollector {
+pub struct TracingGuard<'a> {
+    start_instant: Instant,
+    tracer: &'a Tracer,
+    event: Event,
+}
+
+impl TracingGuard<'_> {
+    pub fn end(self) {}
+}
+
+impl Drop for TracingGuard<'_> {
+    fn drop(&mut self) {
+        self.tracer.add(self.event, self.start_instant.elapsed());
+    }
+}
+
+impl Tracer {
+    pub fn new() -> Self {
+        Self {
+            durations: Mutex::new(HashMap::new()),
+            exit_status: Mutex::new(None),
+        }
+    }
+
+    pub fn trace(&self, event: Event) -> TracingGuard<'_> {
+        TracingGuard {
+            start_instant: Instant::now(),
+            tracer: self,
+            event,
+        }
+    }
+
+    pub fn set(&self, event: Event, elapsed: Duration) {
+        self.durations.lock().insert(event, elapsed);
+    }
+
+    pub fn add(&self, event: Event, elapsed: Duration) {
+        let mut durations = self.durations.lock();
+        *durations.entry(event).or_insert(Duration::ZERO) += elapsed;
+    }
+}
+
+impl Default for Tracer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TimingCollector {
-    pub fn new() -> TimingCollector {
-        TimingCollector {
-            utime: AtomicU64::new(0),
-            stime: AtomicU64::new(0),
-            start_time: Mutex::new(None),
-            main_wall_time: Mutex::new(None),
-            all_wall_time: Mutex::new(None),
-            exit_status: Mutex::new(None),
-        }
-    }
-
-    pub fn main_wall_time(&self) -> Duration {
-        self.main_wall_time.lock().unwrap_or_default()
-    }
-}
-
-impl StatisticsProvider for TimingCollector {
+impl StatisticsProvider for Tracer {
     fn class_name(&self) -> &'static str {
         "timing"
     }
 
-    fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
-        let ticks_per_second = procfs::ticks_per_second();
-        let utime_ticks = self.utime.load(Ordering::SeqCst);
-        let stime_ticks = self.stime.load(Ordering::SeqCst);
+    fn statistics(&self) -> Box<[(String, Box<dyn crate::statistics::StatisticValue>)]> {
+        let mut stats: Vec<(String, Box<dyn StatisticValue>)> = vec![(
+            "exit_status".to_owned(),
+            Box::new(self.exit_status.lock().unwrap_or(255)),
+        )];
 
-        let main_utime = utime_ticks as f64 / ticks_per_second as f64;
-        let main_stime = stime_ticks as f64 / ticks_per_second as f64;
-        let main_cpu_time = main_utime + main_stime;
-        let main_wall_time = self.main_wall_time.lock().unwrap().as_secs_f64();
-        let all_wall_time = self.all_wall_time.lock().unwrap().as_secs_f64();
-        let exit_status = self.exit_status.lock().unwrap_or(255);
+        for (event, duration) in self.durations.lock().iter() {
+            stats.push((
+                event.name().to_owned() + "_time",
+                Box::new(duration.as_secs_f64()),
+            ));
+        }
 
-        statistics_list!(
-            main_user_time = main_utime,
-            main_sys_time = main_stime,
-            main_cpu_time = main_cpu_time,
-            main_wall_time = main_wall_time,
-            all_wall_time = all_wall_time,
-            main_cpu_usage = main_cpu_time / main_wall_time,
-            exit_status = exit_status
-        )
+        stats.into_boxed_slice()
     }
 }
 
-impl StandardSyscallHandler for TimingCollector {
+fn ticks_to_duration(ticks: u64, tps: u64) -> Duration {
+    Duration::from_secs_f64(ticks as f64 / tps as f64)
+}
+
+impl StandardSyscallHandler for Tracer {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
         context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if context.child.is_main() {
-            match syscall {
-                Syscall::Exit(_) | Syscall::ExitGroup(_) => {
-                    let stats = context.process().stats()?;
-                    self.utime.store(stats.utime, Ordering::SeqCst);
-                    self.stime.store(stats.stime, Ordering::SeqCst);
-                }
-                _ => (),
+        if !context.child.is_main() {
+            return Ok(SyscallHandlerExitAction::NextHandler);
+        }
+
+        match syscall {
+            Syscall::Exit(_) | Syscall::ExitGroup(_) => {
+                let ticks_per_second = procfs::ticks_per_second();
+                let stats = context.process().stats()?;
+
+                self.add(
+                    Event::MainUser,
+                    ticks_to_duration(stats.utime, ticks_per_second),
+                );
+                self.add(
+                    Event::MainSys,
+                    ticks_to_duration(stats.stime, ticks_per_second),
+                );
             }
+            _ => (),
         }
         Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
-impl ProcessLifetimeHook for TimingCollector {
-    fn handle_main_init<'s, 'scope, 'disp>(
-        &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
-    ) -> Result<()>
-    where
-        's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
-    {
-        *self.start_time.lock() = Some(Instant::now());
-
-        Ok(())
-    }
-
+impl ProcessLifetimeHook for Tracer {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
         ret_val: i32,
@@ -125,30 +215,30 @@ impl ProcessLifetimeHook for TimingCollector {
         's: 'disp,
         'disp: 'scope,
     {
-        let elapsed = self.start_time.lock().unwrap().elapsed();
-        *self.main_wall_time.lock() = Some(elapsed);
         *self.exit_status.lock() = Some(ret_val);
-
         Ok(())
     }
+}
 
-    fn handle_all_fini<'s, 'scope, 'disp>(
-        &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
-    ) -> Result<()>
-    where
-        's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
-    {
-        let elapsed = self.start_time.lock().unwrap().elapsed();
-        *self.all_wall_time.lock() = Some(elapsed);
+impl SegmentEventHandler for Tracer {
+    fn handle_segment_checked(&self, segment: &Segment) -> Result<()> {
+        let ticks_per_second = procfs::ticks_per_second();
+        let stats = segment.checker.process().unwrap().stats()?;
+
+        self.add(
+            Event::CheckerUser,
+            ticks_to_duration(stats.utime, ticks_per_second),
+        );
+        self.add(
+            Event::CheckerSys,
+            ticks_to_duration(stats.stime, ticks_per_second),
+        );
 
         Ok(())
     }
 }
 
-impl Module for TimingCollector {
+impl Module for Tracer {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,
@@ -156,5 +246,6 @@ impl Module for TimingCollector {
         subs.install_standard_syscall_handler(self);
         subs.install_process_lifetime_hook(self);
         subs.install_stats_providers(self);
+        subs.install_segment_event_handler(self);
     }
 }

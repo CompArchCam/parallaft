@@ -36,9 +36,9 @@ use crate::events::{
 };
 use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::Process;
+use crate::statistics::timing::{self, Tracer};
 use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
 use crate::throttlers::Throttler;
-use crate::tracing::{self, Tracer};
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
@@ -275,16 +275,21 @@ where
 
         let mut last_syscall_type = None;
 
+        let wall_time_event;
+
         // Dispatch init
         match child {
             ProcessIdentity::Main(_) => {
                 self.dispatcher.handle_main_init(process_ctx)?;
+                wall_time_event = timing::Event::MainWall;
             }
             ProcessIdentity::Checker(_) => {
                 self.dispatcher.handle_checker_init(process_ctx)?;
+                wall_time_event = timing::Event::CheckerWall;
             }
         }
 
+        let wall_time_tracer = self.tracer.trace(wall_time_event);
         process.resume()?;
 
         // Main loop
@@ -377,6 +382,8 @@ where
             }
         };
 
+        wall_time_tracer.end();
+
         // Dispatch fini and extra checks on segment status
         match &child {
             ProcessIdentity::Main(_) => {
@@ -452,7 +459,7 @@ where
         's: 'scope,
         's: 'disp,
     {
-        let checkpointing_tracer = self.tracer.trace(tracing::Event::Checkpointing);
+        let checkpointing_tracer = self.tracer.trace(timing::Event::MainCheckpointing);
         info!("[M      ] Checkpoint");
         if self.options.no_fork {
             process.resume()?;
@@ -470,11 +477,11 @@ where
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
-        let forking_tracer = self.tracer.trace(tracing::Event::Forking);
+        let forking_tracer = self.tracer.trace(timing::Event::MainForking);
         let reference = process.fork(restart_old_syscall, true)?;
         forking_tracer.end();
 
-        let dirty_page_tracking_tracer = self.tracer.trace(tracing::Event::DirtyPageTracking);
+        let dirty_page_tracking_tracer = self.tracer.trace(timing::Event::MainDirtyPageTracking);
         self.dispatcher.handle_checkpoint_created_pre(
             process.pid,
             if segments.next_id == 0 {
@@ -517,7 +524,7 @@ where
         })?;
 
         if let Some(throttler) = throttler {
-            let throttling_tracer = self.tracer.trace(tracing::Event::Throttling);
+            let throttling_tracer = self.tracer.trace(timing::Event::MainThrottling);
             self.wait_until_unthrottled(throttler, &mut segments);
             throttling_tracer.end();
         }
@@ -533,6 +540,8 @@ where
         's: 'scope,
         's: 'disp,
     {
+        let checker_comparing_tracer = self.tracer.trace(timing::Event::CheckerComparing);
+
         segment.with_upgraded(|segment| {
             info!("[C{:>6}] Checkpoint", segment.nr);
 
@@ -576,6 +585,8 @@ where
             let mut segments = self.segments.write();
             self.cleanup_committed_segments(&mut segments, true, true)
         })?;
+
+        checker_comparing_tracer.end();
 
         Ok(())
     }
@@ -659,10 +670,14 @@ where
             park();
         }
 
+        let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
+
         let mut segment_locked = segment.write();
         segment_locked.start_checker()?;
         self.dispatcher.handle_segment_ready(&mut segment_locked)?;
         drop(segment_locked);
+
+        checker_starting_tracer.end();
 
         self.run_event_loop(ProcessIdentity::Checker::<Process>(segment), scope)?;
 
@@ -828,13 +843,12 @@ where
         's: 'scope,
         's: 'disp,
     {
-        let syscall_entry_handling_tracer = match child {
-            ProcessIdentityRef::Main(_) => {
-                Some(self.tracer.trace(tracing::Event::SyscallEntryHandling))
-            }
-            ProcessIdentityRef::Checker(_) => None,
+        let tracing_event = match child {
+            ProcessIdentityRef::Main(_) => timing::Event::MainSyscallEntryHandling,
+            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSyscallEntryHandling,
         };
 
+        let syscall_entry_handling_tracer = self.tracer.trace(tracing_event);
         let process = child.process().unwrap().clone(); // hack
 
         let mut skip_ptrace_syscall = false;
@@ -882,7 +896,7 @@ where
                         ) => {
                             segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
                             drop(segment);
-                            drop(syscall_entry_handling_tracer);
+                            syscall_entry_handling_tracer.end();
 
                             self.handle_checkpoint(
                                 child,
@@ -909,6 +923,8 @@ where
                     }
                     StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior => (),
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
+                        syscall_entry_handling_tracer.end();
+
                         self.handle_checker_checkpoint(child.unwrap_checker_segment_mut())?;
 
                         skip_ptrace_syscall = true;
@@ -935,12 +951,12 @@ where
         's: 'scope,
         's: 'disp,
     {
-        let syscall_exit_handling_tracer = match child {
-            ProcessIdentityRef::Main(_) => {
-                Some(self.tracer.trace(tracing::Event::SyscallExitHandling))
-            }
-            ProcessIdentityRef::Checker(_) => None,
+        let tracing_event = match child {
+            ProcessIdentityRef::Main(_) => timing::Event::MainSyscallExitHandling,
+            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSyscallExitHandling,
         };
+
+        let syscall_exit_handling_tracer = self.tracer.trace(tracing_event);
 
         let process = child.process().unwrap().clone();
         let mut skip_ptrace_syscall = false;
@@ -1001,6 +1017,7 @@ where
                             saved_incomplete_syscall.upgrade(ret_val, None)
                         }
                         SyscallExitAction::Checkpoint => {
+                            syscall_exit_handling_tracer.end();
                             todo!("take a full checkpoint");
                         }
                     };
@@ -1022,7 +1039,7 @@ where
                                 regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
                             })?;
 
-                            drop(syscall_exit_handling_tracer);
+                            syscall_exit_handling_tracer.end();
 
                             self.handle_checkpoint(
                                 child,
@@ -1061,7 +1078,10 @@ where
                     SyscallExitAction::ReplicateSyscall => {
                         assert_eq!(ret_val, saved_syscall.ret_val);
                     }
-                    SyscallExitAction::Checkpoint => todo!("take a full checkpoint"),
+                    SyscallExitAction::Checkpoint => {
+                        syscall_exit_handling_tracer.end();
+                        todo!("take a full checkpoint");
+                    }
                     SyscallExitAction::Custom => {
                         // dbg!(&saved_syscall);
                         assert_eq!(ret_val, saved_syscall.ret_val);
@@ -1163,16 +1183,18 @@ where
         's: 'scope,
         's: 'disp,
     {
-        let signal_handling_tracer = match child {
-            ProcessIdentityRef::Main(_) => Some(self.tracer.trace(tracing::Event::SignalHandling)),
-            ProcessIdentityRef::Checker(_) => None,
+        let tracing_event = match child {
+            ProcessIdentityRef::Main(_) => timing::Event::MainSignalHandling,
+            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSignalHandling,
         };
+
+        let signal_handling_tracer = self.tracer.trace(tracing_event);
 
         let result = self
             .dispatcher
             .handle_signal(sig, ctx!(child, scope, self))?;
 
-        drop(signal_handling_tracer);
+        signal_handling_tracer.end();
 
         let process = child.process().unwrap();
         let pid = process.pid;

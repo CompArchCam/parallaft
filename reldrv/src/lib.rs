@@ -13,7 +13,6 @@ pub mod signal_handlers;
 pub mod statistics;
 pub mod syscall_handlers;
 pub mod throttlers;
-pub mod tracing;
 pub mod types;
 
 use std::ffi::OsString;
@@ -62,7 +61,7 @@ use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
 use crate::statistics::perf::PerfStatsCollector;
-use crate::statistics::timing::TimingCollector;
+use crate::statistics::timing::Tracer;
 
 use crate::statistics::StatisticsProvider;
 use crate::syscall_handlers::clone::CloneHandler;
@@ -79,7 +78,6 @@ use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
 
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
-use crate::tracing::Tracer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum DirtyPageAddressTrackerType {
@@ -295,7 +293,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     ));
 
     // Statistics
-    disp.register_module(TimingCollector::new());
+    let tracer = disp.register_module(Tracer::new());
     disp.register_module(CounterCollector::new());
     disp.register_module(PerfStatsCollector::new(options.enabled_perf_counters));
     disp.register_module(DirtyPageStatsCollector::new());
@@ -306,8 +304,6 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             options.memory_sample_includes_rt,
         ));
     }
-
-    let tracer = disp.register_module(Tracer::new());
 
     // Throttlers
     disp.register_module(MemoryBasedThrottler::new(options.memory_overhead_watermark));
@@ -341,6 +337,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     info!("Shell PID = {}", getpid());
 
+    let all_wall_time_tracer = tracer.trace(statistics::timing::Event::AllWall);
+
     std::thread::scope(|scope| {
         defer!(disp.halt());
 
@@ -356,6 +354,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             } else if check_coord.has_errors() {
                 exit_status = ExitReason::Panic;
             }
+
+            all_wall_time_tracer.end();
 
             if let Some(ref output) = options.dump_stats {
                 let s = format!("{}\n", statistics::as_text(&disp.statistics()));
