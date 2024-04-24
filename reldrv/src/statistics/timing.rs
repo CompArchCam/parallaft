@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use itertools::Itertools;
 use parking_lot::Mutex;
 use reverie_syscalls::Syscall;
 
@@ -37,7 +38,7 @@ use super::{StatisticValue, StatisticsProvider};
 //   * CheckerSignalHandling
 //   * CheckerComparing
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Hash)]
 pub enum Event {
     // Main events
     MainCheckpointing,
@@ -165,7 +166,7 @@ impl StatisticsProvider for Tracer {
             Box::new(self.exit_status.lock().unwrap_or(255)),
         )];
 
-        for (event, duration) in self.durations.lock().iter() {
+        for (event, duration) in self.durations.lock().iter().sorted() {
             stats.push((
                 event.name().to_owned() + "_time",
                 Box::new(duration.as_secs_f64()),
