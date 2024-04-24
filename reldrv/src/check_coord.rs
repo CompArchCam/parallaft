@@ -673,8 +673,15 @@ where
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
         let mut segment_locked = segment.write();
+
+        let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
         segment_locked.start_checker()?;
+        checker_forking_tracer.end();
+
+        let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
         self.dispatcher.handle_segment_ready(&mut segment_locked)?;
+        checker_ready_hook_tracer.end();
+
         drop(segment_locked);
 
         checker_starting_tracer.end();

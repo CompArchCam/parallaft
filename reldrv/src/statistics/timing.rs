@@ -27,6 +27,8 @@ use super::{StatisticValue, StatisticsProvider};
 //   * MainThrottling [?]
 //   * [other]
 // * CheckerStarting
+//   * CheckerForking
+//   * CheckerReadyHook
 // * CheckerWall
 //   * CheckerUser
 //   * CheckerSys
@@ -52,6 +54,8 @@ pub enum Event {
 
     // CheckerEvents
     CheckerStarting,
+    CheckerForking,
+    CheckerReadyHook,
     CheckerSyscallEntryHandling,
     CheckerSyscallExitHandling,
     CheckerSignalHandling,
@@ -81,6 +85,8 @@ impl Event {
             Event::MainWall => "main_wall",
 
             Event::CheckerStarting => "checker_starting",
+            Event::CheckerForking => "checker_forking",
+            Event::CheckerReadyHook => "checker_ready_hook",
             Event::CheckerSyscallEntryHandling => "checker_syscall_entry_handling",
             Event::CheckerSyscallExitHandling => "checker_syscall_exit_handling",
             Event::CheckerSignalHandling => "checker_signal_handling",
