@@ -545,6 +545,8 @@ where
         segment.with_upgraded(|segment| {
             info!("[C{:>6}] Checkpoint", segment.nr);
 
+            self.dispatcher.handle_segment_checked(segment)?;
+
             if self.options.no_state_cmp {
                 segment.mark_as_checked(false);
             } else {
@@ -556,8 +558,6 @@ where
                     self.dispatcher,
                 ) {
                     Ok((result, _nr_dirty_pages)) => {
-                        self.dispatcher.handle_segment_checked(segment).unwrap();
-
                         if result.is_err() {
                             if self.options.ignore_miscmp {
                                 warn!("Check fails");
@@ -579,7 +579,9 @@ where
                     }
                 }
             }
-        });
+
+            Ok::<_, Error>(())
+        })?;
 
         UpgradableReadGuard::unlocked(segment, || {
             let mut segments = self.segments.write();
@@ -708,6 +710,7 @@ where
             is_finishing,
             |mut last_segment, _| {
                 let ret = if self.options.no_checker_exec {
+                    self.dispatcher.handle_segment_checked(&last_segment)?;
                     last_segment.mark_as_checked(false);
 
                     Ok(true)
