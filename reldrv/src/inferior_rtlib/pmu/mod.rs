@@ -435,7 +435,7 @@ impl SignalHandler for PmuSegmentor {
 
                 let mut take_checkpoint = false;
 
-                info!("{} Trap: Perf @ IP = {:p}", context.child, ip as *const u8);
+                debug!("{} Trap: Perf @ IP = {:p}", context.child, ip as *const u8);
 
                 match context.child {
                     ProcessIdentityRef::Main(process) => {
