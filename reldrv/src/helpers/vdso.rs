@@ -58,7 +58,7 @@ impl StandardSyscallHandler for VdsoRemover {
 
                         if v == nix::libc::AT_SYSINFO_EHDR {
                             Process::new(process.pid) // TODO
-                            .write_value(sp, &nix::libc::AT_IGNORE)?;
+                            .write_value(addr, &nix::libc::AT_IGNORE)?;
 
                             info!("vDSO removed at offset {:p}", (addr - sp) as *const u8);
 
