@@ -353,6 +353,12 @@ impl<'a> Displayable for Option<StatPtr<'a>> {
     }
 }
 
+impl<'a> From<StatPtr<'a>> for AddrMut<'a, libc::stat> {
+    fn from(value: StatPtr<'a>) -> Self {
+        value.0
+    }
+}
+
 /// A pointer to a `statx` buffer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct StatxPtr<'a>(pub AddrMut<'a, libc::statx>);
