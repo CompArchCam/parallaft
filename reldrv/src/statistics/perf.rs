@@ -22,6 +22,7 @@ pub enum CounterKind {
     DTLBStores,
     DTLBStoreMisses,
     Instructions,
+    Cycles,
     EnergyCores,
     EnergyPkg,
     EnergyRam,
@@ -39,6 +40,7 @@ impl CounterKind {
             CounterKind::DTLBStores => "dtlb_stores",
             CounterKind::DTLBStoreMisses => "dtlb_store_misses",
             CounterKind::Instructions => "instructions",
+            CounterKind::Cycles => "cycles",
             CounterKind::EnergyCores => "energy_cores",
             CounterKind::EnergyPkg => "energy_pkg",
             CounterKind::EnergyRam => "energy_ram",
@@ -104,6 +106,9 @@ impl CounterKind {
             .observe_pid(pid.as_raw())
             .build(),
             CounterKind::Instructions => perf_event::Builder::new(Hardware::INSTRUCTIONS)
+                .observe_pid(pid.as_raw())
+                .build(),
+            CounterKind::Cycles => perf_event::Builder::new(Hardware::CPU_CYCLES)
                 .observe_pid(pid.as_raw())
                 .build(),
             CounterKind::EnergyCores => perf_event::Builder::new(
