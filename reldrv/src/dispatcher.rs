@@ -1,21 +1,21 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc, thread::Scope};
 
-use nix::{sys::signal::Signal, unistd::Pid};
+use nix::sys::signal::Signal;
 use parking_lot::RwLock;
 use reverie_syscalls::Syscall;
 use syscalls::SyscallArgs;
 use typed_arena::Arena;
 
 use crate::{
-    check_coord::{CheckCoordinator, ProcessRole},
-    ctx,
+    check_coord::CheckCoordinator,
     dirty_page_trackers::{
-        DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext,
-        ExtraWritableRangesProvider,
+        DirtyPageAddressTracker, DirtyPageAddressesWithFlags, ExtraWritableRangesProvider,
     },
     error::Result,
     events::{
         comparator::{RegisterComparator, RegisterComparsionResult},
+        hctx,
+        module_lifetime::ModuleLifetimeHook,
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
@@ -26,13 +26,16 @@ use crate::{
         },
         HandlerContext,
     },
+    exec_point_providers::ExecutionPointProvider,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, registers::Registers},
     statistics::{StatisticValue, StatisticsProvider},
     throttlers::Throttler,
     types::{
         chains::SegmentChains,
-        segment::{Segment, SegmentId},
+        execution_point::ExecutionPoint,
+        process_id::{Checker, InferiorId, InferiorRefMut, Main},
+        segment::Segment,
         segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     },
 };
@@ -69,9 +72,10 @@ pub struct Subscribers<'a> {
     schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
     dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
-    halt_hooks: Vec<&'a (dyn Halt + Sync)>,
     stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
     register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
+    module_lifetime_hooks: Vec<&'a dyn ModuleLifetimeHook>,
+    exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
 }
 
 impl<'a> Default for Subscribers<'a> {
@@ -94,9 +98,10 @@ impl<'a> Subscribers<'a> {
             schedule_checkpoint_ready_handlers: Vec::new(),
             dirty_page_tracker: None,
             extra_writable_ranges_providers: Vec::new(),
-            halt_hooks: Vec::new(),
             stats_providers: Vec::new(),
             register_comparators: Vec::new(),
+            module_lifetime_hooks: Vec::new(),
+            exec_point_provider: None,
         }
     }
 
@@ -148,10 +153,7 @@ impl<'a> Subscribers<'a> {
         self.schedule_checkpoint_ready_handlers.push(handler)
     }
 
-    pub fn install_dirty_page_tracker(
-        &mut self,
-        tracker: &'a (dyn DirtyPageAddressTracker + Sync),
-    ) {
+    pub fn set_dirty_page_tracker(&mut self, tracker: &'a (dyn DirtyPageAddressTracker + Sync)) {
         self.dirty_page_tracker = Some(tracker);
     }
 
@@ -162,16 +164,20 @@ impl<'a> Subscribers<'a> {
         self.extra_writable_ranges_providers.push(provider)
     }
 
-    pub fn install_halt_hook(&mut self, hook: &'a (dyn Halt + Sync)) {
-        self.halt_hooks.push(hook)
-    }
-
     pub fn install_stats_providers(&mut self, provider: &'a (dyn StatisticsProvider + Sync)) {
         self.stats_providers.push(provider)
     }
 
     pub fn install_register_comparator(&mut self, comparator: &'a (dyn RegisterComparator + Sync)) {
         self.register_comparators.push(comparator)
+    }
+
+    pub fn install_module_lifetime_hook(&mut self, hook: &'a dyn ModuleLifetimeHook) {
+        self.module_lifetime_hooks.push(hook)
+    }
+
+    pub fn set_execution_point_provider(&mut self, provider: &'a dyn ExecutionPointProvider) {
+        self.exec_point_provider = Some(provider);
     }
 }
 
@@ -196,6 +202,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 
     pub fn dispatch_throttle(
         &self,
+        main: &mut Main,
         segments: &SegmentChains,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
@@ -203,7 +210,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
             .read()
             .throttlers
             .iter()
-            .find(|&&handler| handler.should_throttle(segments, check_coord))
+            .find(|&&handler| handler.should_throttle(main, segments, check_coord))
             .copied()
     }
 
@@ -213,7 +220,10 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
         's: 'a,
     {
         let m = self.modules.alloc(Box::new(module));
-        m.subscribe_all(&mut self.subscribers.write());
+        let mut subscribers = self.subscribers.write();
+
+        m.subscribe_all(&mut subscribers);
+
         unsafe { &*(m.as_ref() as *const _ as *const T) }
     }
 
@@ -221,9 +231,10 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
     where
         's: 'a,
     {
-        self.modules
-            .alloc(module)
-            .subscribe_all(&mut self.subscribers.write());
+        let mut subscribers = self.subscribers.write();
+        let m = self.modules.alloc(module);
+
+        m.subscribe_all(&mut subscribers);
     }
 }
 
@@ -320,7 +331,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry(
                 syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -341,7 +352,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
             let ret = handler.handle_standard_syscall_exit(
                 ret_val,
                 syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -360,7 +371,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_main(
                 syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, StandardSyscallEntryMainHandlerExitAction::NextHandler) {
@@ -381,7 +392,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
             let ret = handler.handle_standard_syscall_exit_main(
                 ret_val,
                 saved_incomplete_syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -400,7 +411,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_checker(
                 syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(
@@ -424,7 +435,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
             let ret = handler.handle_standard_syscall_exit_checker(
                 ret_val,
                 saved_syscall,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -447,7 +458,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
             let ret = handler.handle_custom_syscall_entry(
                 sysno,
                 args,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -466,7 +477,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_exit(
                 ret_val,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SyscallHandlerExitAction::NextHandler) {
@@ -490,7 +501,7 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
         for handler in &self.subscribers.read().signal_handlers {
             let ret = handler.handle_signal(
                 signal,
-                ctx!(context.child, context.scope, context.check_coord),
+                hctx(context.child, context.check_coord, context.scope),
             )?;
 
             if !matches!(ret, SignalHandlerExitAction::NextHandler) {
@@ -502,13 +513,15 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
     }
 }
 
-impl<'a, 'm> SegmentEventHandler for Dispatcher<'a, 'm> {
-    generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, segment: &Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, segment: &Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, segment: &mut Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, segment: &Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Segment));
-    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main_pid: Pid, last_segment_id: Option<SegmentId>));
+impl SegmentEventHandler for Dispatcher<'_, '_> {
+    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main: &mut Main));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, main: &mut Main));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, main: &mut Main));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
 }
 
 impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
@@ -535,17 +548,14 @@ impl<'a, 'm> DirtyPageAddressTracker for Dispatcher<'a, 'm> {
     generate_event_handler_option!(dirty_page_tracker,
         fn take_dirty_pages_addresses<'b>(
             &self,
-            segment_id: SegmentId,
-            role: ProcessRole,
-            ctx: &DirtyPageAddressTrackerContext<'b>,
-        ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)>
+            inferior_id: InferiorId,
+        ) -> Result<DirtyPageAddressesWithFlags>
     );
 
     generate_event_handler_option!(dirty_page_tracker,
         fn nr_dirty_pages<'b>(
             &self,
-            role: ProcessRole,
-            ctx: &DirtyPageAddressTrackerContext<'b>,
+            inferior_id: InferiorId,
         ) -> Result<usize>
     );
 }
@@ -559,16 +569,6 @@ impl<'a, 'm> ExtraWritableRangesProvider for Dispatcher<'a, 'm> {
         }
 
         ranges.into_boxed_slice()
-    }
-}
-
-impl<'a, 'm> Halt for Dispatcher<'a, 'm> {
-    fn halt(&self) {
-        self.subscribers
-            .read()
-            .halt_hooks
-            .iter()
-            .for_each(|h| h.halt())
     }
 }
 
@@ -610,14 +610,43 @@ impl RegisterComparator for Dispatcher<'_, '_> {
     }
 }
 
-pub trait Module {
+impl ModuleLifetimeHook for Dispatcher<'_, '_> {
+    fn init<'s, 'scope, 'env>(&'s self, scope: &'scope Scope<'scope, 'env>) -> Result<()>
+    where
+        's: 'scope,
+    {
+        self.subscribers
+            .read()
+            .module_lifetime_hooks
+            .iter()
+            .try_for_each(|m| m.init(scope))
+    }
+
+    fn fini<'s, 'scope, 'env>(&'s self, scope: &'scope Scope<'scope, 'env>) -> Result<()>
+    where
+        's: 'scope,
+    {
+        self.subscribers
+            .read()
+            .module_lifetime_hooks
+            .iter()
+            .try_for_each(|m| m.fini(scope))
+    }
+}
+
+pub trait Module: Sync {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd;
 }
 
-pub trait Halt {
-    fn halt(&self);
+impl ExecutionPointProvider for Dispatcher<'_, '_> {
+    generate_event_handler_option!(exec_point_provider,
+        fn get_current_execution_point<'b>(
+            &self,
+            child: &mut InferiorRefMut,
+        ) -> Result<Arc<dyn ExecutionPoint>>
+    );
 }
 
 unsafe impl Sync for Dispatcher<'_, '_> {}

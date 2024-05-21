@@ -142,8 +142,7 @@ impl SignalHandler for CpuidHandler {
         let (leaf, subleaf) = regs.cpuid_leaf_subleaf();
 
         let cpuid = handle_nondeterministic_instruction(
-            context.child,
-            context.check_coord,
+            &context.child,
             || {
                 // Apply overrides
                 let mut overrides_map = HashMap::new();
@@ -189,13 +188,13 @@ impl SignalHandler for CpuidHandler {
             |event| {
                 if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {
                     if regs.cpuid_leaf_subleaf() != (leaf, subleaf) {
-                        return Err(Error::UnexpectedTrap(
+                        return Err(Error::UnexpectedEvent(
                             UnexpectedEventReason::IncorrectTypeOrArguments,
                         ));
                     }
                     Ok(cpuid_saved)
                 } else {
-                    Err(Error::UnexpectedTrap(
+                    Err(Error::UnexpectedEvent(
                         UnexpectedEventReason::IncorrectTypeOrArguments,
                     ))
                 }
@@ -203,11 +202,11 @@ impl SignalHandler for CpuidHandler {
         )?;
 
         context.process().write_registers(
-            regs.with_cpuid_result(cpuid)
+            regs.with_cpuid_result(cpuid.value)
                 .with_offsetted_ip(instructions::CPUID.length() as _),
         )?;
 
-        Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior)
+        Ok(cpuid.signal_handler_exit_action())
     }
 }
 

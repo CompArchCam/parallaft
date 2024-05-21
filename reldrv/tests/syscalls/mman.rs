@@ -6,7 +6,7 @@ use std::{
     slice,
 };
 
-use crate::common::{checkpoint_fini, checkpoint_take, trace};
+use crate::common::{assert_in_protection, checkpoint_fini, checkpoint_take, trace};
 use nix::{
     sys::{
         memfd::{memfd_create, MemFdCreateFlag},
@@ -33,6 +33,8 @@ fn mmap_anon() {
             )
             .unwrap()
         };
+
+        assert_in_protection();
 
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
@@ -67,6 +69,8 @@ fn mmap_fd_read_dev_zero() {
             )
             .unwrap()
         };
+
+        assert_in_protection();
 
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
         assert!(arr.iter().all(|&x| x == 0));
@@ -105,6 +109,8 @@ fn mmap_fd_read_memfd() {
             )
             .unwrap()
         };
+
+        assert_in_protection();
 
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
@@ -146,6 +152,8 @@ fn mmap_fd_write_shared_memfd() {
             .unwrap()
         };
 
+        assert_in_protection();
+
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
         assert!(arr.iter().all(|&x| x == 0));
@@ -184,6 +192,8 @@ fn mremap_maymove() {
             )
             .unwrap()
         };
+
+        assert_in_protection();
 
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 
@@ -227,6 +237,8 @@ fn mremap_may_not_move() {
             )
             .unwrap()
         };
+
+        assert_in_protection();
 
         let arr = unsafe { slice::from_raw_parts_mut(addr as *mut u8, LEN) };
 

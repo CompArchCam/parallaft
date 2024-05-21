@@ -7,7 +7,7 @@ use super::Throttler;
 use crate::{
     check_coord::CheckCoordinator,
     dispatcher::{Module, Subscribers},
-    types::chains::SegmentChains,
+    types::{chains::SegmentChains, process_id::Main},
 };
 
 pub struct NrSegmentsBasedThrottler {
@@ -23,7 +23,12 @@ impl NrSegmentsBasedThrottler {
 }
 
 impl Throttler for NrSegmentsBasedThrottler {
-    fn should_throttle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
+    fn should_throttle(
+        &self,
+        _main: &mut Main,
+        segments: &SegmentChains,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         if self.max_nr_live_segments == 0 {
             return false;
         }
@@ -36,7 +41,12 @@ impl Throttler for NrSegmentsBasedThrottler {
         }
     }
 
-    fn should_unthrottle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
+    fn should_unthrottle(
+        &self,
+        _main: &mut Main,
+        segments: &SegmentChains,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         segments.nr_live_segments() <= self.max_nr_live_segments
     }
 }

@@ -2,6 +2,7 @@ pub mod detach;
 pub mod dirty_pages;
 pub mod memory;
 pub mod registers;
+pub mod sigqueue;
 mod stats;
 mod syscall;
 mod unwind;
@@ -9,8 +10,9 @@ mod unwind;
 use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
-use std::fmt::Debug;
+use nix::libc::siginfo_t;
 use std::ops::Deref;
+use std::{fmt::Debug, ops::DerefMut};
 
 use nix::{
     errno::Errno,
@@ -82,6 +84,15 @@ impl Process {
     pub fn interrupt(&self) -> Result<()> {
         ptrace::interrupt(self.pid)?;
         Ok(())
+    }
+
+    pub fn kill(&self) -> Result<()> {
+        kill(self.pid, Signal::SIGKILL)?;
+        Ok(())
+    }
+
+    pub fn get_siginfo(&self) -> Result<siginfo_t> {
+        Ok(ptrace::getsiginfo(self.pid)?)
     }
 
     pub fn set_cpu_affinity(&self, cpus: &[usize]) -> Result<()> {
@@ -198,6 +209,12 @@ impl Deref for OwnedProcess {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl DerefMut for OwnedProcess {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 

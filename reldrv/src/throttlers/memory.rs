@@ -1,11 +1,11 @@
 use log::info;
 
 use crate::{
-    check_coord::{CheckCoordinator, ProcessRole},
-    dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext},
+    check_coord::CheckCoordinator,
+    dirty_page_trackers::DirtyPageAddressTracker,
     dispatcher::{Module, Subscribers},
     process::PAGESIZE,
-    types::chains::SegmentChains,
+    types::{chains::SegmentChains, process_id::Main},
 };
 
 use super::Throttler;
@@ -31,22 +31,18 @@ impl MemoryBasedThrottler {
 }
 
 impl Throttler for MemoryBasedThrottler {
-    fn should_throttle(&self, segments: &SegmentChains, check_coord: &CheckCoordinator) -> bool {
+    fn should_throttle(
+        &self,
+        main: &mut Main,
+        segments: &SegmentChains,
+        check_coord: &CheckCoordinator,
+    ) -> bool {
         if self.memory_overhead_watermark == 0 {
             return false;
         }
 
         let memory_overhead = Self::get_potential_memory_overhead(
-            check_coord
-                .dispatcher
-                .nr_dirty_pages(
-                    ProcessRole::Main,
-                    &DirtyPageAddressTrackerContext {
-                        segment: &segments.last_segment().unwrap().read(), // TODO: Not needed
-                        main_pid: check_coord.main.pid,
-                    },
-                )
-                .unwrap(),
+            check_coord.dispatcher.nr_dirty_pages(main.into()).unwrap(),
             segments,
         );
 
@@ -58,7 +54,12 @@ impl Throttler for MemoryBasedThrottler {
         memory_overhead > self.memory_overhead_watermark
     }
 
-    fn should_unthrottle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
+    fn should_unthrottle(
+        &self,
+        _main: &mut Main,
+        segments: &SegmentChains,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         let memory_overhead = Self::get_potential_memory_overhead(0, segments);
 
         memory_overhead <= self.memory_overhead_watermark

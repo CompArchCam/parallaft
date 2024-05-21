@@ -38,7 +38,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         let action = || {
             StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
                 syscall: *syscall,
-                kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                kind: SavedIncompleteSyscallKind::WithoutMemoryEffects,
                 exit_action: SyscallExitAction::ReplicateSyscall,
             })
         };
@@ -59,13 +59,13 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         let action = || {
             let saved_syscall = context
                 .child
-                .unwrap_checker_segment()
+                .unwrap_checker()
+                .segment
                 .record
-                .peek_syscall()
-                .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
+                .get_syscall()?;
 
             if &saved_syscall.syscall != syscall {
-                return Err(Error::UnexpectedSyscall(
+                return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));
             }

@@ -13,7 +13,7 @@ use crate::{
     },
     process::{dirty_pages::IgnoredPagesProvider, Process},
     syscall_handlers::CUSTOM_SYSNO_START,
-    types::{checkpoint::CheckpointCaller, segment::Segment},
+    types::{checkpoint::CheckpointCaller, process_id::Main},
 };
 
 const SYSNO_SET_CLI_CONTROL_ADDR: usize = CUSTOM_SYSNO_START;
@@ -58,10 +58,10 @@ impl LegacyInferiorRtLib {
 }
 
 impl SegmentEventHandler for LegacyInferiorRtLib {
-    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
+    fn handle_segment_filled(&self, main: &mut Main) -> Result<()> {
+        let segment = main.segment.as_ref().unwrap();
         // TODO: handle errors more gracefully
-        let last_checker = segment.checker.process().unwrap();
-        let checkpoint = segment.status.checkpoint_end().unwrap();
+        let checkpoint = segment.checkpoint_end().unwrap();
 
         // patch the checker's client_control struct
         if let Some(base_address) = self.client_control_addr.read().as_ref() {
@@ -77,10 +77,9 @@ impl SegmentEventHandler for LegacyInferiorRtLib {
                 CliRole::Nop
             };
 
-            // HACK
-            Process::new(last_checker.pid)
+            Process::new(segment.checker_status.lock().pid().unwrap())
                 .write_value(AddrMut::from_raw(*base_address).unwrap(), &ctl)
-                .unwrap();
+                .unwrap(); // TODO
         }
 
         Ok(())

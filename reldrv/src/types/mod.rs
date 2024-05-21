@@ -1,5 +1,9 @@
 pub mod chains;
 pub mod checker;
 pub mod checkpoint;
+pub mod execution_point;
+pub mod exit_reason;
+pub mod perf_counter;
+pub mod process_id;
 pub mod segment;
 pub mod segment_record;

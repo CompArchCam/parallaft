@@ -40,7 +40,7 @@ impl StandardSyscallHandler for ExitHandler {
                 StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                     SavedIncompleteSyscall {
                         syscall: *syscall,
-                        kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                        kind: SavedIncompleteSyscallKind::WithoutMemoryEffects,
                         exit_action: SyscallExitAction::Custom,
                     },
                 )

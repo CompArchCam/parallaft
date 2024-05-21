@@ -12,5 +12,5 @@ fn preadv() {
         uio::preadv(fd, &mut [IoSliceMut::new(&mut buf)], 0).unwrap();
         unreachable!();
     })
-    .expect_panic()
+    .expect_crash()
 }

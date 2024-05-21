@@ -3,7 +3,7 @@ use std::{
     mem::MaybeUninit,
 };
 
-use reldrv::{check_coord::ExitReason, RelShellOptionsBuilder};
+use reldrv::{types::exit_reason::ExitReason, RelShellOptionsBuilder};
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 

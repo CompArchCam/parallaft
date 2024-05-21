@@ -43,8 +43,8 @@ pub fn filter_writable_addresses(
     addresses
 }
 
-/// Compare the given pages of two processes' memory.
-/// Returns if the pages are equal, and the number of pages compared.
+/// Compare the given pages of two processes' memory. Returns if the pages are
+/// equal.
 pub fn page_diff(
     p1_memory: &impl MemoryAccess,
     p2_memory: &impl MemoryAccess,

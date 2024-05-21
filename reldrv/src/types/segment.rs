@@ -1,22 +1,22 @@
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::{Deref, Range};
+use std::ops::Range;
 use std::sync::Arc;
 
 use log::{error, info};
 use nix::unistd::Pid;
-use parking_lot::MutexGuard;
+use parking_lot::{Condvar, Mutex, MutexGuard};
 
-use crate::check_coord::ProcessRole;
-use crate::dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
+use crate::dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressesWithFlags};
 use crate::error::{Error, Result};
 use crate::events::comparator::{RegisterComparator, RegisterComparsionResult};
 use crate::process::detach::DetachedProcess;
 use crate::process::dirty_pages::{filter_writable_addresses, merge_page_addresses, page_diff};
-use crate::process::OwnedProcess;
+use crate::process::{OwnedProcess, Process};
 
-use super::checker::{CheckFailReason, Checker, CheckerStatus};
+use super::checker::{CheckFailReason, CheckerStatus};
 use super::checkpoint::Checkpoint;
+use super::process_id::{Checker, InferiorId};
 use super::segment_record::SegmentRecord;
 
 pub type SegmentId = u32;
@@ -24,25 +24,32 @@ pub type SegmentId = u32;
 #[derive(Debug)]
 pub enum SegmentStatus {
     /// The main process is running on this segment.
-    Filling,
+    Filling { pid: Pid },
 
-    /// The main process finished this segment.
-    Done(Arc<Checkpoint>),
+    /// The main process finished this segment, so that the record is fully
+    /// filled.
+    Filled {
+        checkpoint: Arc<Checkpoint>,
+        dirty_page_addresses: Option<Arc<DirtyPageAddressesWithFlags>>,
+    },
 
     /// Something went wrong.
     Crashed,
 }
 
 impl SegmentStatus {
-    pub fn mark_as_done(&mut self, checkpoint: Arc<Checkpoint>) {
-        assert!(matches!(self, SegmentStatus::Filling));
-        *self = SegmentStatus::Done(checkpoint);
+    pub fn checkpoint_end(&self) -> Option<Arc<Checkpoint>> {
+        match self {
+            SegmentStatus::Filled { checkpoint, .. } => Some(checkpoint.clone()),
+            _ => None,
+        }
     }
 
-    pub fn checkpoint_end(&self) -> Option<&Arc<Checkpoint>> {
+    pub fn pid(&self) -> Option<Pid> {
         match self {
-            SegmentStatus::Done(ckpt) => Some(ckpt),
-            _ => None,
+            SegmentStatus::Filling { pid } => Some(*pid),
+            SegmentStatus::Filled { checkpoint, .. } => Some(checkpoint.process.lock().pid),
+            SegmentStatus::Crashed => None,
         }
     }
 }
@@ -51,11 +58,10 @@ impl SegmentStatus {
 pub struct Segment {
     pub nr: SegmentId,
     pub checkpoint_start: Arc<Checkpoint>,
-    pub status: SegmentStatus,
+    pub status: Mutex<SegmentStatus>,
+    pub status_cvar: Condvar,
     pub record: SegmentRecord,
-    pub checker: Checker,
-    pub dirty_page_addresses_main: Vec<usize>,
-    pub dirty_page_addresses_checker: Vec<usize>,
+    pub checker_status: Mutex<CheckerStatus>,
 }
 
 impl Hash for Segment {
@@ -85,89 +91,152 @@ impl Ord for Segment {
 }
 
 impl Segment {
-    pub fn new(checkpoint_start: Arc<Checkpoint>, nr: SegmentId) -> Self {
+    pub fn new(
+        checkpoint_start: Arc<Checkpoint>,
+        nr: SegmentId,
+        main_pid: Pid,
+        enable_async_events: bool,
+    ) -> Self {
         Self {
             nr,
             checkpoint_start,
-            status: SegmentStatus::Filling,
-            record: SegmentRecord::new(),
-            dirty_page_addresses_main: Vec::new(),
-            dirty_page_addresses_checker: Vec::new(),
-            checker: Checker::new(),
+            status: Mutex::new(SegmentStatus::Filling { pid: main_pid }),
+            status_cvar: Condvar::new(),
+            record: SegmentRecord::new(enable_async_events),
+            checker_status: Mutex::new(CheckerStatus::new()),
         }
     }
 
-    /// Mark this segment as "ready to check".
-    /// This should happen when the main process reaches the ending checkpoint of this segment, i.e. the checkpoint immediately after the starting checkpoint.
-    pub fn mark_as_done(&mut self, checkpoint_end: Arc<Checkpoint>) {
-        self.status.mark_as_done(checkpoint_end);
+    pub fn mark_main_as_completed(&self, checkpoint_end: Arc<Checkpoint>) {
+        let mut status = self.status.lock();
+        assert!(matches!(&*status, SegmentStatus::Filling { .. }));
+        *status = SegmentStatus::Filled {
+            checkpoint: checkpoint_end,
+            dirty_page_addresses: None,
+        };
+        drop(status);
+        self.status_cvar.notify_all();
     }
 
-    pub fn start_checker(&mut self) -> Result<&OwnedProcess> {
-        match &self.status {
-            SegmentStatus::Done(..) => {
-                self.record.reset();
-                let checker_process = self.checker.start(&self.checkpoint_start)?;
-                Ok(checker_process)
-            },
-            _ => panic!("Attempting to start checking when the main process has not yet completed the segment"),
+    pub fn mark_as_crashed(&self) {
+        let mut status = self.status.lock();
+        assert!(matches!(&*status, SegmentStatus::Filling { .. }));
+        *status = SegmentStatus::Crashed;
+        drop(status);
+        self.status_cvar.notify_all();
+
+        self.record.mark_main_as_crashed();
+        *self.checker_status.lock() = CheckerStatus::Crashed(Error::Cancelled);
+    }
+
+    pub fn mark_as_crashed_if_filling(&self) {
+        let mut status = self.status.lock();
+        if matches!(&*status, SegmentStatus::Filling { .. }) {
+            *status = SegmentStatus::Crashed;
+            drop(status);
+            self.status_cvar.notify_all();
+
+            self.record.mark_main_as_crashed();
+            *self.checker_status.lock() = CheckerStatus::Crashed(Error::Cancelled);
         }
     }
 
-    /// Compare dirty memory of the checker process and the reference process without marking the segment status as checked.
-    /// This should be called after the checker process invokes the checkpoint syscall.
-    pub fn check(
-        &mut self,
-        main_pid: Pid,
+    // Locks: record -> checker
+    pub fn start_checker(&self) -> Result<OwnedProcess> {
+        // self.record.rewind(self)?; // TODO:
+        self.checker_status.lock().start(&self.checkpoint_start)
+    }
+
+    fn get_main_dirty_page_addresses_once(
+        self: &Arc<Self>,
+        dirty_page_tracker: &dyn DirtyPageAddressTracker,
+    ) -> Result<Arc<DirtyPageAddressesWithFlags>> {
+        let mut status = self.status.lock();
+
+        if let SegmentStatus::Filled {
+            dirty_page_addresses,
+            ..
+        } = &mut *status
+        {
+            match dirty_page_addresses {
+                Some(a) => Ok(a.clone()),
+                None => {
+                    let new_dirty_page_addresses = MutexGuard::unlocked(&mut status, || {
+                        dirty_page_tracker
+                            .take_dirty_pages_addresses(InferiorId::Main(Some(self.clone())))
+                            .map(Arc::new)
+                    })?;
+
+                    Ok(match &mut *status {
+                        SegmentStatus::Filled {
+                            dirty_page_addresses,
+                            ..
+                        } => dirty_page_addresses
+                            .insert(new_dirty_page_addresses)
+                            .clone(),
+                        _ => panic!("Unexpected state"),
+                    })
+                }
+            }
+        } else {
+            panic!("Invalid main status: {:?}", &*status)
+        }
+    }
+
+    fn compare_memory(
+        self: &Arc<Self>,
+        dpa_main: &DirtyPageAddressesWithFlags,
+        dpa_checker: &DirtyPageAddressesWithFlags,
+        checker_process: &Process,
+        reference_process: &mut DetachedProcess<impl AsRef<Process>>,
         ignored_pages: &[usize],
         extra_writable_ranges: &[Range<usize>],
-        dirty_page_tracker: &(dyn DirtyPageAddressTracker + Sync),
-        comparator: &impl RegisterComparator,
-    ) -> Result<(std::result::Result<(), CheckFailReason>, usize)> {
-        let checkpoint_end = if let SegmentStatus::Done(checkpoint_end) = &self.status {
-            checkpoint_end
-        } else {
-            panic!("Invalid segment status")
-        };
-
-        let checker_process = if let CheckerStatus::Checking(checker_process) = &self.checker.status
-        {
-            checker_process.deref()
-        } else {
-            panic!("Invalid checker status")
-        };
-
-        let ctx = DirtyPageAddressTrackerContext {
-            segment: self,
-            main_pid,
-        };
-
-        let (dpa_main, dpa_main_flags) =
-            dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Main, &ctx)?;
-
-        let dpa_main = dpa_main.as_ref().as_ref().to_vec();
-
-        let (dpa_checker, dpa_checker_flags) =
-            dirty_page_tracker.take_dirty_pages_addresses(self.nr, ProcessRole::Checker, &ctx)?;
-
-        let dpa_checker = dpa_checker.as_ref().as_ref().to_vec();
-
-        self.dirty_page_addresses_main = dpa_main;
-        self.dirty_page_addresses_checker = dpa_checker;
-
+    ) -> Result<Option<CheckFailReason>> {
         let mut dpa_merged = merge_page_addresses(
-            &self.dirty_page_addresses_checker,
-            &self.dirty_page_addresses_main,
+            dpa_main.addresses.as_ref().as_ref(),
+            dpa_checker.addresses.as_ref().as_ref(),
             ignored_pages,
         );
-        let mut nr_dirty_pages = dpa_merged.len();
 
-        let mut reference = checkpoint_end.process.lock();
+        let checker_writable_ranges = checker_process.get_writable_ranges()?;
+        let reference_writable_ranges = reference_process.get_writable_ranges()?;
 
-        info!("Comparing registers");
+        if checker_writable_ranges != reference_writable_ranges {
+            error!(
+                "Memory map differs for epoch {}",
+                self.checkpoint_start.epoch
+            );
+            return Ok(Some(CheckFailReason::MemoryMapMismatch));
+        }
 
+        if !dpa_main.flags.contains_writable_only || !dpa_checker.flags.contains_writable_only {
+            let writable_ranges = checker_writable_ranges
+                .iter()
+                .chain(extra_writable_ranges)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            dpa_merged = filter_writable_addresses(dpa_merged, &writable_ranges);
+        }
+
+        if !reference_process.borrow_with(|reference_borrowed| {
+            page_diff(checker_process, (*reference_borrowed).as_ref(), &dpa_merged)
+        })?? {
+            error!("Memory differs for epoch {}", self.checkpoint_start.epoch);
+            return Ok(Some(CheckFailReason::MemoryMismatch));
+        }
+
+        Ok(None)
+    }
+
+    fn compare_registers(
+        &self,
+        checker_process: &Process,
+        reference_process: &mut DetachedProcess<OwnedProcess>,
+        comparator: &dyn RegisterComparator,
+    ) -> Result<Option<CheckFailReason>> {
         let mut checker_regs = checker_process.read_registers_precise()?.strip_orig();
-        let mut reference_registers = reference
+        let mut reference_registers = reference_process
             .borrow_with(|p2| p2.read_registers())??
             .strip_orig();
 
@@ -177,60 +246,94 @@ impl Segment {
         match reg_cmp_result {
             RegisterComparsionResult::NoResult => {
                 if checker_regs != reference_registers {
-                    error!("Register differs for epoch {}", self.checkpoint_start.epoch);
+                    error!("Register differs");
                     error!("Checker registers:\n{}", checker_regs.dump());
                     error!("Reference registers:\n{}", reference_registers.dump());
 
-                    return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages));
+                    Ok(Some(CheckFailReason::RegisterMismatch))
+                } else {
+                    Ok(None)
                 }
             }
-            RegisterComparsionResult::Pass => (),
-            RegisterComparsionResult::Fail => {
-                return Ok((Err(CheckFailReason::RegisterMismatch), nr_dirty_pages))
-            }
+            RegisterComparsionResult::Pass => Ok(None),
+            RegisterComparsionResult::Fail => Ok(Some(CheckFailReason::RegisterMismatch)),
         }
-
-        let checker_writable_ranges = checker_process.get_writable_ranges()?;
-        let reference_writable_ranges = reference.get_writable_ranges()?;
-
-        if checker_writable_ranges != reference_writable_ranges {
-            error!(
-                "Memory map differs for epoch {}",
-                self.checkpoint_start.epoch
-            );
-            return Ok((Err(CheckFailReason::MemoryMapMismatch), nr_dirty_pages));
-        }
-
-        if !dpa_main_flags.contains_writable_only || !dpa_checker_flags.contains_writable_only {
-            let writable_ranges = checker_writable_ranges
-                .iter()
-                .chain(extra_writable_ranges)
-                .cloned()
-                .collect::<Vec<_>>();
-
-            dpa_merged = filter_writable_addresses(dpa_merged, &writable_ranges);
-            nr_dirty_pages = dpa_merged.len();
-        }
-
-        info!("Comparing {} dirty pages", nr_dirty_pages);
-
-        if !reference.borrow_with(|reference_borrowed| {
-            page_diff(checker_process, (*reference_borrowed).as_ref(), &dpa_merged)
-        })?? {
-            error!("Memory differs for epoch {}", self.checkpoint_start.epoch);
-            return Ok((Err(CheckFailReason::MemoryMismatch), nr_dirty_pages));
-        }
-
-        Ok((Ok(()), nr_dirty_pages))
     }
 
-    /// Mark this segment as "checked" without comparing dirty memory.
-    pub fn mark_as_checked(&mut self, has_errors: bool) {
-        if has_errors {
-            self.checker.mark_as_crashed(Error::Other);
-        } else {
-            self.checker.mark_as_checked(None);
+    fn wait_until_main_finished(&self) -> Result<()> {
+        let mut status = self.status.lock();
+
+        loop {
+            match &*status {
+                SegmentStatus::Filling { .. } => (),
+                SegmentStatus::Filled { .. } => break,
+                SegmentStatus::Crashed => return Err(Error::Cancelled),
+            }
+            self.status_cvar.wait(&mut status);
         }
+        Ok(())
+    }
+
+    /// Compare dirty memory of the checker process and the reference process
+    /// without marking the segment status as checked. This should be called
+    /// after the checker process invokes the checkpoint syscall.
+    pub fn check(
+        self: &Arc<Self>,
+        checker: &mut Checker,
+        ignored_pages: &[usize],
+        extra_writable_ranges: &[Range<usize>],
+        dirty_page_tracker: &dyn DirtyPageAddressTracker,
+        comparator: &dyn RegisterComparator,
+    ) -> Result<Option<CheckFailReason>> {
+        info!("{checker} Checking");
+
+        self.wait_until_main_finished()?;
+
+        let dpa_main = self.get_main_dirty_page_addresses_once(dirty_page_tracker)?;
+        let dpa_checker = Arc::new(
+            dirty_page_tracker.take_dirty_pages_addresses(InferiorId::Checker(self.clone()))?,
+        );
+
+        let result = (|| {
+            let checkpoint_end = self
+                .status
+                .lock()
+                .checkpoint_end()
+                .expect("Invalid segment status");
+
+            let mut reference_process = checkpoint_end.process.lock();
+
+            info!("{checker} Comparing registers");
+            let result =
+                self.compare_registers(&checker.process, &mut reference_process, comparator)?;
+
+            if let Some(reason) = result {
+                return Ok(Some(reason));
+            }
+
+            info!("{checker} Comparing memory");
+            let result = self.compare_memory(
+                &dpa_main,
+                &dpa_checker,
+                &checker.process,
+                &mut reference_process,
+                ignored_pages,
+                extra_writable_ranges,
+            )?;
+
+            if let Some(reason) = result {
+                return Ok(Some(reason));
+            }
+
+            Ok::<_, Error>(None)
+        })()?;
+
+        *self.checker_status.lock() = CheckerStatus::Checked {
+            result,
+            dirty_page_addresses: dpa_checker,
+        };
+
+        Ok(result)
     }
 
     /// Get the reference process at the start of the segment.
@@ -238,24 +341,19 @@ impl Segment {
         self.checkpoint_start.process.lock()
     }
 
-    /// Get the reference process at the end of the segment, it it exists.
-    pub fn reference_end(&self) -> Option<MutexGuard<'_, DetachedProcess<OwnedProcess>>> {
-        self.status.checkpoint_end().map(|c| c.process.lock())
+    pub fn checkpoint_end(&self) -> Option<Arc<Checkpoint>> {
+        self.status.lock().checkpoint_end()
     }
 
-    pub fn has_errors(&self) -> bool {
-        matches!(self.status, SegmentStatus::Crashed)
-            || matches!(
-                self.checker.status,
-                CheckerStatus::Crashed(..) | CheckerStatus::Checked(Some(..))
-            )
+    pub fn is_main_finished(&self) -> bool {
+        match &*self.status.lock() {
+            SegmentStatus::Filling { .. } => false,
+            SegmentStatus::Filled { .. } => true,
+            SegmentStatus::Crashed => true,
+        }
     }
 
-    pub fn has_state_mismatches(&self) -> bool {
-        matches!(self.checker.status, CheckerStatus::Checked(Some(..)))
-    }
-
-    pub fn is_checked(&self) -> bool {
-        self.checker.is_finished()
+    pub fn is_both_finished(&self) -> bool {
+        self.is_main_finished() && self.checker_status.lock().is_finished()
     }
 }

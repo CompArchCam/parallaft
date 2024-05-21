@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use nix::sys::uio::RemoteIoVec;
 use reverie_syscalls::{
     may_rw::{SyscallMayRead, SyscallMayWrite},
@@ -42,7 +44,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
         syscall: &Syscall,
         context: HandlerContext,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
-        let process = context.process();
+        let process = context.process().deref();
 
         let may_read = syscall.may_read(process).ok().map(|slices| {
             slices
@@ -70,17 +72,19 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                 Ok(StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                     SavedIncompleteSyscall {
                         syscall: *syscall,
-                        kind: SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
+                        kind: SavedIncompleteSyscallKind::WithMemoryEffects {
                             mem_read: SavedMemory::save(process, &may_read)?,
                             mem_written_ranges: may_write,
                         },
-                        exit_action: SyscallExitAction::ReplicateMemoryWrites,
+                        exit_action: SyscallExitAction::ReplayEffects,
                     },
                 ))
             }
             _ => {
                 // otherwise, take a full checkpoint right before the syscall and another right after the syscall
-                todo!("handle syscall with unknown memory effects")
+                return Err(Error::NotSupported(
+                    "Handling syscall with unknown memory effects is not yet supported".to_string(),
+                ));
                 // Ok(
                 //     StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                 //         SavedIncompleteSyscall {
@@ -99,44 +103,44 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
         syscall: &Syscall,
         context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
-        let process = context.process();
-
-        let active_segment = context.child.unwrap_checker_segment();
+        let checker = context.child.unwrap_checker();
 
         // Skip the syscall
-        process.modify_registers_with(|regs| regs.with_syscall_skipped())?;
+        checker
+            .process
+            .modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
-        if let Some(saved_syscall) = active_segment.record.peek_syscall() {
+        if let Ok(saved_syscall) = checker.segment.record.get_syscall() {
             if &saved_syscall.syscall != syscall {
-                return Err(Error::UnexpectedSyscall(
+                return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));
             }
 
             match &saved_syscall.kind {
-                SavedSyscallKind::UnknownMemoryRw => {
+                SavedSyscallKind::WithoutMemoryEffects => {
                     Ok(StandardSyscallEntryCheckerHandlerExitAction::Checkpoint)
                 }
-                SavedSyscallKind::KnownMemoryRw { mem_read, .. } => {
+                SavedSyscallKind::WithMemoryEffects { mem_read, .. } => {
                     // compare memory read by the syscall
-                    if !mem_read.compare(process)? {
-                        return Err(Error::UnexpectedSyscall(
+                    if !mem_read.compare(checker.process.deref())? {
+                        return Err(Error::UnexpectedEvent(
                             UnexpectedEventReason::IncorrectMemory,
                         ));
                     }
                     Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
                 }
             }
-        } else if let Some(incomplete_syscall) = &active_segment.record.ongoing_syscall {
+        } else if let Ok(incomplete_syscall) = checker.segment.record.get_incomplete_syscall() {
             if &incomplete_syscall.syscall != syscall {
-                return Err(Error::UnexpectedSyscall(
+                return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));
             }
 
             todo!()
         } else {
-            Err(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))
+            Err(Error::UnexpectedEvent(UnexpectedEventReason::Excess))
         }
     }
 

@@ -2,48 +2,55 @@
 
 pub mod check_coord;
 pub mod comparators;
+pub mod debug_utils;
 pub mod dirty_page_trackers;
 pub mod dispatcher;
 pub mod error;
 pub mod events;
+pub mod exec_point_providers;
 pub mod helpers;
 pub mod inferior_rtlib;
 pub mod process;
 pub mod signal_handlers;
+pub mod slicers;
 pub mod statistics;
 pub mod syscall_handlers;
 pub mod throttlers;
 pub mod types;
 
 use std::ffi::OsString;
-
 use std::fmt::Debug;
 use std::fs;
 use std::ops::Deref;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use debug_utils::exec_point_dumper::ExecutionPointDumper;
+use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
 use dispatcher::Module;
-use inferior_rtlib::pmu::BranchCounterType;
+// use inferior_rtlib::pmu::BranchCounterType;
+
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
 
 use log::info;
-use scopeguard::defer;
+use slicers::entire_program::EntireProgramSlicer;
+use slicers::fixed_interval::FixedIntervalSlicer;
+use slicers::{ReferenceType, SlicerType};
 use statistics::perf::CounterKind;
 
 use clap::ValueEnum;
+use types::exit_reason::ExitReason;
+use types::perf_counter::BranchCounterType;
 
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
-use crate::check_coord::{ExitReason, ProcessIdentity};
 use crate::comparators::intel_hybrid_workaround::IntelHybridWorkaround;
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
-use crate::dispatcher::{Dispatcher, Halt};
+use crate::dispatcher::Dispatcher;
 
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
@@ -51,9 +58,7 @@ use crate::helpers::cpufreq::CpuFreqGovernor;
 use crate::helpers::cpufreq::CpuFreqSetter;
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
-use crate::inferior_rtlib::legacy::LegacyInferiorRtLib;
-use crate::inferior_rtlib::pmu::PmuSegmentor;
-use crate::inferior_rtlib::relrtlib::RelRtLib;
+// use crate::inferior_rtlib::pmu::PmuSegmentor;
 
 use crate::process::OwnedProcess;
 use crate::signal_handlers::cpuid;
@@ -62,8 +67,8 @@ use crate::statistics::dirty_pages::DirtyPageStatsCollector;
 use crate::statistics::memory::MemoryCollector;
 use crate::statistics::perf::PerfStatsCollector;
 use crate::statistics::timing::Tracer;
-
 use crate::statistics::StatisticsProvider;
+
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
 use crate::syscall_handlers::exit::ExitHandler;
@@ -75,6 +80,8 @@ use crate::syscall_handlers::rseq::RseqHandler;
 use crate::throttlers::checkpoint_sync::CheckpointSyncThrottler;
 use crate::throttlers::memory::MemoryBasedThrottler;
 use crate::throttlers::nr_segments::NrSegmentsBasedThrottler;
+
+use crate::exec_point_providers::pmu::PerfCounterBasedExecutionPointProvider;
 
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
@@ -138,8 +145,7 @@ pub struct RelShellOptions {
     pub enabled_perf_counters: Vec<CounterKind>,
 
     // enable automatic segmentation based on precise PMU interrupts
-    pub pmu_segmentation: bool,
-    pub pmu_segmentation_skip_instructions: Option<u64>,
+    pub pmu_segmentation: bool, // TODO: change this name
     pub pmu_segmentation_branch_type: BranchCounterType,
 
     // dirty page tracker backend to use
@@ -163,6 +169,11 @@ pub struct RelShellOptions {
     #[cfg(target_arch = "x86_64")]
     // Intel hybrid workaround
     pub enable_intel_hybrid_workaround: bool,
+
+    // slicer
+    pub slicer: SlicerType,
+    pub fixed_interval_slicer_skip: Option<u64>,
+    pub fixed_interval_slicer_reference_type: ReferenceType,
 
     // integration test
     pub is_test: bool,
@@ -214,14 +225,14 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module_boxed(module);
     }
 
-    // Syscall handlers
-    disp.register_module(RseqHandler::new());
-    disp.register_module(CloneHandler::new());
-    disp.register_module(ExecveHandler::new());
-    disp.register_module(ExitHandler::new());
-    disp.register_module(MmapHandler::new());
-    disp.register_module(ReplicatedSyscallHandler::new());
-    disp.register_module(RecordReplaySyscallHandler::new());
+    // // Syscall handlers
+    // disp.register_module(RseqHandler::new());
+    // disp.register_module(CloneHandler::new());
+    // disp.register_module(ExecveHandler::new());
+    // disp.register_module(ExitHandler::new());
+    // disp.register_module(MmapHandler::new());
+    // disp.register_module(ReplicatedSyscallHandler::new());
+    // disp.register_module(RecordReplaySyscallHandler::new());
 
     // Non-deterministic instruction handlers
     #[cfg(target_arch = "x86_64")]
@@ -236,11 +247,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         cpuid_handler = Some(disp.register_module(CpuidHandler::new()));
     }
 
-    // Segmentation
+    // Execution point providers
     if options.pmu_segmentation {
-        let segmentor = disp.register_module(PmuSegmentor::new(
-            options.checkpoint_period,
-            options.pmu_segmentation_skip_instructions,
+        let segmentor = disp.register_module(PerfCounterBasedExecutionPointProvider::new(
             &options.main_cpu_set,
             &options.checker_cpu_set,
             options.pmu_segmentation_branch_type,
@@ -248,14 +257,36 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         ));
 
         cpuid_overrides.extend(segmentor.get_cpuid_overrides());
-    } else {
-        disp.register_module(LegacyInferiorRtLib::new());
-        disp.register_module(RelRtLib::new(options.checkpoint_period));
     }
 
     if let Some(handler) = cpuid_handler {
         handler.set_overrides(cpuid_overrides)
     }
+
+    // Syscall handlers
+    disp.register_module(RseqHandler::new());
+    disp.register_module(CloneHandler::new());
+    disp.register_module(ExecveHandler::new());
+    disp.register_module(ExitHandler::new());
+    disp.register_module(MmapHandler::new());
+    disp.register_module(ReplicatedSyscallHandler::new());
+    disp.register_module(RecordReplaySyscallHandler::new());
+
+    // Slicer
+    match options.slicer {
+        SlicerType::FixedInterval => {
+            disp.register_module(FixedIntervalSlicer::new(
+                options.fixed_interval_slicer_skip,
+                options.checkpoint_period,
+                options.fixed_interval_slicer_reference_type,
+                &options.main_cpu_set,
+            ));
+        }
+        SlicerType::EntireProgram => {
+            disp.register_module(EntireProgramSlicer::new());
+        }
+        SlicerType::Null => (),
+    };
 
     // Misc
     disp.register_module(VdsoRemover::new());
@@ -326,7 +357,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(IntelHybridWorkaround::new());
     }
 
-    let mut exit_status = ExitReason::Panic;
+    disp.register_module(ExecutionPointDumper);
+    disp.register_module(InProtectionAsserter);
 
     let check_coord = CheckCoordinator::new(
         child.deref().clone(),
@@ -335,42 +367,24 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         tracer,
     );
 
-    info!("Shell PID = {}", getpid());
+    info!("Shell PID: {}", getpid());
 
     let all_wall_time_tracer = tracer.trace(statistics::timing::Event::AllWall);
 
-    std::thread::scope(|scope| {
-        defer!(disp.halt());
+    let exit_status = std::thread::scope(|scope| check_coord.main_work(child, scope));
 
-        let status = catch_unwind(AssertUnwindSafe(|| {
-            exit_status = check_coord
-                .run_event_loop(ProcessIdentity::Main(child.deref()), scope)
-                .unwrap();
+    info!("Exit reason: {exit_status:?}");
 
-            check_coord.wait_until_and_handle_completion(scope).unwrap();
+    all_wall_time_tracer.end();
 
-            if check_coord.has_state_mismatches() {
-                exit_status = ExitReason::StateMismatch;
-            } else if check_coord.has_errors() {
-                exit_status = ExitReason::Panic;
-            }
+    if let Some(ref output) = options.dump_stats {
+        let s = statistics::as_text(&disp.statistics());
 
-            all_wall_time_tracer.end();
-
-            if let Some(ref output) = options.dump_stats {
-                let s = format!("{}\n", statistics::as_text(&disp.statistics()));
-
-                match output {
-                    StatsOutput::File(path) => fs::write(path, s).unwrap(),
-                    StatsOutput::StdOut => print!("{}", s),
-                }
-            }
-        }));
-
-        if status.is_err() {
-            check_coord.handle_panic();
+        match output {
+            StatsOutput::File(path) => fs::write(path, s).unwrap(),
+            StatsOutput::StdOut => println!("{}", s),
         }
-    });
+    }
 
     exit_status
 }

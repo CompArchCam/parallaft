@@ -6,7 +6,13 @@ use nix::{
     unistd::{fork, ForkResult},
 };
 pub use reldrv::RelShellOptions;
-use reldrv::{check_coord::ExitReason, parent_work, RelShellOptionsBuilder};
+use reldrv::{
+    debug_utils::in_protection_asserter::SYSNO_ASSERT_IN_PROTECTION,
+    parent_work,
+    syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_SYNC, SYSNO_CHECKPOINT_TAKE},
+    types::exit_reason::ExitReason,
+    RelShellOptionsBuilder,
+};
 
 use std::sync::Once;
 
@@ -22,16 +28,20 @@ pub fn setup() {
 }
 
 pub fn checkpoint_take() {
-    unsafe { libc::syscall(0xff77) };
+    unsafe { libc::syscall(SYSNO_CHECKPOINT_TAKE as _) };
 }
 
 pub fn checkpoint_fini() {
-    unsafe { libc::syscall(0xff78) };
+    unsafe { libc::syscall(SYSNO_CHECKPOINT_FINI as _) };
 }
 
 #[allow(dead_code)]
 pub fn checkpoint_sync() {
-    unsafe { libc::syscall(0xff79) };
+    unsafe { libc::syscall(SYSNO_CHECKPOINT_SYNC as _) };
+}
+
+pub fn assert_in_protection() {
+    unsafe { libc::syscall(SYSNO_ASSERT_IN_PROTECTION as _) };
 }
 
 #[must_use]

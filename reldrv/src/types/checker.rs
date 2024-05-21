@@ -1,4 +1,9 @@
+use std::sync::Arc;
+
+use nix::unistd::Pid;
+
 use crate::{
+    dirty_page_trackers::DirtyPageAddressesWithFlags,
     error::{Error, Result},
     process::OwnedProcess,
 };
@@ -15,63 +20,47 @@ pub enum CheckFailReason {
 #[derive(Debug)]
 pub enum CheckerStatus {
     NotReady,
-    Checking(OwnedProcess),
-    Checked(Option<CheckFailReason>),
+    Executing(Pid),
+    Checked {
+        result: Option<CheckFailReason>,
+        dirty_page_addresses: Arc<DirtyPageAddressesWithFlags>,
+    },
     Crashed(Error),
 }
 
-#[derive(Debug)]
-pub struct Checker {
-    pub status: CheckerStatus,
-}
-
-impl Default for Checker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Checker {
+impl CheckerStatus {
     pub fn new() -> Self {
-        Self {
-            status: CheckerStatus::NotReady,
-        }
+        Self::NotReady
     }
 
-    pub fn start(&mut self, from_checkpoint: &Checkpoint) -> Result<&OwnedProcess> {
+    pub fn assume_checked(&mut self) {
+        *self = CheckerStatus::Checked {
+            result: None,
+            dirty_page_addresses: Arc::new(DirtyPageAddressesWithFlags::empty()),
+        };
+    }
+
+    pub fn start(&mut self, from_checkpoint: &Checkpoint) -> Result<OwnedProcess> {
         let mut ref_process = from_checkpoint.process.lock();
-
         let checker_process = ref_process.borrow_with(|p| p.fork(true, false))??;
+        *self = CheckerStatus::Executing(checker_process.pid);
 
-        self.status = CheckerStatus::Checking(checker_process);
-
-        match &self.status {
-            CheckerStatus::Checking(p) => Ok(p),
-            _ => unreachable!(),
-        }
+        Ok(checker_process)
     }
 
-    pub fn mark_as_checked(&mut self, result: Option<CheckFailReason>) {
-        self.status = CheckerStatus::Checked(result);
-    }
-
-    pub fn mark_as_crashed(&mut self, error: Error) {
-        self.status = CheckerStatus::Crashed(error);
-    }
-
-    pub fn is_finished(&self) -> bool {
-        match self.status {
-            CheckerStatus::NotReady => false,
-            CheckerStatus::Checking(_) => false,
-            CheckerStatus::Checked(_) => true,
-            CheckerStatus::Crashed(_) => true,
-        }
-    }
-
-    pub fn process(&self) -> Option<&OwnedProcess> {
-        match &self.status {
-            CheckerStatus::Checking(p) => Some(p),
+    pub fn pid(&self) -> Option<Pid> {
+        match self {
+            CheckerStatus::Executing(pid) => Some(*pid),
             _ => None,
         }
+    }
+
+    /// Returns whether the checker has finished segment, either successfully or
+    /// not.
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self,
+            CheckerStatus::Checked { .. } | CheckerStatus::Crashed(..)
+        )
     }
 }

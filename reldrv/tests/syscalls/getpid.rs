@@ -46,3 +46,21 @@ fn checkpoint_getpid_loop() {
     })
     .expect()
 }
+
+#[test]
+fn getpid_loop_large() {
+    trace(|| {
+        let orig_pid = unsafe { libc::getpid() };
+
+        checkpoint_take();
+
+        for _ in 0..2000 {
+            let pid = unsafe { libc::getpid() };
+            assert_eq!(pid, orig_pid);
+        }
+
+        checkpoint_fini();
+        Ok::<_, ()>(())
+    })
+    .expect()
+}

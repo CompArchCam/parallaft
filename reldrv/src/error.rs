@@ -1,4 +1,4 @@
-use std::backtrace::Backtrace;
+use std::sync::Arc;
 
 use procfs::ProcError;
 
@@ -14,20 +14,18 @@ pub enum UnexpectedEventReason {
     IncorrectMemory,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum Error {
     #[error("std::io error: `{0}`")]
-    StdIO(#[from] std::io::Error),
-    #[error("nix error: `{errno}`")]
-    Nix {
-        #[from]
-        errno: nix::errno::Errno,
-        backtrace: Backtrace,
-    },
+    StdIO(Arc<std::io::Error>),
+    #[error("nix error: `{0}`")]
+    Nix(#[from] nix::errno::Errno),
     #[error("Proc error: `{0}`")]
-    Proc(#[from] ProcError),
+    Proc(Arc<ProcError>),
     #[error("Reverie error: `{0}`")]
     Reverie(#[from] reverie_syscalls::Errno),
+    #[error("ParseIntError: `{0}`")]
+    ParseInt(#[from] std::num::ParseIntError),
 
     #[error("Invalid state")]
     InvalidState,
@@ -35,10 +33,10 @@ pub enum Error {
     NotHandled,
     #[error("Operation cancelled")]
     Cancelled,
-    #[error("Unexpected syscall made by the inferior")]
-    UnexpectedSyscall(UnexpectedEventReason),
-    #[error("Unexpected trap made by the inferior")]
-    UnexpectedTrap(UnexpectedEventReason),
+
+    #[error("Unexpected event from a checker during replay: `{0:?}`")]
+    UnexpectedEvent(UnexpectedEventReason),
+
     #[error("Not supported: `{0}`")]
     NotSupported(String),
 
@@ -52,13 +50,21 @@ pub enum Error {
     ReturnedToUser(nix::errno::Errno, String),
 }
 
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Self::StdIO(Arc::new(value))
+    }
+}
+
+impl From<ProcError> for Error {
+    fn from(value: ProcError) -> Self {
+        Self::Proc(Arc::new(value))
+    }
+}
+
 impl Error {
     pub fn is_potentially_caused_by_skids(&self) -> bool {
-        matches!(
-            self,
-            Error::UnexpectedSyscall(UnexpectedEventReason::Excess)
-                | Error::UnexpectedTrap(UnexpectedEventReason::Excess)
-        )
+        matches!(self, Error::UnexpectedEvent(UnexpectedEventReason::Excess))
     }
 }
 

@@ -12,7 +12,7 @@ use crate::{
         HandlerContext,
     },
     syscall_handlers::SYSNO_CHECKPOINT_SYNC,
-    types::chains::SegmentChains,
+    types::{chains::SegmentChains, process_id::Main},
 };
 
 pub struct CheckpointSyncThrottler {
@@ -34,11 +34,21 @@ impl CheckpointSyncThrottler {
 }
 
 impl Throttler for CheckpointSyncThrottler {
-    fn should_throttle(&self, _segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
+    fn should_throttle(
+        &self,
+        _main: &mut Main,
+        _segments: &SegmentChains,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         self.sync_active.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    fn should_unthrottle(&self, segments: &SegmentChains, _check_coord: &CheckCoordinator) -> bool {
+    fn should_unthrottle(
+        &self,
+        _main: &mut Main,
+        segments: &SegmentChains,
+        _check_coord: &CheckCoordinator,
+    ) -> bool {
         if segments.nr_live_segments() == 0 {
             self.sync_active
                 .store(false, std::sync::atomic::Ordering::SeqCst);

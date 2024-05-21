@@ -1,5 +1,6 @@
 use std::arch::asm;
 
+use nix::unistd::getpid;
 use reldrv::RelShellOptionsBuilder;
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace, trace_w_options};
@@ -8,6 +9,7 @@ use crate::common::{checkpoint_fini, checkpoint_take, trace, trace_w_options};
 fn basic_checkpointing() {
     trace(|| {
         checkpoint_take();
+        getpid();
         checkpoint_fini();
         Ok::<_, ()>(())
     })

@@ -12,9 +12,10 @@ use clap::Parser;
 use clap_num::maybe_hex;
 use git_version::git_version;
 
-use reldrv::check_coord::ExitReason;
 use reldrv::helpers::cpufreq::CpuFreqGovernor;
-use reldrv::inferior_rtlib::pmu::BranchCounterType;
+use reldrv::slicers::{ReferenceType, SlicerType};
+use reldrv::types::exit_reason::ExitReason;
+use reldrv::types::perf_counter::BranchCounterType;
 use reldrv::StatsOutput;
 use reldrv::{
     check_coord::CheckCoordinatorOptions, parent_work, statistics::perf::CounterKind,
@@ -123,7 +124,7 @@ struct CliArgs {
     checkpoint_size_watermark: usize,
 
     /// Checkpoint period in number of instructions. Used by librelrt and PMU-based segmentor.
-    #[arg(long, default_value_t = 1000000000)]
+    #[arg(short = 'P', long, default_value_t = 1000000000)]
     checkpoint_period: u64,
 
     /// Perf counters to sample during the inferior execution.
@@ -133,10 +134,6 @@ struct CliArgs {
     /// Automatic segmentation based precise PMU interrupts. Conflicts with relrtlibs.
     #[arg(short, long)]
     pmu_segmentation: bool,
-
-    /// In PMU-based segmentation, number of instructions to skip at the start of the main process execution before the first checkpoint.
-    #[arg(long)]
-    pmu_segmentation_skip_instructions: Option<u64>,
 
     /// In PMU-based segmentation, type of branch to count.
     #[arg(long, default_value = "all-excl-far")]
@@ -174,6 +171,16 @@ struct CliArgs {
     /// Enable Intel hybrid CPU workaround
     #[arg(long)]
     enable_intel_hybrid_workaround: bool,
+
+    /// Strategy to use for automatically slicing the inferior
+    #[arg(short = 'S', long, default_value = "null")]
+    slicer: SlicerType,
+
+    #[arg(long)]
+    fixed_interval_slicer_skip: Option<u64>,
+
+    #[arg(long, default_value = "instructions")]
+    fixed_interval_slicer_reference_type: ReferenceType,
 
     command: String,
     args: Vec<String>,
@@ -253,6 +260,7 @@ fn main() {
                 no_checker_exec: cli.dont_run_checker,
                 no_fork: cli.dont_fork,
                 ignore_miscmp: cli.ignore_check_errors,
+                enable_async_events: cli.pmu_segmentation,
             },
             checkpoint_period: cli.checkpoint_period,
             max_nr_live_segments: cli.max_nr_live_segments,
@@ -276,7 +284,6 @@ fn main() {
             dirty_page_tracker: cli.dirty_page_tracker,
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
-            pmu_segmentation_skip_instructions: cli.pmu_segmentation_skip_instructions,
             pmu_segmentation_branch_type: cli.pmu_segmentation_branch_type,
             sample_memory_usage: cli.sample_memory_usage,
             memory_sample_includes_rt: cli.memory_sample_includes_rt,
@@ -287,6 +294,11 @@ fn main() {
                 .enable_indirect_branch_speculation_misfeature,
             #[cfg(target_arch = "x86_64")]
             enable_intel_hybrid_workaround: cli.enable_intel_hybrid_workaround,
+
+            slicer: cli.slicer,
+            fixed_interval_slicer_skip: cli.fixed_interval_slicer_skip,
+            fixed_interval_slicer_reference_type: cli.fixed_interval_slicer_reference_type,
+
             is_test: false,
             extra_modules: Vec::new(),
         },

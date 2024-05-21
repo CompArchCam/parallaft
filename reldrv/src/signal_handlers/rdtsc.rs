@@ -51,15 +51,14 @@ impl SignalHandler for RdtscHandler {
                 info!("{} Trap: Rdtsc", context.child);
 
                 let tsc = handle_nondeterministic_instruction(
-                    context.child,
-                    context.check_coord,
+                    &context.child,
                     || unsafe { _rdtsc() },
                     SavedTrapEvent::Rdtsc,
                     |event| {
                         if let SavedTrapEvent::Rdtsc(tsc) = event {
                             Ok(tsc)
                         } else {
-                            Err(Error::UnexpectedTrap(
+                            Err(Error::UnexpectedEvent(
                                 UnexpectedEventReason::IncorrectTypeOrArguments,
                             ))
                         }
@@ -67,17 +66,16 @@ impl SignalHandler for RdtscHandler {
                 )?;
 
                 context.process().write_registers(
-                    regs.with_tsc(tsc)
+                    regs.with_tsc(tsc.value)
                         .with_offsetted_ip(instructions::RDTSC.length() as _),
                 )?;
 
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                return Ok(tsc.signal_handler_exit_action());
             } else if context.process().instr_eq(regs.ip(), instructions::RDTSCP) {
                 info!("{} Trap: Rdtscp", context.child);
 
                 let tscp = handle_nondeterministic_instruction(
-                    context.child,
-                    context.check_coord,
+                    &context.child,
                     || {
                         let mut aux = MaybeUninit::uninit();
                         let tsc = unsafe { __rdtscp(aux.as_mut_ptr()) };
@@ -89,7 +87,7 @@ impl SignalHandler for RdtscHandler {
                         if let SavedTrapEvent::Rdtscp(tsc, aux) = event {
                             Ok((tsc, aux))
                         } else {
-                            Err(Error::UnexpectedTrap(
+                            Err(Error::UnexpectedEvent(
                                 UnexpectedEventReason::IncorrectTypeOrArguments,
                             ))
                         }
@@ -97,11 +95,11 @@ impl SignalHandler for RdtscHandler {
                 )?;
 
                 context.process().write_registers(
-                    regs.with_tscp(tscp.0, tscp.1)
+                    regs.with_tscp(tscp.value.0, tscp.value.1)
                         .with_offsetted_ip(instructions::RDTSCP.length() as _),
                 )?;
 
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                return Ok(tscp.signal_handler_exit_action());
             }
         }
 

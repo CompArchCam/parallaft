@@ -16,7 +16,7 @@ use crate::{
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
-    types::segment::Segment,
+    types::process_id::Main,
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
 use log::info;
@@ -95,7 +95,7 @@ impl SignalHandler for CheckpointSizeLimiter {
 }
 
 impl SegmentEventHandler for CheckpointSizeLimiter {
-    fn handle_segment_created(&self, _segment: &Segment) -> Result<()> {
+    fn handle_segment_created(&self, _main: &mut Main) -> Result<()> {
         if let Some(fd) = self.fpt_fd.lock().as_mut() {
             fd.clear_fault().unwrap()
         }
@@ -103,7 +103,7 @@ impl SegmentEventHandler for CheckpointSizeLimiter {
         Ok(())
     }
 
-    fn handle_segment_chain_closed(&self, _segment: &Segment) -> Result<()> {
+    fn handle_segment_chain_closed(&self, _main: &mut Main) -> Result<()> {
         if let Some(fd) = self.fpt_fd.lock().as_mut() {
             fd.clear_fault().unwrap()
         }

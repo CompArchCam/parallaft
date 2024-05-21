@@ -77,7 +77,7 @@ impl StandardSyscallHandler for MmapHandler {
                             StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                                 SavedIncompleteSyscall {
                                     syscall,
-                                    kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                                    kind: SavedIncompleteSyscallKind::WithoutMemoryEffects,
                                     exit_action: SyscallExitAction::Checkpoint,
                                 },
                             ),
@@ -91,7 +91,7 @@ impl StandardSyscallHandler for MmapHandler {
                     Ok(StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                         SavedIncompleteSyscall {
                             syscall,
-                            kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                            kind: SavedIncompleteSyscallKind::WithoutMemoryEffects,
                             exit_action: SyscallExitAction::Custom,
                         },
                     ))
@@ -100,7 +100,7 @@ impl StandardSyscallHandler for MmapHandler {
             Syscall::Mremap(_) => Ok(StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                 SavedIncompleteSyscall {
                     syscall,
-                    kind: SavedIncompleteSyscallKind::UnknownMemoryRw,
+                    kind: SavedIncompleteSyscallKind::WithoutMemoryEffects,
                     exit_action: SyscallExitAction::Custom,
                 },
             )),
@@ -114,7 +114,7 @@ impl StandardSyscallHandler for MmapHandler {
         context: HandlerContext,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let syscall = *syscall;
-        let active_segment = context.child.unwrap_checker_segment();
+        let checker = context.child.unwrap_checker();
 
         match syscall {
             Syscall::Mmap(mmap) => {
@@ -131,14 +131,11 @@ impl StandardSyscallHandler for MmapHandler {
                         panic!("Unexpected fd")
                     }
                 } else {
-                    let saved_syscall = active_segment
-                        .record
-                        .peek_syscall()
-                        .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
+                    let saved_syscall = checker.segment.record.get_syscall()?;
 
                     if saved_syscall.syscall != syscall {
                         error!("Mmap syscall mismatch");
-                        return Err(Error::UnexpectedSyscall(
+                        return Err(Error::UnexpectedEvent(
                             UnexpectedEventReason::IncorrectTypeOrArguments,
                         ));
                     }
@@ -153,13 +150,9 @@ impl StandardSyscallHandler for MmapHandler {
                                 .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
 
                             let (new_sysno, new_args) = mmap.into_parts();
-                            active_segment
-                                .checker
-                                .process()
-                                .unwrap()
-                                .modify_registers_with(|regs| {
-                                    regs.with_sysno(new_sysno).with_syscall_args(new_args)
-                                })?;
+                            checker.process.modify_registers_with(|regs| {
+                                regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                            })?;
                         }
                     }
 
@@ -167,14 +160,11 @@ impl StandardSyscallHandler for MmapHandler {
                 }
             }
             Syscall::Mremap(mut mremap) => {
-                let saved_syscall = active_segment
-                    .record
-                    .peek_syscall()
-                    .ok_or(Error::UnexpectedSyscall(UnexpectedEventReason::Excess))?;
+                let saved_syscall = checker.segment.record.get_syscall()?;
 
                 if saved_syscall.syscall != syscall {
                     info!("Mremap syscall mismatch");
-                    return Err(Error::UnexpectedSyscall(
+                    return Err(Error::UnexpectedEvent(
                         UnexpectedEventReason::IncorrectTypeOrArguments,
                     ));
                 }
@@ -196,13 +186,9 @@ impl StandardSyscallHandler for MmapHandler {
                     }
 
                     let (new_sysno, new_args) = mremap.into_parts();
-                    active_segment
-                        .checker
-                        .process()
-                        .unwrap()
-                        .modify_registers_with(|regs| {
-                            regs.with_sysno(new_sysno).with_syscall_args(new_args)
-                        })?;
+                    checker.process.modify_registers_with(|regs| {
+                        regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                    })?;
                 }
 
                 Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)

@@ -18,7 +18,7 @@ use crate::{
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
     syscall_handlers::{CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE},
-    types::{checkpoint::CheckpointCaller, segment::Segment},
+    types::{checkpoint::CheckpointCaller, process_id::Main},
 };
 
 use super::ScheduleCheckpoint;
@@ -52,14 +52,13 @@ impl RelRtLib {
         Ok(ret)
     }
 
-    pub fn set_counter(&self, process: &Process, val: u64) -> Result<()> {
+    pub fn set_counter(&self, process: &mut Process, val: u64) -> Result<()> {
         let addr = *self
             .counter_addr
             .read()
             .as_ref()
             .ok_or(Error::InvalidState)?;
 
-        let mut process = Process::new(process.pid);
         process.write_value(AddrMut::from_raw(addr).unwrap(), &val)?;
 
         Ok(())
@@ -67,13 +66,17 @@ impl RelRtLib {
 }
 
 impl SegmentEventHandler for RelRtLib {
-    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
-        let last_checker = segment.checker.process().unwrap();
-        let checkpoint = segment.status.checkpoint_end().unwrap();
+    #[allow(unreachable_code)]
+    #[allow(unused_variables)]
+    fn handle_segment_filled(&self, main: &mut Main) -> Result<()> {
+        todo!();
+        let segment = main.segment.as_ref().unwrap();
+        let checkpoint = segment.checkpoint_end().unwrap();
+        let mut checker_process = Process::new(segment.checker_status.lock().pid().unwrap());
 
         if checkpoint.caller == CheckpointCaller::Child {
             let counter = *self.saved_counter_value.lock();
-            self.set_counter(last_checker, (-(counter as i64) - 1) as u64)
+            self.set_counter(&mut checker_process, (-(counter as i64) - 1) as u64)
                 .ok();
         }
 
@@ -169,7 +172,7 @@ impl ScheduleCheckpoint for RelRtLib {
         let process = &check_coord.main;
 
         let c = self.get_counter(process)?;
-        self.set_counter(process, -1_i64 as u64)?;
+        self.set_counter(&mut process.clone(), -1_i64 as u64)?;
         *self.saved_counter_value.lock() = c;
 
         self.perf_counter.lock().as_mut().unwrap().disable()?;

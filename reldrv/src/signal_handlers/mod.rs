@@ -4,50 +4,43 @@ pub mod cpuid;
 #[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
-use crate::check_coord::{CheckCoordinator, ProcessIdentityRef, UpgradableReadGuard};
-use crate::error::{Error, Result, UnexpectedEventReason};
-use crate::types::segment::Segment;
+use crate::error::Result;
+use crate::types::process_id::InferiorRefMut;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
+use crate::types::segment_record::WithIsLastEvent;
 
 pub fn handle_nondeterministic_instruction<R>(
-    child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
-    check_coord: &CheckCoordinator,
+    child: &InferiorRefMut,
     run_instr: impl FnOnce() -> R,
     create_event: impl FnOnce(R) -> SavedTrapEvent,
     replay_event: impl FnOnce(SavedTrapEvent) -> Result<R>,
-) -> Result<R>
+) -> Result<WithIsLastEvent<R>>
 where
     R: Copy,
 {
     let ret;
+    let mut is_last_event = false;
     match child {
-        ProcessIdentityRef::Main(_) => {
-            let segments = check_coord.segments.read();
-            if let Some(segment) = segments.main_segment() {
-                let mut segment = segment.write_arc();
+        InferiorRefMut::Main(main) => {
+            if let Some(segment) = &main.segment {
                 // Main signal, inside protection zone
-                drop(segments);
                 ret = run_instr();
-                segment.record.push_trap_event(create_event(ret));
+                segment
+                    .record
+                    .push_event(create_event(ret), false, segment)?;
             } else {
                 // Main signal, outside protection zone
                 ret = run_instr();
             }
         }
-        ProcessIdentityRef::Checker(segment) => {
+        InferiorRefMut::Checker(checker) => {
             // Checker signal
-            let event = segment.with_upgraded(|segment| {
-                let r = segment
-                    .record
-                    .next_trap_event()
-                    .ok_or(Error::UnexpectedTrap(UnexpectedEventReason::Excess))?;
+            let result = checker.segment.record.pop_trap_event()?;
+            is_last_event = result.is_last_event;
 
-                Ok::<_, Error>(*r)
-            })?;
-
-            ret = replay_event(event)?;
+            ret = replay_event(*result.value)?;
         }
     };
 
-    Ok(ret)
+    Ok(WithIsLastEvent::new(is_last_event, ret))
 }

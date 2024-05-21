@@ -1,7 +1,6 @@
 use crate::{check_coord::CheckCoordinator, error::Result};
 
 pub mod legacy;
-pub mod pmu;
 pub mod relrtlib;
 
 pub trait ScheduleCheckpoint {

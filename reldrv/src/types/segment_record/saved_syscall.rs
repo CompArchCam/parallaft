@@ -3,9 +3,9 @@ use reverie_syscalls::Syscall;
 
 use super::saved_memory::SavedMemory;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum SyscallExitAction {
-    ReplicateMemoryWrites,
+    ReplayEffects,
     ReplicateSyscall,
     Checkpoint,
     Custom,
@@ -19,15 +19,17 @@ pub struct SavedIncompleteSyscall {
 }
 
 impl SavedIncompleteSyscall {
-    pub fn upgrade(self, ret_val: isize, mem_write: Option<SavedMemory>) -> SavedSyscall {
+    pub fn with_return_value(self, ret_val: isize, mem_write: Option<SavedMemory>) -> SavedSyscall {
         let new_kind = match self.kind {
-            SavedIncompleteSyscallKind::KnownMemoryRAndWRange { mem_read, .. } => {
-                SavedSyscallKind::KnownMemoryRw {
+            SavedIncompleteSyscallKind::WithMemoryEffects { mem_read, .. } => {
+                SavedSyscallKind::WithMemoryEffects {
                     mem_read,
                     mem_written: mem_write.unwrap(),
                 }
             }
-            SavedIncompleteSyscallKind::UnknownMemoryRw => SavedSyscallKind::UnknownMemoryRw,
+            SavedIncompleteSyscallKind::WithoutMemoryEffects => {
+                SavedSyscallKind::WithoutMemoryEffects
+            }
         };
 
         SavedSyscall {
@@ -43,8 +45,8 @@ impl SavedIncompleteSyscall {
 
 #[derive(Debug)]
 pub enum SavedIncompleteSyscallKind {
-    UnknownMemoryRw, // or not needed
-    KnownMemoryRAndWRange {
+    WithoutMemoryEffects, // or not needed
+    WithMemoryEffects {
         mem_read: SavedMemory,
         mem_written_ranges: Box<[RemoteIoVec]>,
     },
@@ -52,8 +54,8 @@ pub enum SavedIncompleteSyscallKind {
 
 #[derive(Debug)]
 pub enum SavedSyscallKind {
-    UnknownMemoryRw, // or not needed
-    KnownMemoryRw {
+    WithoutMemoryEffects,
+    WithMemoryEffects {
         mem_read: SavedMemory,
         mem_written: SavedMemory,
     },

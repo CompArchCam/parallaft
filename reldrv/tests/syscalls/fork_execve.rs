@@ -16,7 +16,7 @@ fn fork() {
         }
         unreachable!()
     })
-    .expect_panic()
+    .expect_crash()
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn fork_in_protected_region() {
         unsafe { unistd::fork().unwrap() };
         unreachable!()
     })
-    .expect_panic()
+    .expect_crash()
 }
 
 #[test]
@@ -36,5 +36,5 @@ fn execve() {
         Command::new("/usr/bin/true").exec();
         unreachable!()
     })
-    .expect_panic()
+    .expect_crash()
 }

@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+
+use lazy_static::lazy_static;
 use log::debug;
 
 use nix::{
     sched::{sched_getaffinity, sched_setaffinity, CpuSet},
-    unistd::getpid,
+    unistd::Pid,
 };
 
+use parking_lot::Mutex;
 use scopeguard::defer;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -25,7 +29,7 @@ impl From<u32> for IntelCoreType {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum PmuType {
+pub enum PmuType {
     // TODO: more precise model detection
     #[cfg(target_arch = "x86_64")]
     Amd,
@@ -46,7 +50,7 @@ impl PmuType {
     pub fn detect(processor_id: usize) -> Self {
         #[cfg(target_arch = "x86_64")]
         {
-            let pid_self = getpid();
+            let pid_self = Pid::from_raw(0);
             let mut cpu_set = CpuSet::new();
             cpu_set.set(processor_id).unwrap();
 
@@ -114,10 +118,39 @@ impl PmuType {
             #[cfg(target_arch = "x86_64")]
             PmuType::Amd => 2048,
             #[cfg(target_arch = "x86_64")]
-            PmuType::IntelLakeCove | PmuType::IntelMont { .. } | PmuType::IntelOther => 1024,
+            PmuType::IntelLakeCove | PmuType::IntelMont { .. } | PmuType::IntelOther => 2048, // orig: 1024
             #[cfg(target_arch = "aarch64")]
             PmuType::Armv8 => todo!(),
             _ => 0,
         }
     }
+
+    pub fn min_irq_period(&self) -> u64 {
+        match self {
+            #[cfg(target_arch = "x86_64")]
+            PmuType::Amd => 16384, // TODO: verify this
+            #[cfg(target_arch = "x86_64")]
+            PmuType::IntelLakeCove | PmuType::IntelMont { .. } | PmuType::IntelOther => 16384,
+            #[cfg(target_arch = "aarch64")]
+            PmuType::Armv8 => todo!(),
+            _ => 0,
+        }
+    }
+}
+
+lazy_static! {
+    static ref PMU_TYPE_MAP: Mutex<HashMap<usize, PmuType>> = Mutex::new(HashMap::new());
+}
+
+pub fn detect_pmu_type_cached(processor_id: usize) -> PmuType {
+    let mut map = PMU_TYPE_MAP.lock();
+
+    if let Some(pmu_type) = map.get(&processor_id) {
+        return *pmu_type;
+    }
+
+    let pmu_type = PmuType::detect(processor_id);
+    map.insert(processor_id, pmu_type);
+
+    pmu_type
 }

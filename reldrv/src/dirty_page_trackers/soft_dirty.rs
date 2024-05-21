@@ -1,15 +1,12 @@
-use nix::unistd::Pid;
-
 use crate::{
-    check_coord::ProcessRole,
     dispatcher::Module,
     error::Result,
     events::segment::SegmentEventHandler,
     process::Process,
-    types::segment::{Segment, SegmentId},
+    types::process_id::{Checker, InferiorId, Main},
 };
 
-use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressTrackerContext};
+use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressesWithFlags};
 
 pub struct SoftDirtyPageTracker {
     dont_clear_soft_dirty: bool,
@@ -26,60 +23,53 @@ impl SoftDirtyPageTracker {
 impl DirtyPageAddressTracker for SoftDirtyPageTracker {
     fn take_dirty_pages_addresses(
         &self,
-        _segment_id: SegmentId,
-        role: ProcessRole,
-        ctx: &DirtyPageAddressTrackerContext<'_>,
-    ) -> Result<(Box<dyn AsRef<[usize]>>, DirtyPageAddressFlags)> {
-        match role {
-            ProcessRole::Main => {
-                let pages = ctx.segment.reference_end().unwrap().get_dirty_pages()?;
-                Ok((
-                    Box::new(pages),
-                    DirtyPageAddressFlags {
-                        contains_writable_only: true,
-                    },
-                ))
+        inferior_id: InferiorId,
+    ) -> Result<DirtyPageAddressesWithFlags> {
+        let pages = match &inferior_id {
+            InferiorId::Main(segment) => segment
+                .as_ref()
+                .unwrap()
+                .checkpoint_end()
+                .unwrap()
+                .process
+                .lock()
+                .get_dirty_pages()?,
+            InferiorId::Checker(segment) => {
+                let pid = segment.checker_status.lock().pid().unwrap();
+                Process::new(pid).get_dirty_pages()?
             }
-            ProcessRole::Checker => {
-                let pages = ctx.segment.checker.process().unwrap().get_dirty_pages()?;
-                Ok((
-                    Box::new(pages),
-                    DirtyPageAddressFlags {
-                        contains_writable_only: true,
-                    },
-                ))
-            }
-        }
+        };
+
+        Ok(DirtyPageAddressesWithFlags {
+            addresses: Box::new(pages),
+            flags: DirtyPageAddressFlags {
+                contains_writable_only: true,
+            },
+        })
     }
 
-    fn nr_dirty_pages(
-        &self,
-        role: ProcessRole,
-        ctx: &DirtyPageAddressTrackerContext<'_>,
-    ) -> Result<usize> {
-        match role {
-            ProcessRole::Main => Process::new(ctx.main_pid).nr_dirty_pages(),
-            ProcessRole::Checker => ctx.segment.checker.process().unwrap().nr_dirty_pages(),
-        }
+    fn nr_dirty_pages(&self, inferior_id: InferiorId) -> Result<usize> {
+        let pid = match inferior_id {
+            InferiorId::Main(segment) => segment.unwrap().status.lock().pid().unwrap(),
+            InferiorId::Checker(segment) => segment.checker_status.lock().pid().unwrap(),
+        };
+
+        Ok(Process::new(pid).nr_dirty_pages()?)
     }
 }
 
 impl SegmentEventHandler for SoftDirtyPageTracker {
-    fn handle_checkpoint_created_pre(
-        &self,
-        main_pid: Pid,
-        _last_segment_id: Option<SegmentId>,
-    ) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
         if !self.dont_clear_soft_dirty {
-            Process::new(main_pid).clear_dirty_page_bits()?;
+            main.process.clear_dirty_page_bits()?;
         }
 
         Ok(())
     }
 
-    fn handle_segment_ready(&self, segment: &mut Segment) -> Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
         if !self.dont_clear_soft_dirty {
-            segment.checker.process().unwrap().clear_dirty_page_bits()?;
+            checker.process.clear_dirty_page_bits()?;
         }
 
         Ok(())
@@ -91,7 +81,7 @@ impl Module for SoftDirtyPageTracker {
     where
         's: 'd,
     {
-        subs.install_dirty_page_tracker(self);
+        subs.set_dirty_page_tracker(self);
         subs.install_segment_event_handler(self);
     }
 }

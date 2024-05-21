@@ -33,7 +33,7 @@ impl StandardSyscallHandler for ExcessSyscallAfter {
             >= self.after
         {
             info!("Triggering excess syscall err");
-            return Err(reldrv::error::Error::UnexpectedSyscall(
+            return Err(reldrv::error::Error::UnexpectedEvent(
                 reldrv::error::UnexpectedEventReason::Excess,
             ));
         }
@@ -65,5 +65,5 @@ fn excess_syscall_on_1st() {
             .build()
             .unwrap(),
     )
-    .expect_panic()
+    .expect_crash()
 }

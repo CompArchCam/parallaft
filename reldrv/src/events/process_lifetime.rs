@@ -9,6 +9,18 @@ pub struct ProcessLifetimeHookContext<'p, 'disp, 'scope, 'env, 'modules, 'tracer
     pub scope: &'scope Scope<'scope, 'env>,
 }
 
+pub fn pctx<'p, 'disp, 'scope, 'env, 'modules, 'tracer>(
+    process: &'p mut Process,
+    check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
+    scope: &'scope Scope<'scope, 'env>,
+) -> ProcessLifetimeHookContext<'p, 'disp, 'scope, 'env, 'modules, 'tracer> {
+    ProcessLifetimeHookContext {
+        process,
+        check_coord,
+        scope,
+    }
+}
+
 #[allow(unused_variables)]
 pub trait ProcessLifetimeHook {
     /// Called after spawning the main process

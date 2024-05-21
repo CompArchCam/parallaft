@@ -1,7 +1,5 @@
-use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use std::sync::Arc;
@@ -13,9 +11,8 @@ use log::{debug, error, info, warn};
 use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
-use nix::sys::wait::{waitpid, WaitStatus};
+use nix::sys::wait::WaitStatus;
 
-use parking_lot::lock_api::{ArcRwLockReadGuard, ArcRwLockUpgradableReadGuard};
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo};
@@ -23,8 +20,10 @@ use scopeguard::defer;
 
 use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
-use crate::error::{Error, Result};
-use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::error::{Error, Result, UnexpectedEventReason};
+use crate::events::hctx;
+use crate::events::module_lifetime::ModuleLifetimeHook;
+use crate::events::process_lifetime::{pctx, ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::events::syscall::{
     CustomSyscallHandler, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
@@ -32,125 +31,23 @@ use crate::events::syscall::{
 use crate::events::{
     segment::SegmentEventHandler,
     signal::{SignalHandler, SignalHandlerExitAction},
-    HandlerContext,
 };
 use crate::process::dirty_pages::IgnoredPagesProvider;
-use crate::process::Process;
+use crate::process::{OwnedProcess, Process};
 use crate::statistics::timing::{self, Tracer};
 use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
 use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
-use crate::types::segment::{Segment, SegmentId, SegmentStatus};
+use crate::types::exit_reason::ExitReason;
+use crate::types::process_id::{Checker, Inferior, Main};
+use crate::types::segment::{Segment, SegmentId};
+use crate::types::segment_record::manual_checkpoint::ManualCheckpointRequest;
 use crate::types::segment_record::saved_memory::SavedMemory;
 use crate::types::segment_record::saved_syscall::{
     SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,
 };
-
-#[macro_export]
-macro_rules! ctx {
-    ($child:expr, $scope:expr, $coord:expr) => {
-        HandlerContext {
-            child: $child,
-            scope: $scope,
-            check_coord: $coord,
-        }
-    };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProcessRole {
-    Main,
-    Checker,
-}
-
-pub type UpgradableReadGuard<T> = ArcRwLockUpgradableReadGuard<parking_lot::RawRwLock, T>;
-pub type ReadGuard<T> = ArcRwLockReadGuard<parking_lot::RawRwLock, T>;
-
-#[derive(Debug, Clone)]
-pub enum ProcessIdentity<P: Borrow<Process>> {
-    Main(P),
-    Checker(Arc<RwLock<Segment>>),
-}
-
-impl<P: Borrow<Process>> ProcessIdentity<P> {
-    pub fn upgradable_read_arc(&self) -> ProcessIdentityRef<'_, UpgradableReadGuard<Segment>> {
-        match self {
-            ProcessIdentity::Main(p) => ProcessIdentityRef::Main(p.borrow()),
-            ProcessIdentity::Checker(segment) => {
-                ProcessIdentityRef::Checker(segment.upgradable_read_arc())
-            }
-        }
-    }
-
-    pub fn read_arc_recursive(&self) -> ProcessIdentityRef<'_, ReadGuard<Segment>> {
-        match self {
-            ProcessIdentity::Main(p) => ProcessIdentityRef::Main(p.borrow()),
-            ProcessIdentity::Checker(segment) => {
-                ProcessIdentityRef::Checker(segment.read_arc_recursive())
-            }
-        }
-    }
-
-    pub fn is_main(&self) -> bool {
-        matches!(self, ProcessIdentity::Main { .. })
-    }
-
-    pub fn is_checker(&self) -> bool {
-        matches!(self, ProcessIdentity::Checker { .. })
-    }
-}
-
-#[derive(Debug)]
-pub enum ProcessIdentityRef<'p, T: Deref<Target = Segment>> {
-    Main(&'p Process),
-    Checker(T),
-}
-
-impl<T: Deref<Target = Segment>> ProcessIdentityRef<'_, T> {
-    pub fn process(&self) -> Option<&Process> {
-        match self {
-            ProcessIdentityRef::Main(main) => Some(main),
-            ProcessIdentityRef::Checker(segment) => segment.checker.process().map(|x| x.deref()),
-        }
-    }
-
-    pub fn is_main(&self) -> bool {
-        matches!(self, ProcessIdentityRef::Main(_))
-    }
-
-    pub fn is_checker(&self) -> bool {
-        matches!(self, ProcessIdentityRef::Checker(_))
-    }
-
-    pub fn unwrap_checker_segment(&self) -> &T {
-        match self {
-            ProcessIdentityRef::Main(_) => panic!(
-                "called `ProcessIdentityRef::unwrap_checker_segment()` on a `Main(..)` value"
-            ),
-            ProcessIdentityRef::Checker(s) => s,
-        }
-    }
-
-    pub fn unwrap_checker_segment_mut(&mut self) -> &mut T {
-        match self {
-            ProcessIdentityRef::Main(_) => panic!(
-                "called `ProcessIdentityRef::unwrap_checker_segment_mut()` on a `Main(..)` value"
-            ),
-            ProcessIdentityRef::Checker(s) => s,
-        }
-    }
-}
-
-impl<T: Deref<Target = Segment>> Display for ProcessIdentityRef<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProcessIdentityRef::Main(_) => write!(f, "[M      ]"),
-            ProcessIdentityRef::Checker(s) => write!(f, "[C{:>6}]", s.nr),
-        }
-    }
-}
 
 #[derive(Debug)]
 struct Worker {
@@ -159,7 +56,7 @@ struct Worker {
 
 pub struct CheckCoordinator<'disp, 'modules, 'tracer> {
     pub segments: Arc<RwLock<SegmentChains>>,
-    pub main: Process,
+    pub main: Process, // TODO: remove this
     pub epoch: AtomicU32,
     options: CheckCoordinatorOptions,
     pub dispatcher: &'disp Dispatcher<'disp, 'modules>,
@@ -180,47 +77,8 @@ pub struct CheckCoordinatorOptions {
     pub no_fork: bool,
     /// Ignore state mismatches.
     pub ignore_miscmp: bool,
-}
 
-pub type ExitCode = i32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitReason {
-    NormalExit(ExitCode),
-    Signalled(Signal),
-    UnexpectedlyDies,
-    StateMismatch,
-    Panic,
-    Aborted,
-}
-
-impl ExitReason {
-    pub fn exit_code(&self) -> ExitCode {
-        match self {
-            ExitReason::NormalExit(c) => *c,
-            ExitReason::Signalled(sig) => 128 + (*sig as i32),
-            ExitReason::Aborted => 252,
-            ExitReason::StateMismatch => 253,
-            ExitReason::UnexpectedlyDies => 254,
-            ExitReason::Panic => 255,
-        }
-    }
-
-    pub fn expect(self) {
-        self.expect_exit_code(0);
-    }
-
-    pub fn expect_panic(self) {
-        assert_eq!(self, ExitReason::Panic);
-    }
-
-    pub fn expect_exit_code(self, code: ExitCode) {
-        assert_eq!(self, ExitReason::NormalExit(code));
-    }
-
-    pub fn expect_state_mismatch(self) {
-        assert_eq!(self, ExitReason::StateMismatch);
-    }
+    pub enable_async_events: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,84 +110,73 @@ where
         }
     }
 
-    pub fn run_event_loop<'s, 'scope, 'env, P>(
+    pub fn run_event_loop<'s, 'scope, 'env>(
         &'s self,
-        child: ProcessIdentity<P>,
+        mut child: Inferior,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<ExitReason>
     where
-        's: 'scope,
-        's: 'disp,
-        P: Borrow<Process>,
+        's: 'scope + 'disp,
     {
-        let child_ref = child.read_arc_recursive();
-        info!("{child_ref} Ready");
-        let process = child_ref.process().unwrap().clone(); /* TODO */
-        drop(child_ref);
-
-        let process_ctx = ProcessLifetimeHookContext {
-            process: &process,
-            check_coord: self,
-            scope,
-        };
+        info!("{child} Ready");
 
         let mut last_syscall_type = None;
 
         let wall_time_event;
 
         // Dispatch init
-        match child {
-            ProcessIdentity::Main(_) => {
-                self.dispatcher.handle_main_init(process_ctx)?;
+        match &mut child {
+            Inferior::Main(main) => {
+                self.dispatcher
+                    .handle_main_init(pctx(&mut main.process, self, scope))?;
                 wall_time_event = timing::Event::MainWall;
             }
-            ProcessIdentity::Checker(_) => {
-                self.dispatcher.handle_checker_init(process_ctx)?;
+            Inferior::Checker(checker) => {
+                self.dispatcher
+                    .handle_checker_init(pctx(&mut checker.process, self, scope))?;
                 wall_time_event = timing::Event::CheckerWall;
             }
         }
 
         let wall_time_tracer = self.tracer.trace(wall_time_event);
-        process.resume()?;
+        child.process().resume()?;
 
         // Main loop
         let exit_reason = loop {
-            let status = match waitpid(process.pid, None) {
+            let status = match child.process().waitpid() {
                 Ok(s) => s,
                 Err(Errno::ECHILD) => break ExitReason::UnexpectedlyDies,
                 Err(e) => panic!("waitpid error {e:?}"),
             };
 
-            let mut child_ref = child.upgradable_read_arc();
-
-            if child_ref.is_main() && self.aborting.load(Ordering::SeqCst) {
-                break ExitReason::Aborted;
+            if child.is_main() && self.aborting.load(Ordering::SeqCst) {
+                break ExitReason::Crashed(Error::Cancelled);
             }
 
             match status {
                 WaitStatus::Exited(_, status) => {
-                    if child_ref.is_main() {
-                        info!("{child_ref} Exit: {status}");
+                    if child.is_main() {
+                        info!("{child} Exit: {status}");
                     }
                     break ExitReason::NormalExit(status);
                 }
                 WaitStatus::Signaled(_, sig, _) => {
-                    if child_ref.is_checker() && sig == Signal::SIGKILL {
+                    if child.is_checker() && sig == Signal::SIGKILL {
                         break ExitReason::NormalExit(0);
                     }
 
-                    info!("{child_ref} Signal: {sig}");
+                    info!("{child} Killed: {sig}");
                     break ExitReason::Signalled(sig);
                 }
                 WaitStatus::Stopped(_, sig) => {
-                    self.handle_signal(&mut child_ref, sig, scope)?;
+                    self.handle_signal(&mut child, sig, scope)?;
                 }
                 WaitStatus::PtraceSyscall(_) => {
                     // Tell if it is a syscall entry or exit
-                    let is_syscall_entry = process.syscall_dir()?.is_entry();
+                    let is_syscall_entry = child.process().syscall_dir()?.is_entry();
                     assert_eq!(is_syscall_entry, last_syscall_type.is_none());
 
-                    let regs = process_ctx.process.read_registers()?;
+                    let regs = child.process().read_registers()?;
 
                     match last_syscall_type {
                         None => {
@@ -337,15 +184,12 @@ where
                             if let Some(sysno) = regs.sysno() {
                                 let syscall = Syscall::from_raw(sysno, regs.syscall_args());
                                 // Standard syscall entry
-                                self.handle_syscall_entry(&mut child_ref, syscall, scope)?;
-
-                                drop(child_ref);
-
+                                self.handle_syscall_entry(&mut child, syscall, scope)?;
                                 last_syscall_type = Some(SyscallType::Standard(syscall));
                             } else {
                                 // Custom syscall entry
                                 self.handle_custom_syscall_entry(
-                                    &mut child_ref,
+                                    &mut child,
                                     regs.sysno_raw(),
                                     regs.syscall_args(),
                                     scope,
@@ -357,7 +201,7 @@ where
                         Some(SyscallType::Standard(syscall)) => {
                             // Standard syscall exit
                             self.handle_syscall_exit(
-                                &mut child_ref,
+                                &mut child,
                                 syscall,
                                 regs.syscall_ret_val(),
                                 scope,
@@ -368,7 +212,7 @@ where
                         Some(SyscallType::Custom) => {
                             // Custom syscall exit
                             self.handle_custom_syscall_exit(
-                                &mut child_ref,
+                                &mut child,
                                 regs.syscall_ret_val(),
                                 scope,
                             )?;
@@ -385,44 +229,45 @@ where
         wall_time_tracer.end();
 
         // Dispatch fini and extra checks on segment status
-        match &child {
-            ProcessIdentity::Main(_) => {
-                if self
-                    .segments
-                    .read_recursive()
-                    .list
-                    .iter()
-                    .any(|x| matches!(x.read_recursive().status, SegmentStatus::Filling))
-                {
-                    info!("Main crashed without marking segment status as crashed");
-                    return Ok(ExitReason::Aborted);
-                }
+        match &mut child {
+            Inferior::Main(main) => {
+                // if self
+                //     .segments
+                //     .read_recursive()
+                //     .list
+                //     .iter()
+                //     .any(|x| matches!(&*x.status.lock(), SegmentStatus::Filling))
+                // {
+                //     info!("Main crashed without marking segment status as crashed");
+                //     return Ok(ExitReason::Crashed(Error));
+                // }
 
                 self.dispatcher.handle_main_fini(
                     match exit_reason {
                         ExitReason::NormalExit(ret) => ret,
                         _ => -1,
                     }, /* todo */
-                    process_ctx,
+                    pctx(&mut main.process, self, scope),
                 )?;
             }
-            ProcessIdentity::Checker(segment) => {
-                assert!(segment.read().is_checked());
+            Inferior::Checker(checker) => {
+                assert!(checker.segment.checker_status.lock().is_finished());
 
-                self.dispatcher
-                    .handle_checker_fini(None /* todo */, process_ctx)?
+                self.dispatcher.handle_checker_fini(
+                    None, /* todo */
+                    pctx(&mut checker.process, self, scope),
+                )?
             }
         }
 
-        let child_ref = child.read_arc_recursive();
-        info!("{child_ref} Done");
-        drop(child_ref);
+        info!("{child} Done");
 
         Ok(exit_reason)
     }
 
     fn wait_until_unthrottled(
         &self,
+        main: &mut Main,
         throttler: &(dyn Throttler + Sync),
         segments: &mut RwLockUpgradableReadGuard<SegmentChains>, // TODO: changeme
     ) {
@@ -435,7 +280,7 @@ where
                 break;
             }
 
-            if throttler.should_unthrottle(segments, self) {
+            if throttler.should_unthrottle(main, segments, self) {
                 info!("Unthrottled");
                 break;
             }
@@ -447,22 +292,23 @@ where
         }
     }
 
-    fn handle_main_checkpoint<'s, 'scope, 'env>(
+    /// Take a checkpoint of the main inferior. When taking this checkpoint, the
+    /// main inferior must not execute after the last saved event.
+    fn take_main_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        process: &Process,
+        main: &mut Main,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let checkpointing_tracer = self.tracer.trace(timing::Event::MainCheckpointing);
-        info!("[M      ] Checkpoint");
+        info!("{main} Checkpoint");
         if self.options.no_fork {
-            process.resume()?;
+            main.process.resume()?;
             return Ok(());
         }
 
@@ -470,35 +316,28 @@ where
         let in_chain = segments.in_chain();
 
         if !in_chain && is_finishing {
-            info!("No-op checkpoint_fini");
-            process.resume()?;
+            info!("{main} No-op checkpoint_fini");
+            main.process.resume()?;
             return Ok(());
         }
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
         let forking_tracer = self.tracer.trace(timing::Event::MainForking);
-        let reference = process.fork(restart_old_syscall, true)?;
+        let reference = main.process.fork(restart_old_syscall, true)?;
         forking_tracer.end();
 
         let dirty_page_tracking_tracer = self.tracer.trace(timing::Event::MainDirtyPageTracking);
-        self.dispatcher.handle_checkpoint_created_pre(
-            process.pid,
-            if segments.next_id == 0 {
-                None
-            } else {
-                Some(segments.next_id - 1)
-            },
-        )?;
+        self.dispatcher.handle_checkpoint_created_pre(main)?;
         dirty_page_tracking_tracer.end();
 
         let throttler = if in_chain {
-            self.dispatcher.dispatch_throttle(&segments, self)
+            self.dispatcher.dispatch_throttle(main, &segments, self)
         } else {
             None
         };
 
-        process.resume()?;
+        main.process.resume()?;
         checkpointing_tracer.end();
 
         let checkpoint = Checkpoint::new(epoch_local, reference, caller);
@@ -506,256 +345,279 @@ where
         match (in_chain, is_finishing) {
             (false, false) => {
                 // Start of the segment chain
-                info!("[M      ] Protection on");
+                info!("{main} Protection on");
             }
             (true, false) => {
                 // Middle of the segment chain
             }
             (true, true) => {
                 // End of the segment chain
-                info!("[M      ] Protection off");
+                info!("{main} Protection off");
             }
             _ => unreachable!(),
         }
 
-        debug!("New checkpoint: {:#?}", checkpoint);
+        debug!("{main} New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
-            self.add_checkpoint(segments_mut, checkpoint, is_finishing, scope)
+            self.add_checkpoint(main, segments_mut, checkpoint, is_finishing, scope)
         })?;
 
         if let Some(throttler) = throttler {
             let throttling_tracer = self.tracer.trace(timing::Event::MainThrottling);
-            self.wait_until_unthrottled(throttler, &mut segments);
+            self.wait_until_unthrottled(main, throttler, &mut segments);
             throttling_tracer.end();
         }
 
         Ok(())
     }
 
-    pub fn handle_checker_checkpoint<'s, 'scope, 'env>(
-        &'s self,
-        segment: &mut UpgradableReadGuard<Segment>,
-    ) -> Result<()>
+    pub fn take_checker_checkpoint<'s, 'scope, 'env>(&'s self, checker: &mut Checker) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let checker_comparing_tracer = self.tracer.trace(timing::Event::CheckerComparing);
 
-        segment.with_upgraded(|segment| {
-            info!("[C{:>6}] Checkpoint", segment.nr);
+        info!("{checker} Checkpoint");
 
-            self.dispatcher.handle_segment_checked(segment)?;
+        self.dispatcher.handle_segment_completed(checker)?;
 
-            if self.options.no_state_cmp {
-                segment.mark_as_checked(false);
-            } else {
-                match segment.check(
-                    self.main.pid,
-                    &self.dispatcher.get_ignored_pages(),
-                    &self.dispatcher.get_extra_writable_ranges(),
-                    self.dispatcher,
-                    self.dispatcher,
-                ) {
-                    Ok((result, _nr_dirty_pages)) => {
-                        if result.is_err() {
-                            if self.options.ignore_miscmp {
-                                warn!("Check fails");
-                            } else {
-                                self.aborting.store(true, Ordering::SeqCst);
-                                error!("Check fails");
-                            }
+        if self.options.no_state_cmp {
+            checker.segment.checker_status.lock().assume_checked();
+        } else {
+            let result = checker.segment.clone().check(
+                checker,
+                &self.dispatcher.get_ignored_pages(),
+                &self.dispatcher.get_extra_writable_ranges(),
+                self.dispatcher,
+                self.dispatcher,
+            )?;
 
-                            // self.main.dump_memory_maps();
-                        } else {
-                            info!("[C{:>6}] Check passed", segment.nr);
-                        }
-
-                        segment.checker.mark_as_checked(result.err());
-                    }
-                    Err(e) => {
-                        error!("Failed to check: {:?}", e);
-                        segment.checker.mark_as_crashed(e);
+            match result {
+                Some(reason) => {
+                    if self.options.ignore_miscmp {
+                        warn!("{checker} Check failed, reason {reason:?}, ignoring");
+                    } else {
+                        self.aborting.store(true, Ordering::SeqCst);
+                        error!("{checker} Check failed, reason {reason:?}, terminating");
                     }
                 }
+                None => info!("{checker} Check passed"),
             }
+        }
 
-            Ok::<_, Error>(())
-        })?;
+        self.dispatcher.handle_segment_checked(checker)?;
 
-        UpgradableReadGuard::unlocked(segment, || {
-            let mut segments = self.segments.write();
-            self.cleanup_committed_segments(&mut segments, true, true)
-        })?;
+        let mut segments = self.segments.write();
+        self.cleanup_committed_segments(&mut segments, true)?;
+        drop(segments);
 
         checker_comparing_tracer.end();
+
+        checker.process.kill()?;
 
         Ok(())
     }
 
     /// Handle checkpoint request from the target
-    pub fn handle_checkpoint<'s, 'scope, 'env>(
+    pub fn take_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         match child {
-            ProcessIdentityRef::Main(process) => self.handle_main_checkpoint(
-                process,
-                is_finishing,
-                restart_old_syscall,
-                caller,
-                scope,
-            ),
-            ProcessIdentityRef::Checker(segment) => self.handle_checker_checkpoint(segment),
+            Inferior::Main(main) => {
+                self.take_main_checkpoint(main, is_finishing, restart_old_syscall, caller, scope)
+            }
+            Inferior::Checker(checker) => self.take_checker_checkpoint(checker),
         }
     }
 
     fn cleanup_committed_segments(
         &self,
         segments: &mut SegmentChains,
-        keep_failed_segments: bool,
-        is_opportunistic: bool,
+        keep_crashed_segments: bool,
     ) -> Result<()> {
-        segments.cleanup_committed_segments(keep_failed_segments, is_opportunistic, |segment| {
-            self.dispatcher.handle_segment_removed(segment)
-        })?;
+        segments.cleanup_committed_segments(
+            !self.options.ignore_miscmp,
+            keep_crashed_segments,
+            |segment| self.dispatcher.handle_segment_removed(&segment),
+        )?;
 
         self.main_thread.unpark();
 
         Ok(())
     }
 
-    fn checker_worker_work<'s, 'scope, 'env>(
+    pub fn main_work<'s, 'scope, 'env>(
         &'s self,
-        segment: Arc<RwLock<Segment>>,
+        process: OwnedProcess,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> ExitReason
+    where
+        's: 'scope + 'disp,
+    {
+        defer! {
+            if let Some(last_segment) = self.segments.read().last_segment() {
+                if !last_segment.is_main_finished() {
+                    error!("Main worker crashed without marking segment as finished");
+                    last_segment.mark_as_crashed();
+                }
+            }
+
+            self.dispatcher.fini(scope).unwrap();
+        }
+        (|| {
+            self.dispatcher.init(scope)?;
+
+            let mut exit_reason = match self.run_event_loop(
+                Inferior::Main(Main {
+                    process,
+                    segment: None,
+                }),
+                scope,
+            ) {
+                Ok(exit_reason) => exit_reason,
+                Err(err) => {
+                    error!("Main worker crashed with error: {:?}", err);
+
+                    if let Some(last_segment) = self.segments.read().last_segment() {
+                        last_segment.mark_as_crashed();
+                    }
+
+                    return Err(err);
+                }
+            };
+
+            self.wait_until_and_handle_completion(scope)?;
+
+            exit_reason = self
+                .segments
+                .read()
+                .collect_results()
+                .unwrap_or(exit_reason);
+
+            Ok(exit_reason)
+        })()
+        .unwrap_or_else(|err| ExitReason::Crashed(err))
+    }
+
+    fn checker_work<'s, 'scope, 'env>(
+        &'s self,
+        segment: Arc<Segment>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let segment_temp = segment.clone();
         defer! {
-            let mut s = segment_temp.write();
-            if !matches!(s.checker.status, CheckerStatus::Checked(..)) {
-                warn!("Checker worker possibly crashed without marking segment as checked");
-                s.checker.status = CheckerStatus::Crashed(Error::Panic);
+            let mut checker_status = segment_temp.checker_status.lock();
+            if !checker_status.is_finished() {
+                warn!("Checker worker possibly crashed without marking segment as finished");
+                *checker_status = CheckerStatus::Crashed(Error::Panic);
                 self.aborting.store(true, Ordering::SeqCst);
                 self.main_thread.unpark();
             }
-            self.workers.lock().remove(&s.nr).unwrap();
-        }
-
-        loop {
-            let segment_locked = segment.read();
-            match &segment_locked.status {
-                SegmentStatus::Filling => (),
-                SegmentStatus::Done(..) => {
-                    break;
-                }
-                SegmentStatus::Crashed => {
-                    warn!("Main process fails to complete segment");
-                    return Err(Error::Cancelled);
-                }
-            }
-
-            drop(segment_locked);
-
-            park();
+            self.workers.lock().remove(&segment_temp.nr).unwrap();
         }
 
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
-        let mut segment_locked = segment.write();
-
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
-        segment_locked.start_checker()?;
+        let checker_process = segment.start_checker()?;
         checker_forking_tracer.end();
 
         let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
-        self.dispatcher.handle_segment_ready(&mut segment_locked)?;
-        checker_ready_hook_tracer.end();
 
-        drop(segment_locked);
+        let mut checker = Checker {
+            process: checker_process,
+            segment: segment.clone(),
+        };
+
+        self.dispatcher.handle_segment_ready(&mut checker)?;
+        checker_ready_hook_tracer.end();
 
         checker_starting_tracer.end();
 
-        self.run_event_loop(ProcessIdentity::Checker::<Process>(segment), scope)?;
+        segment.record.wait_for_initial_event()?;
+
+        info!("{checker} Start execution");
+
+        if !self.options.no_checker_exec {
+            self.run_event_loop(Inferior::Checker(checker), scope)?;
+        } else {
+            segment.checker_status.lock().assume_checked();
+        }
 
         Ok(())
     }
 
-    /// Create a new checkpoint and kick off the checker of the previous checkpoint if needed.
     fn add_checkpoint<'s, 'scope, 'env>(
         &'s self,
+        main: &mut Main,
         segments: &mut SegmentChains,
         checkpoint: Checkpoint,
         is_finishing: bool,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
-        segments.add_checkpoint(
+        let result = segments.add_checkpoint(
             checkpoint,
             is_finishing,
-            |mut last_segment, _| {
-                let ret = if self.options.no_checker_exec {
-                    self.dispatcher.handle_segment_checked(&last_segment)?;
-                    last_segment.mark_as_checked(false);
+            main.process.pid,
+            self.options.enable_async_events,
+        );
 
-                    Ok(true)
-                } else {
-                    Ok(false)
-                };
+        if let Some(last_segment) = result.last_segment {
+            self.dispatcher.handle_segment_filled(main)?;
 
-                self.workers
-                    .lock()
-                    .get(&last_segment.nr)
-                    .unwrap()
-                    .thread
-                    .unpark();
+            self.workers
+                .lock()
+                .get(&last_segment.nr)
+                .map(|x| x.thread.unpark());
+        }
 
-                ret
-            },
-            |segment| {
-                self.dispatcher.handle_segment_created(&segment)?;
+        main.segment = result.new_segment.clone();
 
-                let segment_id = segment.nr;
-                let segment = ArcRwLockReadGuard::rwlock(&segment).clone();
+        if let Some(new_segment) = result.new_segment {
+            self.dispatcher.handle_segment_created(main)?;
 
-                let mut workers = self.workers.lock();
+            let segment_nr = new_segment.nr;
 
-                let jh = std::thread::Builder::new()
-                    .name(format!("checker-{segment_id}"))
-                    .spawn_scoped(scope, move || {
-                        if let Err(e) = self.checker_worker_work(segment, scope) {
-                            error!("Checker worker crashed with error: {e:?}");
-                        }
-                    })
-                    .unwrap();
+            let mut workers = self.workers.lock();
 
-                workers.insert(
-                    segment_id,
-                    Worker {
-                        thread: jh.thread().clone(),
-                    },
-                );
+            let jh = std::thread::Builder::new()
+                .name(format!("checker-{}", new_segment.nr))
+                .spawn_scoped(scope, move || {
+                    if let Err(e) = self.checker_work(new_segment, scope) {
+                        error!("Checker worker crashed with error: {e:?}");
+                    }
+                })
+                .unwrap();
 
-                Ok(())
-            },
-            |segment| self.dispatcher.handle_segment_chain_closed(&segment),
-            |segments| self.cleanup_committed_segments(segments, true, true),
-        )
+            workers.insert(
+                segment_nr,
+                Worker {
+                    thread: jh.thread().clone(),
+                },
+            );
+        }
+
+        if is_finishing {
+            self.dispatcher.handle_segment_chain_closed(main)?;
+        }
+
+        self.cleanup_committed_segments(segments, true)?;
+
+        Ok(())
     }
 
     /// Get the current epoch.
@@ -763,134 +625,89 @@ where
         self.epoch.load(Ordering::SeqCst)
     }
 
-    /// Check if all checkers has finished.
+    /// Check if all segments have finished.
     pub fn is_all_finished(&self) -> bool {
-        self.segments.read().is_empty()
+        self.segments
+            .read()
+            .list
+            .iter()
+            .all(|segment| segment.is_both_finished())
     }
 
-    /// Wait until all segments are checked, and call `disp.handle_all_fini()``. Needs to be called from the main thread
+    /// Wait until all segments are checked, and call `disp.handle_all_fini()`. Needs to be called from the main thread
     pub fn wait_until_and_handle_completion<'s, 'scope>(
         &'s self,
         scope: &'scope Scope<'scope, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
-        let mut segments = self.segments.write();
-        self.cleanup_committed_segments(&mut segments, true, false)?;
-        drop(segments);
+        self.cleanup_committed_segments(&mut self.segments.write(), true)?;
 
-        while !self.is_all_finished() && !self.has_errors() && !self.aborting.load(Ordering::SeqCst)
-        {
+        while !self.is_all_finished() && !self.aborting.load(Ordering::SeqCst) {
             park();
         }
+
         self.dispatcher
             .handle_all_fini(ProcessLifetimeHookContext {
                 process: &self.main,
                 check_coord: self,
                 scope,
-            })?;
+            })?; // TODO
 
         // Cancel all checkers
         self.segments.read().mark_all_filling_segments_as_crashed();
         let workers = self.workers.lock();
-        for (_, worker) in workers.iter() {
+        for worker in workers.values() {
             worker.thread.unpark();
         }
 
         Ok(())
     }
 
-    pub fn handle_panic(&self) {
-        // Mark all incomplete segments as crashed
-        let segments = self.segments.write();
-        for segment in &segments.list {
-            let mut segment = segment.write();
-
-            match &segment.status {
-                SegmentStatus::Filling => {
-                    segment.status = SegmentStatus::Crashed;
-                }
-                SegmentStatus::Done(_) => {
-                    if matches!(
-                        segment.checker.status,
-                        CheckerStatus::Checking(..) | CheckerStatus::NotReady
-                    ) {
-                        segment.checker.status = CheckerStatus::Crashed(Error::Panic);
-                    }
-                }
-                _ => (),
-            }
-        }
-
-        drop(segments);
-
-        // Wake up all workers
-        let workers = self.workers.lock();
-
-        for worker in workers.values() {
-            worker.thread.unpark();
-        }
-    }
-
-    /// Check if any checker has errors unless IGNORE_CHECK_ERRORS is set.
-    pub fn has_errors(&self) -> bool {
-        !self.options.ignore_miscmp && self.segments.read().has_errors()
-    }
-
-    pub fn has_state_mismatches(&self) -> bool {
-        self.segments.read_recursive().has_state_mismatches()
-    }
-
     pub fn handle_syscall_entry<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         syscall: Syscall,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let tracing_event = match child {
-            ProcessIdentityRef::Main(_) => timing::Event::MainSyscallEntryHandling,
-            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSyscallEntryHandling,
+            Inferior::Main(_) => timing::Event::MainSyscallEntryHandling,
+            Inferior::Checker(_) => timing::Event::CheckerSyscallEntryHandling,
         };
 
         let syscall_entry_handling_tracer = self.tracer.trace(tracing_event);
-        let process = child.process().unwrap().clone(); // hack
 
         let mut skip_ptrace_syscall = false;
 
-        info!("{child} Syscall: {:}", syscall.display(&process));
+        info!(
+            "{child} Syscall: {:}",
+            syscall.display(child.process().deref())
+        );
 
         if matches!(
             self.dispatcher
-                .handle_standard_syscall_entry(&syscall, ctx!(child, scope, self))?,
+                .handle_standard_syscall_entry(&syscall, hctx(&mut child.into(), self, scope))?,
             SyscallHandlerExitAction::ContinueInferior
         ) {
-            process.resume()?;
+            child.process().resume()?;
             return Ok(());
         }
 
         match child {
-            ProcessIdentityRef::Main(_) => {
+            Inferior::Main(main) => {
                 // Main syscall entry
-                let segments = self.segments.read();
-                if let Some(segment) = segments.main_segment() {
+                if let Some(segment) = &main.segment {
+                    let segment = segment.clone();
                     // Main syscall entry, inside protection zone
-                    let mut segment = segment.write_arc();
-                    drop(segments);
 
-                    assert!(
-                        segment.record.ongoing_syscall.is_none(),
-                        "Syscall double entry"
-                    );
-
-                    let result = self
-                        .dispatcher
-                        .handle_standard_syscall_entry_main(&syscall, ctx!(child, scope, self))?;
+                    let result = self.dispatcher.handle_standard_syscall_entry_main(
+                        &syscall,
+                        hctx(&mut main.into(), self, scope),
+                    )?;
 
                     match result {
                         StandardSyscallEntryMainHandlerExitAction::NextHandler => {
@@ -899,17 +716,21 @@ where
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                             saved_incomplete_syscall,
                         ) => {
-                            segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
+                            segment
+                                .record
+                                .push_incomplete_syscall(saved_incomplete_syscall);
                         }
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                             saved_incomplete_syscall,
                         ) => {
-                            segment.record.ongoing_syscall = Some(saved_incomplete_syscall);
-                            drop(segment);
+                            segment
+                                .record
+                                .push_event(saved_incomplete_syscall, true, &segment)?;
+
                             syscall_entry_handling_tracer.end();
 
-                            self.handle_checkpoint(
-                                child,
+                            self.take_main_checkpoint(
+                                main,
                                 true,
                                 true,
                                 CheckpointCaller::Shell,
@@ -921,11 +742,12 @@ where
                     }
                 }
             }
-            ProcessIdentityRef::Checker(_) => {
+            Inferior::Checker(checker) => {
                 // Checker syscall entry
-                let result = self
-                    .dispatcher
-                    .handle_standard_syscall_entry_checker(&syscall, ctx!(child, scope, self))?;
+                let result = self.dispatcher.handle_standard_syscall_entry_checker(
+                    &syscall,
+                    hctx(&mut checker.into(), self, scope),
+                )?;
 
                 match result {
                     StandardSyscallEntryCheckerHandlerExitAction::NextHandler => {
@@ -933,9 +755,13 @@ where
                     }
                     StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior => (),
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
+                        let incomplete_syscall = checker.segment.record.pop_incomplete_syscall()?;
+
+                        assert!(incomplete_syscall.is_last_event);
+
                         syscall_entry_handling_tracer.end();
 
-                        self.handle_checker_checkpoint(child.unwrap_checker_segment_mut())?;
+                        self.take_checker_checkpoint(checker)?;
 
                         skip_ptrace_syscall = true;
                     }
@@ -944,7 +770,7 @@ where
         }
 
         if !skip_ptrace_syscall {
-            process.resume()?;
+            child.process().resume()?;
         }
 
         Ok(())
@@ -952,79 +778,77 @@ where
 
     pub fn handle_syscall_exit<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         last_syscall: Syscall,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let tracing_event = match child {
-            ProcessIdentityRef::Main(_) => timing::Event::MainSyscallExitHandling,
-            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSyscallExitHandling,
+            Inferior::Main(_) => timing::Event::MainSyscallExitHandling,
+            Inferior::Checker(_) => timing::Event::CheckerSyscallExitHandling,
         };
 
         let syscall_exit_handling_tracer = self.tracer.trace(tracing_event);
 
-        let process = child.process().unwrap().clone();
         let mut skip_ptrace_syscall = false;
 
         if self.dispatcher.handle_standard_syscall_exit(
             ret_val,
             &last_syscall,
-            ctx!(child, scope, self),
+            hctx(&mut child.into(), self, scope),
         )? == SyscallHandlerExitAction::ContinueInferior
         {
-            process.resume()?;
+            child.process().resume()?;
             return Ok(());
         }
 
         match child {
-            ProcessIdentityRef::Main(_) => {
-                let segments = self.segments.read();
-                if let Some(segment) = segments.main_segment() {
+            Inferior::Main(main) => {
+                if let Some(segment) = &main.segment {
+                    let segment = segment.clone();
                     // Main syscall entry, inside protection zone
-                    drop(segments);
-                    let mut segment = segment.write();
 
                     let saved_incomplete_syscall = segment
                         .record
-                        .ongoing_syscall
-                        .take()
+                        .take_incomplete_syscall()
                         .expect("Unexpected ptrace event");
 
-                    let saved_syscall = match saved_incomplete_syscall.exit_action {
-                        SyscallExitAction::ReplicateMemoryWrites => {
+                    let exit_action = saved_incomplete_syscall.exit_action;
+
+                    let saved_syscall = match exit_action {
+                        SyscallExitAction::ReplayEffects => {
                             // TODO: move this to syscall_handlers/record_replay.rs
 
                             // store memory contents that are potentially written during the syscall
                             let mem_written = match &saved_incomplete_syscall.kind {
-                                SavedIncompleteSyscallKind::KnownMemoryRAndWRange {
+                                SavedIncompleteSyscallKind::WithMemoryEffects {
                                     mem_written_ranges,
                                     ..
-                                } => SavedMemory::save(&process, mem_written_ranges)?,
+                                } => SavedMemory::save(main.process.deref(), mem_written_ranges)?,
                                 _ => panic!(),
                             };
 
-                            saved_incomplete_syscall.upgrade(ret_val, Some(mem_written))
+                            saved_incomplete_syscall.with_return_value(ret_val, Some(mem_written))
                         }
                         SyscallExitAction::ReplicateSyscall => {
-                            saved_incomplete_syscall.upgrade(ret_val, None)
+                            saved_incomplete_syscall.with_return_value(ret_val, None)
                         }
                         SyscallExitAction::Custom => {
                             let result = self.dispatcher.handle_standard_syscall_exit_main(
                                 ret_val,
                                 &saved_incomplete_syscall,
-                                ctx!(child, scope, self),
+                                hctx(&mut main.into(), self, scope),
                             )?;
 
-                            if matches!(result, SyscallHandlerExitAction::NextHandler) {
-                                panic!("Unhandled custom syscall during syscall exit");
-                            };
+                            assert!(
+                                !matches!(result, SyscallHandlerExitAction::NextHandler),
+                                "Unhandled custom syscall during syscall exit"
+                            );
 
-                            saved_incomplete_syscall.upgrade(ret_val, None)
+                            saved_incomplete_syscall.with_return_value(ret_val, None)
                         }
                         SyscallExitAction::Checkpoint => {
                             syscall_exit_handling_tracer.end();
@@ -1032,27 +856,31 @@ where
                         }
                     };
 
-                    segment.record.push_syscall(saved_syscall);
+                    segment.record.push_event(
+                        saved_syscall,
+                        exit_action == SyscallExitAction::Checkpoint,
+                        &segment,
+                    )?;
                 } else {
                     // outside protected region
+                    let segments = self.segments.read();
                     if let Some(last_segment) = segments.last_segment() {
-                        let mut last_segment = last_segment.write_arc();
                         drop(segments);
 
-                        if let Some(ongoing_syscall) = last_segment.record.ongoing_syscall.take() {
-                            assert!(child.is_main());
+                        if let Some(ongoing_syscall) =
+                            last_segment.record.get_last_incomplete_syscall()
+                        {
                             assert_eq!(ongoing_syscall.exit_action, SyscallExitAction::Checkpoint);
-                            drop(last_segment);
 
                             // restore registers as if we haven't modified any flags
-                            process.modify_registers_with(|regs| {
+                            main.process.modify_registers_with(|regs| {
                                 regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
                             })?;
 
                             syscall_exit_handling_tracer.end();
 
-                            self.handle_checkpoint(
-                                child,
+                            self.take_main_checkpoint(
+                                main,
                                 false,
                                 false,
                                 CheckpointCaller::Shell,
@@ -1063,28 +891,29 @@ where
                     }
                 }
             }
-            ProcessIdentityRef::Checker(segment) => {
-                let saved_syscall = segment.with_upgraded(|segment| {
-                    segment
-                        .record
-                        .next_syscall()
-                        .expect("Unexpected ptrace event")
-                });
+            Inferior::Checker(checker) => {
+                let saved_syscall_with_is_last_event = checker
+                    .segment
+                    .record
+                    .pop_syscall()
+                    .expect("Unexpected ptrace event");
+
+                if saved_syscall_with_is_last_event.is_last_event {
+                    todo!("Take a checkpoint");
+                }
+
+                let saved_syscall = saved_syscall_with_is_last_event.value;
 
                 match saved_syscall.exit_action {
-                    SyscallExitAction::ReplicateMemoryWrites => {
-                        match &saved_syscall.kind {
-                            SavedSyscallKind::KnownMemoryRw { mem_written, .. } => {
-                                segment.checker.process().unwrap().modify_registers_with(
-                                    |regs| regs.with_syscall_ret_val(saved_syscall.ret_val),
-                                )?;
-                                mem_written.dump(&mut process.clone())?;
-                            }
-                            _ => panic!(
-                                "Cannot replicate syscall effects with unknown memory effect"
-                            ),
+                    SyscallExitAction::ReplayEffects => match &saved_syscall.kind {
+                        SavedSyscallKind::WithMemoryEffects { mem_written, .. } => {
+                            checker.process.modify_registers_with(|regs| {
+                                regs.with_syscall_ret_val(saved_syscall.ret_val)
+                            })?;
+                            mem_written.dump(checker.process.deref_mut())?;
                         }
-                    }
+                        _ => panic!("Cannot replay syscall effects with unknown memory effects"),
+                    },
                     SyscallExitAction::ReplicateSyscall => {
                         assert_eq!(ret_val, saved_syscall.ret_val);
                     }
@@ -1093,13 +922,12 @@ where
                         todo!("take a full checkpoint");
                     }
                     SyscallExitAction::Custom => {
-                        // dbg!(&saved_syscall);
                         assert_eq!(ret_val, saved_syscall.ret_val);
 
                         let result = self.dispatcher.handle_standard_syscall_exit_checker(
                             ret_val,
                             &saved_syscall,
-                            ctx!(child, scope, self),
+                            hctx(&mut checker.into(), self, scope),
                         )?;
 
                         if result == SyscallHandlerExitAction::NextHandler {
@@ -1111,7 +939,7 @@ where
         }
 
         if !skip_ptrace_syscall {
-            process.resume()?;
+            child.process().resume()?;
         }
 
         Ok(())
@@ -1119,46 +947,55 @@ where
 
     pub fn handle_custom_syscall_entry<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         sysno: usize,
         args: SyscallArgs,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
-        let process = child.process().unwrap().clone(); /* hack */
-
         let handled = self
             .dispatcher
-            .handle_custom_syscall_entry(sysno, args, ctx!(child, scope, self))
+            .handle_custom_syscall_entry(sysno, args, hctx(&mut child.into(), self, scope))
             .unwrap();
 
-        if handled == SyscallHandlerExitAction::NextHandler {
-            match sysno {
-                SYSNO_CHECKPOINT_TAKE => {
-                    self.handle_checkpoint(
-                        child,
-                        false,
-                        true, /* todo */
-                        CheckpointCaller::Child,
-                        scope,
-                    )?;
-                }
-                SYSNO_CHECKPOINT_FINI => {
-                    self.handle_checkpoint(
-                        child,
+        if handled == SyscallHandlerExitAction::NextHandler
+            && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
+        {
+            let is_finishing = sysno == SYSNO_CHECKPOINT_FINI;
+
+            match child {
+                Inferior::Main(main) => {
+                    if let Some(segment) = &main.segment {
+                        segment.record.push_event(
+                            ManualCheckpointRequest { is_finishing },
+                            true,
+                            segment,
+                        )?;
+                    }
+
+                    self.take_main_checkpoint(
+                        main,
+                        is_finishing,
                         true,
-                        true, /* todo */
                         CheckpointCaller::Child,
                         scope,
                     )?;
                 }
-                _ => process.resume()?,
+                Inferior::Checker(checker) => {
+                    let result = checker.segment.record.pop_manual_checkpoint_request()?;
+                    assert!(result.is_last_event);
+                    if result.value.is_finishing != is_finishing {
+                        return Err(Error::UnexpectedEvent(
+                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                        ));
+                    }
+                    self.take_checker_checkpoint(checker)?;
+                }
             }
         } else {
-            process.resume()?;
+            child.process().resume()?;
         }
 
         Ok(())
@@ -1166,63 +1003,58 @@ where
 
     pub fn handle_custom_syscall_exit<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         self.dispatcher
-            .handle_custom_syscall_exit(ret_val, ctx!(child, scope, self))
+            .handle_custom_syscall_exit(ret_val, hctx(&mut child.into(), self, scope))
             .unwrap();
 
-        child.process().unwrap().resume()?;
+        child.process().resume()?;
 
         Ok(())
     }
 
     pub fn handle_signal<'s, 'scope, 'env>(
         &'s self,
-        child: &mut ProcessIdentityRef<'_, UpgradableReadGuard<Segment>>,
+        child: &mut Inferior,
         sig: Signal,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
-        's: 'scope,
-        's: 'disp,
+        's: 'scope + 'disp,
     {
         let tracing_event = match child {
-            ProcessIdentityRef::Main(_) => timing::Event::MainSignalHandling,
-            ProcessIdentityRef::Checker(_) => timing::Event::CheckerSignalHandling,
+            Inferior::Main(_) => timing::Event::MainSignalHandling,
+            Inferior::Checker(_) => timing::Event::CheckerSignalHandling,
         };
 
         let signal_handling_tracer = self.tracer.trace(tracing_event);
 
         let result = self
             .dispatcher
-            .handle_signal(sig, ctx!(child, scope, self))?;
+            .handle_signal(sig, hctx(&mut child.into(), self, scope))?;
 
         signal_handling_tracer.end();
-
-        let process = child.process().unwrap();
-        let pid = process.pid;
 
         match result {
             SignalHandlerExitAction::SkipPtraceSyscall => (),
             SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
-                process.resume()?;
+                child.process().resume()?;
             }
             SignalHandlerExitAction::NextHandler => {
                 info!("{child} Signal: {:}", sig);
-                ptrace::syscall(pid, sig)?;
+                ptrace::syscall(child.process().pid, sig)?;
             }
             SignalHandlerExitAction::ContinueInferior => {
-                ptrace::syscall(pid, sig)?;
+                ptrace::syscall(child.process().pid, sig)?;
             }
             SignalHandlerExitAction::Checkpoint => {
-                self.handle_checkpoint(child, false, false, CheckpointCaller::Shell, scope)?;
+                self.take_checkpoint(child, false, false, CheckpointCaller::Shell, scope)?;
             }
         }
 

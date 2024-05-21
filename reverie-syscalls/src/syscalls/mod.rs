@@ -1675,7 +1675,13 @@ typed_syscall! {
         sgid: Option<AddrMut<libc::gid_t>>,
     }
 }
-typed_syscall! { pub struct Getpgid {} }
+
+typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
+    pub struct Getpgid {}
+}
+
 typed_syscall! { pub struct Setfsuid {} }
 typed_syscall! { pub struct Setfsgid {} }
 typed_syscall! { pub struct Getsid {} }

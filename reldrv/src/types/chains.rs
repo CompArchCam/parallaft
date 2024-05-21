@@ -1,22 +1,20 @@
 use std::collections::LinkedList;
 use std::fmt::Debug;
-use std::mem;
 use std::sync::Arc;
 
 use log::debug;
-use parking_lot::lock_api::{ArcRwLockReadGuard, ArcRwLockWriteGuard};
-use parking_lot::{RawRwLock, RwLock};
+use nix::unistd::Pid;
 
 use crate::error::Result;
 use crate::types::checker::CheckerStatus;
-use crate::types::segment::SegmentStatus;
 
 use super::checkpoint::Checkpoint;
+use super::exit_reason::ExitReason;
 use super::segment::{Segment, SegmentId};
 
 #[derive(Debug)]
 pub struct SegmentChains {
-    pub list: LinkedList<Arc<RwLock<Segment>>>,
+    pub list: LinkedList<Arc<Segment>>,
     pub next_id: SegmentId,
     in_chain: bool,
 }
@@ -25,6 +23,11 @@ impl Default for SegmentChains {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub struct AddCheckpointResult {
+    pub last_segment: Option<Arc<Segment>>,
+    pub new_segment: Option<Arc<Segment>>,
 }
 
 impl SegmentChains {
@@ -41,17 +44,6 @@ impl SegmentChains {
         self.list.len()
     }
 
-    /// Check if there are any checking errors in this segment chain.
-    pub fn has_errors(&self) -> bool {
-        self.list.iter().any(|segment| segment.read().has_errors())
-    }
-
-    pub fn has_state_mismatches(&self) -> bool {
-        self.list
-            .iter()
-            .any(|segment| segment.read_recursive().has_state_mismatches())
-    }
-
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
@@ -60,11 +52,11 @@ impl SegmentChains {
         self.list.len()
     }
 
-    pub fn last_segment(&self) -> Option<Arc<RwLock<Segment>>> {
+    pub fn last_segment(&self) -> Option<Arc<Segment>> {
         self.list.back().cloned()
     }
 
-    pub fn first_segment(&self) -> Option<Arc<RwLock<Segment>>> {
+    pub fn first_segment(&self) -> Option<Arc<Segment>> {
         self.list.front().cloned()
     }
 
@@ -76,83 +68,83 @@ impl SegmentChains {
         &mut self,
         checkpoint: Checkpoint,
         is_finishing: bool,
-        on_segment_ready: impl FnOnce(
-            ArcRwLockWriteGuard<RawRwLock, Segment>,
-            &Checkpoint,
-        ) -> Result<bool>,
-        on_segment_created: impl FnOnce(ArcRwLockReadGuard<RawRwLock, Segment>) -> Result<()>,
-        on_segment_chain_closed: impl FnOnce(ArcRwLockReadGuard<RawRwLock, Segment>) -> Result<()>,
-        on_cleanup_needed: impl FnOnce(&mut Self) -> Result<()>,
-    ) -> Result<()> {
+        main_pid: Pid,
+        enable_async_events: bool,
+    ) -> AddCheckpointResult {
         let checkpoint = Arc::new(checkpoint);
-        let mut do_cleanup = false;
 
-        if let Some(last_segment) = self.list.back() {
-            let mut last_segment = last_segment.write_arc();
+        let mut result = AddCheckpointResult {
+            last_segment: None,
+            new_segment: None,
+        };
 
-            if matches!(last_segment.status, SegmentStatus::Filling) {
-                last_segment.mark_as_done(checkpoint.clone());
-                do_cleanup = on_segment_ready(last_segment, &checkpoint)?;
-            }
+        if self.in_chain {
+            let last_segment = self.list.back().unwrap();
+            last_segment.mark_main_as_completed(checkpoint.clone());
+
+            result.last_segment = Some(last_segment.clone());
+        } else {
+            assert!(!is_finishing);
         }
 
         if !is_finishing {
-            let segment = Segment::new(checkpoint, self.next_id);
+            let segment = Segment::new(checkpoint, self.next_id, main_pid, enable_async_events);
             self.next_id += 1;
             self.in_chain = true;
 
             debug!("New segment: {:?}", segment);
 
-            let segment_arc = Arc::new(RwLock::new(segment));
-            let segment_mg = segment_arc.read_arc_recursive();
-            self.list.push_back(segment_arc);
-            on_segment_created(segment_mg)?;
+            let segment = Arc::new(segment);
+            self.list.push_back(segment.clone());
+
+            result.new_segment = Some(segment);
         } else {
-            let last_segment = self.list.back().unwrap().read_arc_recursive();
+            assert!(self.in_chain);
             self.in_chain = false;
-            on_segment_chain_closed(last_segment)?;
         }
 
-        if do_cleanup {
-            on_cleanup_needed(self)?;
-        }
-
-        Ok(())
+        result
     }
 
     pub fn cleanup_committed_segments(
         &mut self,
-        keep_failed_segments: bool,
-        is_opportunistic: bool,
-        on_segment_removed: impl Fn(&Segment) -> Result<()>,
+        keep_mismatch_segments: bool,
+        keep_crashed_segments: bool,
+        on_segment_removed: impl Fn(Arc<Segment>) -> Result<()>,
     ) -> Result<()> {
         loop {
             let mut should_break = true;
             let front = self.list.front();
             if let Some(front) = front {
-                let front_locked;
+                let checker_status = front.checker_status.lock();
 
-                if is_opportunistic {
-                    if let Some(front) = front.try_read_recursive() {
-                        front_locked = front;
-                    } else {
-                        break;
-                    }
-                } else {
-                    front_locked = front.read_recursive();
-                }
-
-                if front_locked.checker.is_finished() {
-                    if keep_failed_segments
+                if checker_status.is_finished() {
+                    if keep_mismatch_segments
                         && matches!(
-                            front_locked.checker.status,
-                            CheckerStatus::Checked(Some(..)) | CheckerStatus::Crashed(..)
+                            &*checker_status,
+                            CheckerStatus::Checked {
+                                result: Some(..),
+                                ..
+                            }
                         )
                     {
                         break;
                     }
-                    on_segment_removed(&front_locked)?;
-                    mem::drop(front_locked);
+
+                    if keep_crashed_segments
+                        && matches!(&*checker_status, CheckerStatus::Crashed(..))
+                    {
+                        break;
+                    }
+
+                    if self.list.len() == 1 && front.record.get_last_incomplete_syscall().is_some()
+                    {
+                        break;
+                    }
+
+                    drop(checker_status);
+
+                    on_segment_removed(front.clone())?;
                     self.list.pop_front();
                     should_break = false;
                 }
@@ -165,32 +157,31 @@ impl SegmentChains {
         Ok(())
     }
 
-    pub fn main_segment(&self) -> Option<Arc<RwLock<Segment>>> {
-        if self.in_chain {
-            self.list.back().cloned()
-        } else {
-            None
+    pub fn collect_results(&self) -> Option<ExitReason> {
+        for segment in &self.list {
+            let checker_status = segment.checker_status.lock();
+            match &*checker_status {
+                CheckerStatus::Checked { result: None, .. } => (),
+                CheckerStatus::Checked {
+                    result: Some(r), ..
+                } => return Some(ExitReason::StateMismatch(segment.clone(), *r)),
+                CheckerStatus::Crashed(error) => return Some(ExitReason::Crashed(error.clone())),
+                _ => panic!("Unexpected status"),
+            }
         }
+
+        None
     }
 
     /// Get the total number of dirty pages in this segment chain.
     pub fn nr_dirty_pages(&self) -> usize {
-        self.list
-            .iter()
-            .map(|segment| {
-                let segment = segment.read();
-                segment.dirty_page_addresses_main.len()
-            })
-            .sum()
+        todo!()
     }
 
     /// Mark all filling segments as crashed
     pub fn mark_all_filling_segments_as_crashed(&self) {
         for segment in &self.list {
-            let mut segment = segment.write();
-            if matches!(segment.status, SegmentStatus::Filling) {
-                segment.status = SegmentStatus::Crashed;
-            }
+            segment.mark_as_crashed_if_filling();
         }
     }
 }
