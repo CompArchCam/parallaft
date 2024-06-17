@@ -110,7 +110,7 @@ where
         }
     }
 
-    pub fn run_event_loop<'s, 'scope, 'env>(
+    fn run_event_loop<'s, 'scope, 'env>(
         &'s self,
         mut child: Inferior,
         scope: &'scope Scope<'scope, 'env>,
@@ -371,7 +371,7 @@ where
         Ok(())
     }
 
-    pub fn take_checker_checkpoint<'s, 'scope, 'env>(&'s self, checker: &mut Checker) -> Result<()>
+    fn take_checker_checkpoint<'s, 'scope, 'env>(&'s self, checker: &mut Checker) -> Result<()>
     where
         's: 'scope + 'disp,
     {
@@ -419,7 +419,7 @@ where
     }
 
     /// Handle checkpoint request from the target
-    pub fn take_checkpoint<'s, 'scope, 'env>(
+    fn take_checkpoint<'s, 'scope, 'env>(
         &'s self,
         child: &mut Inferior,
         is_finishing: bool,
