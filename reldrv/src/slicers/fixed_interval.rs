@@ -7,13 +7,12 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    error::Result,
+    error::{Error, Result},
     events::{
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    exec_point_providers::ExecutionPointProvider,
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
@@ -178,17 +177,13 @@ impl SignalHandler for FixedIntervalSlicer {
 
             *state = Some(next_state);
 
-            if let Some(segment) = main.segment.as_ref().cloned() {
-                let exec_point = context
-                    .check_coord
-                    .dispatcher
-                    .get_current_execution_point(&mut (*main).into())?;
+            let ret = context.check_coord.push_curr_exec_point_to_event_log(main);
 
-                debug!("{main} New execution point: {exec_point:?}");
-                segment.record.push_event(exec_point, true, &segment)?;
-            }
-
-            return Ok(SignalHandlerExitAction::Checkpoint);
+            match ret {
+                Ok(()) => return Ok(SignalHandlerExitAction::Checkpoint),
+                Err(Error::InvalidState) => return Ok(SignalHandlerExitAction::ContinueInferior),
+                Err(e) => return Err(e),
+            };
         }
 
         Ok(SignalHandlerExitAction::NextHandler)

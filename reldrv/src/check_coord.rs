@@ -32,6 +32,7 @@ use crate::events::{
     segment::SegmentEventHandler,
     signal::{SignalHandler, SignalHandlerExitAction},
 };
+use crate::exec_point_providers::ExecutionPointProvider;
 use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::{OwnedProcess, Process};
 use crate::statistics::timing::{self, Tracer};
@@ -1056,6 +1057,21 @@ where
             SignalHandlerExitAction::Checkpoint => {
                 self.take_checkpoint(child, false, false, CheckpointCaller::Shell, scope)?;
             }
+        }
+
+        Ok(())
+    }
+
+    pub fn push_curr_exec_point_to_event_log(&self, main: &mut Main) -> Result<()> {
+        if let Some(segment) = main.segment.as_ref().cloned() {
+            let exec_point = self
+                .dispatcher
+                .get_current_execution_point(&mut main.into())?;
+
+            debug!("{main} New execution point: {exec_point:?}");
+            segment.record.push_event(exec_point, true, &segment)?;
+        } else {
+            return Err(Error::InvalidState);
         }
 
         Ok(())
