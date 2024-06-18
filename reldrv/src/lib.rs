@@ -37,6 +37,7 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
 
 use log::info;
+use signal_handlers::slice_segment::SliceSegmentHandler;
 use slicers::entire_program::EntireProgramSlicer;
 use slicers::fixed_interval::FixedIntervalSlicer;
 use slicers::{ReferenceType, SlicerType};
@@ -322,6 +323,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         options.enable_speculative_store_bypass_misfeature,
         options.enable_indirect_branch_speculation_misfeature,
     ));
+
+    disp.register_module(SliceSegmentHandler);
 
     // Statistics
     let tracer = disp.register_module(Tracer::new());

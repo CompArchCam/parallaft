@@ -4,6 +4,8 @@ pub mod cpuid;
 #[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
+pub mod slice_segment;
+
 use crate::error::Result;
 use crate::types::process_id::InferiorRefMut;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
