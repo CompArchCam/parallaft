@@ -754,6 +754,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de3145af08024dea9fa9914f381a17b8fc6034dfb00f3a84013f7ff43f29ed4c"
 
 [[package]]
+name = "path_macro"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6e819bbd49d5939f682638fa54826bf1650abddcd65d000923de8ad63cc7d15"
+
+[[package]]
 name = "perf-event-data"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -904,6 +910,7 @@ dependencies = [
  "log-panics",
  "nix 0.26.1",
  "parking_lot",
+ "path_macro",
  "perf-event-open-sys2",
  "perf-event2",
  "pretty-hex",

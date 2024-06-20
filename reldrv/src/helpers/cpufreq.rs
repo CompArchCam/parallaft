@@ -1,28 +1,130 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::str::FromStr;
 
+use itertools::Itertools;
 use log::info;
 use parking_lot::Mutex;
+use path_macro::path;
 
 use crate::dispatcher::{Module, Subscribers};
-use crate::error::Result;
-use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::error::{Error, Result};
+use crate::events::module_lifetime::ModuleLifetimeHook;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum CpuFreqGovernor {
-    Ondemand,
-    Userspace(u64),
+    Ondemand { max_freq_khz: Option<u64> },
+    Userspace { speed_khz: u64 },
+    Other(String),
+}
+
+mod strings {
+    pub const ONDEMAND: &'static str = "ondemand";
+    pub const USERSPACE: &'static str = "userspace";
+    pub const SCALING_GOVERNOR: &'static str = "scaling_governor";
+    pub const SCALING_SETSPEED: &'static str = "scaling_setspeed";
+    pub const SCALING_MAX_FREQ: &'static str = "scaling_max_freq";
+}
+
+fn get_cpufreq_dir(cpu: usize) -> PathBuf {
+    format!("/sys/devices/system/cpu/cpu{}/cpufreq", cpu).into()
+}
+
+fn read_cpufreq_item(cpu: usize, item: &str) -> Result<String> {
+    Ok(fs::read_to_string(path!(get_cpufreq_dir(cpu) / item))?)
+}
+
+fn write_cpufreq_item(cpu: usize, item: &str, value: &str) -> Result<()> {
+    Ok(fs::write(path!(get_cpufreq_dir(cpu) / item), value)?)
+}
+
+fn get_cpufreq_governor_raw(cpu: usize) -> Result<String> {
+    read_cpufreq_item(cpu, &strings::SCALING_GOVERNOR)
+}
+
+fn set_cpufreq_governor_raw(cpu: usize, governor: &str) -> Result<()> {
+    write_cpufreq_item(cpu, &strings::SCALING_GOVERNOR, governor)?;
+    info!("CPU {} governor set to {}", cpu, governor.trim_end());
+    Ok(())
+}
+
+fn get_cpufreq_speed(cpu: usize) -> Result<u64> {
+    let speed_str = read_cpufreq_item(cpu, &strings::SCALING_SETSPEED)?;
+    let speed = speed_str.parse::<u64>()?;
+    Ok(speed)
+}
+
+fn set_cpufreq_speed(cpu: usize, speed_khz: u64) -> Result<()> {
+    write_cpufreq_item(cpu, &strings::SCALING_SETSPEED, &speed_khz.to_string())
+}
+
+fn get_cpufreq_max_freq(cpu: usize) -> Result<u64> {
+    let freq_str = read_cpufreq_item(cpu, &strings::SCALING_MAX_FREQ)?;
+    let freq = freq_str.parse::<u64>()?;
+    Ok(freq)
+}
+
+fn set_cpufreq_max_freq(cpu: usize, freq_khz: u64) -> Result<()> {
+    write_cpufreq_item(cpu, &strings::SCALING_MAX_FREQ, &freq_khz.to_string())
+}
+
+impl CpuFreqGovernor {
+    pub fn read(cpu: usize) -> Result<Self> {
+        let governor_raw = get_cpufreq_governor_raw(cpu)?;
+
+        Ok(match governor_raw.as_str() {
+            strings::ONDEMAND => Self::Ondemand {
+                max_freq_khz: Some(get_cpufreq_max_freq(cpu)?),
+            },
+            strings::USERSPACE => Self::Userspace {
+                speed_khz: get_cpufreq_speed(cpu)?,
+            },
+            other @ _ => Self::Other(other.to_string()),
+        })
+    }
+
+    pub fn write(&self, cpu: usize) -> Result<()> {
+        match self {
+            CpuFreqGovernor::Ondemand { max_freq_khz } => {
+                set_cpufreq_governor_raw(cpu, &strings::ONDEMAND)?;
+                if let Some(max_freq_khz) = max_freq_khz {
+                    set_cpufreq_max_freq(cpu, *max_freq_khz)?;
+                }
+            }
+            CpuFreqGovernor::Userspace { speed_khz } => {
+                set_cpufreq_governor_raw(cpu, &strings::USERSPACE)?;
+                set_cpufreq_speed(cpu, *speed_khz)?;
+            }
+            CpuFreqGovernor::Other(governor_raw) => {
+                set_cpufreq_governor_raw(cpu, governor_raw)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl FromStr for CpuFreqGovernor {
-    type Err = <u64 as FromStr>::Err;
+    type Err = Error;
 
-    fn from_str(s: &str) -> std::prelude::v1::Result<Self, Self::Err> {
-        if s == "ondemand" {
-            Ok(Self::Ondemand)
-        } else {
-            Ok(Self::Userspace(s.parse::<u64>()?))
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (governor, param_value) = s
+            .split_once(":")
+            .map(|x| (x.0, Some(x.1)))
+            .unwrap_or((s, None));
+
+        match (governor, param_value) {
+            (strings::ONDEMAND, None) => Ok(Self::Ondemand { max_freq_khz: None }),
+            (strings::ONDEMAND, Some(param_value)) => Ok(Self::Ondemand {
+                max_freq_khz: Some(param_value.parse::<u64>()?),
+            }),
+            (strings::USERSPACE, Some(param_value)) => Ok(Self::Userspace {
+                speed_khz: param_value.parse::<u64>()?,
+            }),
+            _ => Err(Error::NotSupported(
+                "Unsupported CPU freq governor".to_string(),
+            )),
         }
     }
 }
@@ -36,8 +138,7 @@ pub struct CpuFreqSetter<'a> {
     checker_cpu_freq_governor: Option<CpuFreqGovernor>,
     shell_cpu_freq_governor: Option<CpuFreqGovernor>,
 
-    cpu_old_freq: Mutex<HashMap<usize, u64>>,
-    cpu_old_freq_governor: Mutex<HashMap<usize, String>>,
+    cpu_old_freq_governor: Mutex<HashMap<usize, CpuFreqGovernor>>,
 }
 
 impl<'a> CpuFreqSetter<'a> {
@@ -59,61 +160,11 @@ impl<'a> CpuFreqSetter<'a> {
             checker_cpu_freq_governor,
             shell_cpu_freq_governor,
 
-            cpu_old_freq: Mutex::new(HashMap::new()),
             cpu_old_freq_governor: Mutex::new(HashMap::new()),
         }
     }
 
-    fn get_governor_raw(cpu: usize) -> Result<String> {
-        let governor = fs::read_to_string(format!(
-            "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor",
-            cpu
-        ))?;
-
-        Ok(governor)
-    }
-
-    fn set_governor_raw(cpu: usize, governor: &str) -> Result<()> {
-        fs::write(
-            format!(
-                "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor",
-                cpu
-            ),
-            governor,
-        )?;
-
-        info!("CPU {} governor set to {}", cpu, governor.trim_end());
-
-        Ok(())
-    }
-
-    fn get_freq(cpu: usize) -> Result<Option<u64>> {
-        let speed_str = fs::read_to_string(format!(
-            "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_setspeed",
-            cpu
-        ))?;
-
-        let speed = speed_str.parse::<u64>().ok();
-
-        Ok(speed)
-    }
-
-    fn set_freq(cpu: usize, freq: u64) -> Result<()> {
-        fs::write(
-            format!(
-                "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_setspeed",
-                cpu
-            ),
-            freq.to_string(),
-        )?;
-
-        info!("CPU {} frequency set to {} kHz", cpu, freq);
-
-        Ok(())
-    }
-
     fn old_params_save(&self) {
-        let mut cpu_old_freq = self.cpu_old_freq.lock();
         let mut cpu_old_freq_governor = self.cpu_old_freq_governor.lock();
 
         for &cpu in self
@@ -121,15 +172,12 @@ impl<'a> CpuFreqSetter<'a> {
             .iter()
             .chain(self.checker_cpu_set.iter())
             .chain(self.shell_cpu_set.iter())
+            .unique()
         {
             cpu_old_freq_governor.insert(
                 cpu,
-                Self::get_governor_raw(cpu).expect("Unable to get old CPU freq scaling governor"),
+                CpuFreqGovernor::read(cpu).expect("Unable to read CPU freq governor"),
             );
-
-            if let Some(freq) = Self::get_freq(cpu).expect("Unable to get old CPU freq") {
-                cpu_old_freq.insert(cpu, freq);
-            }
         }
     }
 
@@ -137,43 +185,20 @@ impl<'a> CpuFreqSetter<'a> {
         let mut cpu_old_freq_governor = self.cpu_old_freq_governor.lock();
 
         for (cpu, governor) in cpu_old_freq_governor.drain() {
-            Self::set_governor_raw(cpu, &governor)
-                .expect("Unable to restore old CPU freq scaling governor");
-        }
-
-        let mut cpu_old_freq = self.cpu_old_freq.lock();
-
-        for (cpu, freq) in cpu_old_freq.drain() {
-            Self::set_freq(cpu, freq).expect("Unable to restore old CPU freq");
-        }
-    }
-
-    fn set_governor(cpu_set: &[usize], governor: CpuFreqGovernor) {
-        for &cpu in cpu_set {
-            match governor {
-                CpuFreqGovernor::Ondemand => {
-                    Self::set_governor_raw(cpu, "ondemand")
-                        .expect("Failed to set CPU freq governor");
-                }
-                CpuFreqGovernor::Userspace(freq) => {
-                    Self::set_governor_raw(cpu, "userspace")
-                        .expect("Failed to set CPU freq governor");
-                    Self::set_freq(cpu, freq).expect("Failed to set CPU freq");
-                }
-            }
+            governor
+                .write(cpu)
+                .expect("Unable to restore CPU freq governor");
         }
     }
 }
 
-impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
-    fn handle_main_init<'s, 'scope, 'disp>(
+impl<'a> ModuleLifetimeHook for CpuFreqSetter<'a> {
+    fn init<'s, 'scope, 'env>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _scope: &'scope std::thread::Scope<'scope, 'env>,
     ) -> Result<()>
     where
         's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
     {
         if self.main_cpu_freq_governor.is_some()
             || self.checker_cpu_freq_governor.is_some()
@@ -182,38 +207,34 @@ impl<'a> ProcessLifetimeHook for CpuFreqSetter<'a> {
             self.old_params_save();
         }
 
-        if let Some(g) = self.main_cpu_freq_governor {
-            Self::set_governor(self.main_cpu_set, g);
+        if let Some(g) = &self.main_cpu_freq_governor {
+            self.main_cpu_set.iter().try_for_each(|cpu| g.write(*cpu))?;
         }
 
-        if let Some(g) = self.checker_cpu_freq_governor {
-            Self::set_governor(self.checker_cpu_set, g);
+        if let Some(g) = &self.checker_cpu_freq_governor {
+            self.checker_cpu_set
+                .iter()
+                .try_for_each(|cpu| g.write(*cpu))?;
         }
 
-        if let Some(g) = self.shell_cpu_freq_governor {
-            Self::set_governor(self.shell_cpu_set, g);
+        if let Some(g) = &self.shell_cpu_freq_governor {
+            self.shell_cpu_set
+                .iter()
+                .try_for_each(|cpu| g.write(*cpu))?;
         }
 
         Ok(())
     }
 
-    fn handle_all_fini<'s, 'scope, 'disp>(
+    fn fini<'s, 'scope, 'env>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _scope: &'scope std::thread::Scope<'scope, 'env>,
     ) -> Result<()>
     where
         's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
     {
         self.old_params_restore();
         Ok(())
-    }
-}
-
-impl<'a> Drop for CpuFreqSetter<'a> {
-    fn drop(&mut self) {
-        self.old_params_restore();
     }
 }
 
@@ -222,6 +243,6 @@ impl<'a> Module for CpuFreqSetter<'a> {
     where
         's: 'd,
     {
-        subs.install_process_lifetime_hook(self);
+        subs.install_module_lifetime_hook(self);
     }
 }
