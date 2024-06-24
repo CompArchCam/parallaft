@@ -534,27 +534,24 @@ where
         let checker_process = segment.start_checker()?;
         checker_forking_tracer.end();
 
-        let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
-
-        let mut checker = Checker {
-            process: checker_process,
-            segment: segment.clone(),
-        };
-
-        self.dispatcher.handle_segment_ready(&mut checker)?;
-        checker_ready_hook_tracer.end();
-
-        checker_starting_tracer.end();
-
         segment.record.wait_for_initial_event()?;
 
-        info!("{checker} Start execution");
-
         if !self.options.no_checker_exec {
+            let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
+
+            let mut checker = Checker {
+                process: checker_process,
+                segment: segment.clone(),
+            };
+
+            self.dispatcher.handle_segment_ready(&mut checker)?;
+            checker_ready_hook_tracer.end();
+
             self.run_event_loop(Inferior::Checker(checker), scope)?;
         } else {
             segment.checker_status.lock().assume_checked();
         }
+        checker_starting_tracer.end();
 
         Ok(())
     }
