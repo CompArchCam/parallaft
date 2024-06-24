@@ -54,7 +54,7 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
             InferiorId::Checker(segment) => segment.checker_status.lock().pid().unwrap(),
         };
 
-        Ok(Process::new(pid).nr_dirty_pages()?)
+        Ok(Process::new(pid).memory_stats()?.dirty_pages)
     }
 }
 

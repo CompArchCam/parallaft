@@ -26,6 +26,9 @@ impl Process {
         let (saved_regs, saved_sigmask) = Self::save_state(self.pid)?;
         let mut saved_instr = None;
 
+        // block signals during our injected syscall
+        ptrace::setsigmask(self.pid, !0)?;
+
         let op = if force_instr_insertion {
             SyscallInfoOp::None
         } else {
@@ -88,9 +91,6 @@ impl Process {
 
         // prepare the injected syscall number and arguments
         self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args))?;
-
-        // block signals during our injected syscall
-        ptrace::setsigmask(self.pid, !0)?;
 
         // execute our injected syscall
         ptrace::syscall(self.pid, None)?;

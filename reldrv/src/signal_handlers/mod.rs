@@ -4,6 +4,7 @@ pub mod cpuid;
 #[cfg(target_arch = "x86_64")]
 pub mod rdtsc;
 
+pub mod begin_protection;
 pub mod slice_segment;
 
 use crate::error::Result;

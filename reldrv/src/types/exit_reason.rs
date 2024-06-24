@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use nix::sys::signal::Signal;
 
 use crate::error::Error;
 
-use super::{checker::CheckFailReason, segment::Segment};
+use super::checker::CheckFailReason;
 
 pub type ExitCode = i32;
 
@@ -13,7 +11,7 @@ pub enum ExitReason {
     NormalExit(ExitCode),
     Signalled(Signal),
     UnexpectedlyDies,
-    StateMismatch(Arc<Segment>, CheckFailReason),
+    StateMismatch(CheckFailReason),
     Crashed(Error),
 }
 
@@ -26,7 +24,7 @@ impl ExitReason {
         match self {
             ExitReason::NormalExit(c) => *c,
             ExitReason::Signalled(sig) => 128 + (*sig as i32),
-            ExitReason::StateMismatch(_, _) => 253,
+            ExitReason::StateMismatch(_) => 253,
             ExitReason::UnexpectedlyDies => 254,
             ExitReason::Crashed(_) => 255,
         }
@@ -45,6 +43,6 @@ impl ExitReason {
     }
 
     pub fn expect_state_mismatch(self) {
-        assert!(matches!(self, ExitReason::StateMismatch(_, _)));
+        assert!(matches!(self, ExitReason::StateMismatch(_)));
     }
 }

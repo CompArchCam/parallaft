@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use clap::ValueEnum;
 
+pub mod dynamic;
 pub mod entire_program;
 pub mod fixed_interval;
 
@@ -36,4 +37,5 @@ pub enum SlicerType {
     Null,
     FixedInterval,
     EntireProgram,
+    Dynamic,
 }

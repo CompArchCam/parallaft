@@ -13,6 +13,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    signal_handlers::begin_protection::main_begin_protection_req,
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
@@ -49,8 +50,6 @@ pub struct FixedIntervalSlicer {
 }
 
 impl FixedIntervalSlicer {
-    const SIGVAL_DO_CHECKPOINT: usize = 0xc0a0c43f9c093cc7;
-
     pub fn new(
         skip: Option<u64>,
         interval: u64,
@@ -101,10 +100,7 @@ impl StandardSyscallHandler for FixedIntervalSlicer {
                     self.interval, self.reference
                 );
 
-                context
-                    .child
-                    .process()
-                    .sigqueue(Self::SIGVAL_DO_CHECKPOINT)?;
+                main_begin_protection_req(context.child.process().pid)?;
 
                 *self.state.lock() = Some(State::Normal(
                     self.get_perf_counter_interrupt(self.interval, context.child.process().pid)?,
@@ -154,11 +150,6 @@ impl SignalHandler for FixedIntervalSlicer {
                     );
                 }
                 Some(State::Normal(mut perf_counter)) => {
-                    if main.process.get_sigval()? == Some(Self::SIGVAL_DO_CHECKPOINT) {
-                        *state = Some(State::Normal(perf_counter));
-                        return Ok(SignalHandlerExitAction::Checkpoint);
-                    }
-
                     if !perf_counter.is_interrupt(signal, &main.process)? {
                         *state = Some(State::Normal(perf_counter));
                         return Ok(SignalHandlerExitAction::NextHandler);

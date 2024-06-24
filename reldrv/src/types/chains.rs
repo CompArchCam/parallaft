@@ -10,7 +10,7 @@ use crate::types::checker::CheckerStatus;
 
 use super::checkpoint::Checkpoint;
 use super::exit_reason::ExitReason;
-use super::segment::{Segment, SegmentId};
+use super::segment::{Segment, SegmentId, SegmentStatus};
 
 #[derive(Debug)]
 pub struct SegmentChains {
@@ -62,6 +62,16 @@ impl SegmentChains {
 
     pub fn in_chain(&self) -> bool {
         self.in_chain
+    }
+
+    pub fn main_segment(&self) -> Option<Arc<Segment>> {
+        self.list.back().and_then(|x| {
+            if matches!(&*x.status.lock(), SegmentStatus::Filling { .. }) {
+                Some(x.clone())
+            } else {
+                None
+            }
+        })
     }
 
     pub fn add_checkpoint(
@@ -164,7 +174,7 @@ impl SegmentChains {
                 CheckerStatus::Checked { result: None, .. } => (),
                 CheckerStatus::Checked {
                     result: Some(r), ..
-                } => return Some(ExitReason::StateMismatch(segment.clone(), *r)),
+                } => return Some(ExitReason::StateMismatch(*r)),
                 CheckerStatus::Crashed(error) => return Some(ExitReason::Crashed(error.clone())),
                 _ => panic!("Unexpected status"),
             }

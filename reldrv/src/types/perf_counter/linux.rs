@@ -80,6 +80,7 @@ impl LinuxPerfCounter {
     pub fn new<E>(
         event: E,
         pid: Pid,
+        pinned: bool,
         irq_cfg: Option<(u64, perf_event::SampleSkid)>,
     ) -> std::io::Result<Self>
     where
@@ -88,7 +89,7 @@ impl LinuxPerfCounter {
         let mut builder = perf_event::Builder::new(event);
         let mut counter = builder
             .observe_pid(pid.as_raw() as _)
-            .pinned(true)
+            .pinned(pinned)
             .enabled(true);
 
         if let Some((irq_period, sample_skid)) = irq_cfg {
@@ -114,9 +115,28 @@ impl LinuxPerfCounter {
             PmuType::IntelMont { in_hybrid: true } => Self::new(
                 HardwareWithDeviceType::new((&*INTEL_CORE_ATOM_TY).clone()?, event),
                 pid,
+                true,
                 Some((n, SampleSkid::Arbitrary)),
             )?,
-            _ => Self::new(event, pid, Some((n, SampleSkid::Arbitrary)))?,
+            _ => Self::new(event, pid, true, Some((n, SampleSkid::Arbitrary)))?,
+        })
+    }
+
+    pub fn count_hw_events(
+        event: Hardware,
+        pmu_type: PmuType,
+        pinned: bool,
+        pid: Pid,
+    ) -> Result<Self> {
+        Ok(match pmu_type {
+            #[cfg(target_arch = "x86_64")]
+            PmuType::IntelMont { in_hybrid: true } => Self::new(
+                HardwareWithDeviceType::new((&*INTEL_CORE_ATOM_TY).clone()?, event),
+                pid,
+                pinned,
+                None,
+            )?,
+            _ => Self::new(event, pid, pinned, None)?,
         })
     }
 
@@ -124,6 +144,7 @@ impl LinuxPerfCounter {
         Ok(Self::new(
             Breakpoint::execute(ip as _),
             pid,
+            true,
             Some((1, SampleSkid::Arbitrary)),
         )?)
     }
@@ -140,9 +161,10 @@ impl LinuxPerfCounter {
                 Self::new(
                     Raw::new(constants::AMD_EX_RET_BRN),
                     pid,
+                    true,
                     irq_period.map(|period| (period, SampleSkid::Arbitrary)),
                 )?,
-                Self::new(Raw::new(constants::AMD_EX_RET_BRN_FAR), pid, None)?,
+                Self::new(Raw::new(constants::AMD_EX_RET_BRN_FAR), pid, true, None)?,
             )),
             #[cfg(target_arch = "x86_64")]
             (PmuType::IntelLakeCove, BranchCounterType::AllExclFar)
@@ -150,11 +172,13 @@ impl LinuxPerfCounter {
                 Self::new(
                     Raw::new(constants::INTEL_BR_INST_RETIRED_ALL_BRANCHES),
                     pid,
+                    true,
                     irq_period.map(|period| (period, SampleSkid::RequireZero)),
                 )?,
                 Self::new(
                     Raw::new(constants::INTEL_LAKE_COVE_BR_INST_RETIRED_FAR_BRANCH),
                     pid,
+                    true,
                     None,
                 )?,
             )),
@@ -173,6 +197,7 @@ impl LinuxPerfCounter {
                             constants::INTEL_BR_INST_RETIRED_ALL_BRANCHES,
                         ),
                         pid,
+                        true,
                         irq_period.map(|period| (period, SampleSkid::RequireZero)),
                     )?,
                     Self::new(
@@ -181,6 +206,7 @@ impl LinuxPerfCounter {
                             constants::INTEL_MONT_BR_INST_RETIRED_FAR_BRANCH,
                         ),
                         pid,
+                        true,
                         None,
                     )?,
                 ))
@@ -190,6 +216,7 @@ impl LinuxPerfCounter {
             | (PmuType::IntelOther, BranchCounterType::Cond) => Box::new(Self::new(
                 Raw::new(constants::INTEL_LAKE_COVE_BR_INST_RETIRED_COND),
                 pid,
+                true,
                 irq_period.map(|period| (period, SampleSkid::RequireZero)),
             )?),
             #[cfg(target_arch = "x86_64")]
@@ -206,6 +233,7 @@ impl LinuxPerfCounter {
                         constants::INTEL_MONT_BR_INST_RETIRED_COND,
                     ),
                     pid,
+                    true,
                     irq_period.map(|period| (period, SampleSkid::RequireZero)),
                 )?)
             }
@@ -214,6 +242,7 @@ impl LinuxPerfCounter {
             | (PmuType::IntelOther, BranchCounterType::CondTaken) => Box::new(Self::new(
                 Raw::new(constants::INTEL_LAKE_COVE_BR_INST_RETIRED_COND_TAKEN),
                 pid,
+                true,
                 irq_period.map(|period| (period, SampleSkid::RequireZero)),
             )?),
             #[cfg(target_arch = "x86_64")]
@@ -230,6 +259,7 @@ impl LinuxPerfCounter {
                         constants::INTEL_MONT_BR_INST_RETIRED_COND_TAKEN,
                     ),
                     pid,
+                    true,
                     irq_period.map(|period| (period, SampleSkid::RequireZero)),
                 )?)
             }

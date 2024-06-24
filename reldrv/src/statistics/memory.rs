@@ -70,7 +70,7 @@ impl ProcessLifetimeHook for MemoryCollector {
 
                 let pss = pids
                     .iter()
-                    .map(|&pid| Process::new(pid).pss().unwrap_or(0)) // Process may die at this point
+                    .map(|&pid| Process::new(pid).memory_stats().map(|x| x.pss).unwrap_or(0)) // Process may die at this point
                     .sum::<usize>();
 
                 debug!("Sampled PSS = {}", pss);

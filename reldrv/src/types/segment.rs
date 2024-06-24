@@ -240,6 +240,11 @@ impl Segment {
             .borrow_with(|p2| p2.read_registers())??
             .strip_orig();
 
+        #[cfg(target_arch = "x86_64")]
+        {
+            reference_registers = reference_registers.with_resume_flag_cleared();
+        }
+
         let reg_cmp_result =
             comparator.compare_registers(&mut checker_regs, &mut reference_registers)?;
 

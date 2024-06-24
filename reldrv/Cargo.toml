@@ -31,6 +31,7 @@ bitflags = "2.5.0"
 derivative = "2.2.0"
 itertools = "0.12.1"
 path_macro = "1.0.0"
+try-insert-ext = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3"

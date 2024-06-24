@@ -37,7 +37,9 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
 
 use log::info;
+use signal_handlers::begin_protection::BeginProtectionHandler;
 use signal_handlers::slice_segment::SliceSegmentHandler;
+use slicers::dynamic::DynamicSlicer;
 use slicers::entire_program::EntireProgramSlicer;
 use slicers::fixed_interval::FixedIntervalSlicer;
 use slicers::{ReferenceType, SlicerType};
@@ -226,15 +228,6 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module_boxed(module);
     }
 
-    // // Syscall handlers
-    // disp.register_module(RseqHandler::new());
-    // disp.register_module(CloneHandler::new());
-    // disp.register_module(ExecveHandler::new());
-    // disp.register_module(ExitHandler::new());
-    // disp.register_module(MmapHandler::new());
-    // disp.register_module(ReplicatedSyscallHandler::new());
-    // disp.register_module(RecordReplaySyscallHandler::new());
-
     // Non-deterministic instruction handlers
     #[cfg(target_arch = "x86_64")]
     if !options.no_rdtsc_trap {
@@ -286,6 +279,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         SlicerType::EntireProgram => {
             disp.register_module(EntireProgramSlicer::new());
         }
+        SlicerType::Dynamic => {
+            disp.register_module(DynamicSlicer::new(&options.main_cpu_set));
+        }
         SlicerType::Null => (),
     };
 
@@ -325,6 +321,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     ));
 
     disp.register_module(SliceSegmentHandler);
+    disp.register_module(BeginProtectionHandler);
 
     // Statistics
     let tracer = disp.register_module(Tracer::new());
