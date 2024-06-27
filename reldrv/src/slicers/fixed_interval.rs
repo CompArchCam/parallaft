@@ -17,6 +17,7 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
+            self,
             linux::LinuxPerfCounter,
             pmu_type::{detect_pmu_type_cached, PmuType},
             PerfCounterWithInterrupt,
@@ -73,7 +74,7 @@ impl FixedIntervalSlicer {
         Ok(Box::new(LinuxPerfCounter::interrupt_after_n_hw_events(
             self.reference.into(),
             self.main_pmu_type,
-            pid,
+            perf_counter::linux::Target::Pid(pid),
             interval,
         )?))
     }

@@ -1,4 +1,5 @@
 mod basics;
+mod benches;
 mod common;
 mod error_handling;
 mod execution_points;

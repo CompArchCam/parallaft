@@ -31,6 +31,7 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
+            self,
             linux::LinuxPerfCounter,
             pmu_type::{detect_pmu_type_cached, PmuType},
             PerfCounter,
@@ -62,8 +63,8 @@ impl Default for DynamicSlicerParams {
             min_cycles_in_segment: Some(1_000_000_000),
             max_cycles_in_segment: Some(500_000_000_000),
             fork_cow_cost_threshold_fraction: 0.1,
-            nr_cycles_per_cow_op: 3500.0,
-            nr_cycles_per_fork_per_page: 0.5,
+            nr_cycles_per_cow_op: 10000.0,
+            nr_cycles_per_fork_per_page: 800.0,
         }
     }
 }
@@ -146,7 +147,7 @@ impl SegmentEventHandler for DynamicSlicer {
                     Hardware::CPU_CYCLES,
                     self.main_pmu_type,
                     false,
-                    main.process.pid,
+                    perf_counter::linux::Target::Pid(main.process.pid),
                 )?))
             })?
             .reset()?;

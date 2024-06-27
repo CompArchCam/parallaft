@@ -32,6 +32,7 @@ use crate::{
     types::{
         execution_point::ExecutionPoint,
         perf_counter::{
+            self,
             linux::LinuxPerfCounter,
             pmu_type::{detect_pmu_type_cached, PmuType},
             BranchCounterType, PerfCounterCheckInterrupt, PerfCounterWithInterrupt,
@@ -164,7 +165,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider {
             Some(LinuxPerfCounter::count_branches_with_interrupt(
                 self.checker_pmu_type,
                 self.branch_counter_type,
-                checker.process.pid,
+                perf_counter::linux::Target::Pid(checker.process.pid),
                 None,
             )?);
 
@@ -191,7 +192,7 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider {
         *self.main_branch_counter.lock() = Some(LinuxPerfCounter::count_branches_with_interrupt(
             self.main_pmu_type,
             self.branch_counter_type,
-            context.process.pid,
+            perf_counter::linux::Target::Pid(context.process.pid),
             None,
         )?);
 
@@ -229,7 +230,7 @@ impl PerfCounterBasedExecutionPointProvider {
                 debug!("{checker} ... using breakpoint");
                 initial_state = ExecutionPointReplayState::Stepping {
                     breakpoint: Box::new(LinuxPerfCounter::interrupt_on_breakpoint(
-                        checker.process.pid,
+                        perf_counter::linux::Target::Pid(checker.process.pid),
                         exec_point.instruction_pointer,
                     )?),
                 };
@@ -239,7 +240,7 @@ impl PerfCounterBasedExecutionPointProvider {
                     branch_irq: LinuxPerfCounter::count_branches_with_interrupt(
                         self.checker_pmu_type,
                         self.branch_counter_type,
-                        checker.process.pid,
+                        perf_counter::linux::Target::Pid(checker.process.pid),
                         Some(
                             exec_point.branch_counter
                                 - branch_count_curr
@@ -305,7 +306,9 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider {
                                     state = ExecutionPointReplayState::Stepping {
                                         breakpoint: Box::new(
                                             LinuxPerfCounter::interrupt_on_breakpoint(
-                                                checker.process.pid,
+                                                perf_counter::linux::Target::Pid(
+                                                    checker.process.pid,
+                                                ),
                                                 exec_point.instruction_pointer,
                                             )?,
                                         ),
