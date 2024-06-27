@@ -126,6 +126,12 @@ impl SegmentChains {
             let mut should_break = true;
             let front = self.list.front();
             if let Some(front) = front {
+                let status = front.status.lock();
+                if matches!(&*status, SegmentStatus::Filling { .. }) {
+                    break;
+                }
+                drop(status);
+
                 let checker_status = front.checker_status.lock();
 
                 if checker_status.is_finished() {
