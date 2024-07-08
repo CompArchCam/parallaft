@@ -32,6 +32,9 @@ use derive_builder::Builder;
 use dispatcher::Module;
 // use inferior_rtlib::pmu::BranchCounterType;
 
+use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
+use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
+use helpers::cpufreq::CpuFreqScalerType;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
@@ -57,8 +60,6 @@ use crate::dispatcher::Dispatcher;
 
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
-use crate::helpers::cpufreq::CpuFreqGovernor;
-use crate::helpers::cpufreq::CpuFreqSetter;
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
 // use crate::inferior_rtlib::pmu::PmuSegmentor;
@@ -137,9 +138,7 @@ pub struct RelShellOptions {
     pub cache_masks: Option<(u32, u32, u32)>,
 
     // cpufreq setter plugin options
-    pub main_cpu_freq_governor: Option<CpuFreqGovernor>,
-    pub checker_cpu_freq_governor: Option<CpuFreqGovernor>,
-    pub shell_cpu_freq_governor: Option<CpuFreqGovernor>,
+    pub cpu_freq_scaler_type: CpuFreqScalerType,
 
     // checkpoint size limiter plugin options
     pub checkpoint_size_watermark: usize,
@@ -302,14 +301,21 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         options.cache_masks,
     ));
 
-    disp.register_module(CpuFreqSetter::new(
-        &options.main_cpu_set,
-        &options.checker_cpu_set,
-        &options.shell_cpu_set,
-        options.main_cpu_freq_governor,
-        options.checker_cpu_freq_governor,
-        options.shell_cpu_freq_governor,
-    ));
+    match options.cpu_freq_scaler_type {
+        CpuFreqScalerType::Null => (),
+        CpuFreqScalerType::Fixed(governor) => {
+            disp.register_module(FixedCpuFreqGovernorSetter::new(
+                &options.checker_cpu_set,
+                governor,
+            ));
+        }
+        CpuFreqScalerType::Dynamic => {
+            disp.register_module(DynamicCpuFreqScaler::new(
+                &options.main_cpu_set,
+                &options.checker_cpu_set,
+            ));
+        }
+    }
 
     disp.register_module(CheckpointSizeLimiter::new(
         options.checkpoint_size_watermark,

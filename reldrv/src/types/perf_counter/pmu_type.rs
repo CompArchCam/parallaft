@@ -11,6 +11,10 @@ use nix::{
 use parking_lot::Mutex;
 use scopeguard::defer;
 
+lazy_static! {
+    static ref PMU_TYPE_MAP: Mutex<HashMap<usize, PmuType>> = Mutex::new(HashMap::new());
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum IntelCoreType {
     Atom,
@@ -47,7 +51,7 @@ pub enum PmuType {
 }
 
 impl PmuType {
-    pub fn detect(processor_id: usize) -> Self {
+    fn detect_raw(processor_id: usize) -> Self {
         #[cfg(target_arch = "x86_64")]
         {
             let pid_self = Pid::from_raw(0);
@@ -113,6 +117,19 @@ impl PmuType {
         }
     }
 
+    pub fn detect(processor_id: usize) -> PmuType {
+        let mut map = PMU_TYPE_MAP.lock();
+
+        if let Some(pmu_type) = map.get(&processor_id) {
+            return *pmu_type;
+        }
+
+        let pmu_type = Self::detect_raw(processor_id);
+        map.insert(processor_id, pmu_type);
+
+        pmu_type
+    }
+
     pub fn max_skid(&self) -> u64 {
         match self {
             #[cfg(target_arch = "x86_64")]
@@ -136,21 +153,4 @@ impl PmuType {
             _ => 0,
         }
     }
-}
-
-lazy_static! {
-    static ref PMU_TYPE_MAP: Mutex<HashMap<usize, PmuType>> = Mutex::new(HashMap::new());
-}
-
-pub fn detect_pmu_type_cached(processor_id: usize) -> PmuType {
-    let mut map = PMU_TYPE_MAP.lock();
-
-    if let Some(pmu_type) = map.get(&processor_id) {
-        return *pmu_type;
-    }
-
-    let pmu_type = PmuType::detect(processor_id);
-    map.insert(processor_id, pmu_type);
-
-    pmu_type
 }

@@ -39,6 +39,7 @@ struct State {
     main_status: MainStatus,
     event_log: Vec<SavedEvent>,
     last_incomplete_syscall: Option<SavedIncompleteSyscall>,
+    is_waiting: bool,
 }
 
 #[derive(Debug)]
@@ -85,6 +86,10 @@ impl SegmentRecord {
         }
     }
 
+    pub fn is_waiting(&self) -> bool {
+        self.state.lock().is_waiting
+    }
+
     /// Wait until there are at least two uncomping events to replay, so that
     /// checkers will never go past possibly-upcoming async events, if
     /// `self.enable_async_events_support` is true. Otherwise, wait until one
@@ -116,20 +121,28 @@ impl SegmentRecord {
     fn wait_until_n_events_available(&self, n: EventPos) -> Result<MutexGuard<State>> {
         let mut state = self.state.lock();
         let init_pos = state.event_pos;
+
+        state.is_waiting = true;
         loop {
             if state.event_pos as isize <= state.event_log.len() as isize - n as isize {
+                state.is_waiting = false;
+
                 if state.event_pos < init_pos {
                     // Rewind occurs. Cancelling execution.
                     return Err(Error::Cancelled);
                 }
                 return Ok(state);
             } else if state.main_status == MainStatus::Completed {
+                state.is_waiting = false;
+
                 if state.event_pos < state.event_log.len() {
                     return Ok(state);
                 } else {
                     return Err(Error::UnexpectedEvent(UnexpectedEventReason::Excess));
                 }
             } else if state.main_status == MainStatus::Crashed {
+                state.is_waiting = false;
+
                 return Err(Error::Cancelled);
             }
 

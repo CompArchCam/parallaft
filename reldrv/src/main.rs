@@ -8,11 +8,11 @@ use std::time::Duration;
 use nix::sys::signal::{raise, Signal};
 use nix::unistd::{fork, ForkResult};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use clap_num::maybe_hex;
 use git_version::git_version;
 
-use reldrv::helpers::cpufreq::CpuFreqGovernor;
+use reldrv::helpers::cpufreq::{CpuFreqGovernor, CpuFreqScalerType};
 use reldrv::slicers::{ReferenceType, SlicerType};
 use reldrv::types::exit_reason::ExitReason;
 use reldrv::types::perf_counter::BranchCounterType;
@@ -22,6 +22,14 @@ use reldrv::{
     DirtyPageAddressTrackerType, RelShellOptions,
 };
 use syscalls::{syscall, Sysno};
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum CpuFreqScalerTypeCli {
+    #[default]
+    Null,
+    Fixed,
+    Dynamic,
+}
 
 #[derive(Parser, Debug)]
 #[command(version = git_version!())]
@@ -53,17 +61,13 @@ struct CliArgs {
     #[arg(long, value_parser=maybe_hex::<u32>)]
     shell_cache_mask: Option<u32>,
 
-    /// CPU frequency in kHz or governor "ondemand" to use for the main process. Requires `--main-cpu-set` set.
-    #[arg(long)]
-    main_cpu_freq_governor: Option<CpuFreqGovernor>,
+    /// CPU frequency scaler to use.
+    #[arg(long, default_value = "null")]
+    cpu_freq_scaler: CpuFreqScalerTypeCli,
 
-    /// CPU frequency in kHz or governor "ondemand" to use for checker processes. Requires `--checker-cpu-set` set.
+    /// When `cpu_freq_scaler` is set to "fixed", the CPU freqeuncy governor to use. Possible values: userspace:<freq_in_khz>, ondemand, ondemand:<max_freq_in_khz>. Requires `--checker-cpu-set` set.
     #[arg(long)]
     checker_cpu_freq_governor: Option<CpuFreqGovernor>,
-
-    /// CPU frequency in kHz or governor "ondemand" to use for the shell process. Requires `--shell-cpu-set` set.
-    #[arg(long)]
-    shell_cpu_freq_governor: Option<CpuFreqGovernor>,
 
     /// Poll non-blocking waitpid instead of using blocking waitpid.
     #[arg(long)]
@@ -268,9 +272,11 @@ fn main() {
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
             shell_cpu_set: cli.shell_cpu_set,
-            main_cpu_freq_governor: cli.main_cpu_freq_governor,
-            checker_cpu_freq_governor: cli.checker_cpu_freq_governor,
-            shell_cpu_freq_governor: cli.shell_cpu_freq_governor,
+            cpu_freq_scaler_type: match cli.cpu_freq_scaler {
+                CpuFreqScalerTypeCli::Null => CpuFreqScalerType::Null,
+                CpuFreqScalerTypeCli::Fixed => CpuFreqScalerType::Fixed(cli.checker_cpu_freq_governor.expect("You must set `--checker-cpu-freq-governor` when you use fixed CPU frequency scaler")),
+                CpuFreqScalerTypeCli::Dynamic => CpuFreqScalerType::Dynamic,
+            },
             checkpoint_size_watermark: cli.checkpoint_size_watermark,
             cache_masks: cli.main_cache_mask.and_then(|main_cache_mask| {
                 cli.checker_cache_mask.and_then(|checker_cache_mask| {

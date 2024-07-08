@@ -30,12 +30,7 @@ use crate::{
     },
     syscall_handlers::is_execve_ok,
     types::{
-        perf_counter::{
-            self,
-            linux::LinuxPerfCounter,
-            pmu_type::{detect_pmu_type_cached, PmuType},
-            PerfCounter,
-        },
+        perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
         process_id::Main,
     },
 };
@@ -83,7 +78,7 @@ impl DynamicSlicer {
             params: DynamicSlicerParams::default(),
             worker: Mutex::new(None),
             main_cycles_counter: Mutex::new(None),
-            main_pmu_type: detect_pmu_type_cached(*main_cpu_set.first().unwrap_or(&0)),
+            main_pmu_type: PmuType::detect(*main_cpu_set.first().unwrap_or(&0)),
             epoch: AtomicU32::new(0),
         }
     }
@@ -187,21 +182,25 @@ impl ProcessLifetimeHook for DynamicSlicer {
         let segments = context.check_coord.segments.clone();
         let main_pid = context.process.pid;
 
-        context.scope.spawn(move || -> Result<()> {
-            while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(self.params.sample_period) {
-                if let Some(segment) = segments.read().main_segment() {
-                    if (segment.nr > self.epoch.load(std::sync::atomic::Ordering::SeqCst)
-                        || segment.nr == 0)
-                        && self.should_slice_segment(main_pid)?
-                    {
-                        self.epoch
-                            .store(segment.nr, std::sync::atomic::Ordering::SeqCst);
-                        main_enqueue_slice_segment_req(main_pid)?;
+        context.scope.spawn(move || {
+            (|| -> Result<()> {
+                while let Err(RecvTimeoutError::Timeout) =
+                    rx.recv_timeout(self.params.sample_period)
+                {
+                    if let Some(segment) = segments.read().main_segment() {
+                        if (segment.nr > self.epoch.load(std::sync::atomic::Ordering::SeqCst)
+                            || segment.nr == 0)
+                            && self.should_slice_segment(main_pid)?
+                        {
+                            self.epoch
+                                .store(segment.nr, std::sync::atomic::Ordering::SeqCst);
+                            main_enqueue_slice_segment_req(main_pid)?;
+                        }
                     }
                 }
-            }
-
-            Ok(())
+                Ok(())
+            })()
+            .expect("Dynamic slicer crashed");
         });
         Ok(())
     }

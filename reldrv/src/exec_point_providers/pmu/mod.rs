@@ -32,10 +32,8 @@ use crate::{
     types::{
         execution_point::ExecutionPoint,
         perf_counter::{
-            self,
-            linux::LinuxPerfCounter,
-            pmu_type::{detect_pmu_type_cached, PmuType},
-            BranchCounterType, PerfCounterCheckInterrupt, PerfCounterWithInterrupt,
+            self, linux::LinuxPerfCounter, pmu_type::PmuType, BranchCounterType,
+            PerfCounterCheckInterrupt, PerfCounterWithInterrupt,
         },
         process_id::{Checker, InferiorRefMut, Main},
         segment::SegmentId,
@@ -96,8 +94,8 @@ impl PerfCounterBasedExecutionPointProvider {
         branch_counter_type: BranchCounterType,
         is_test: bool,
     ) -> Self {
-        let main_pmu_type = detect_pmu_type_cached(*main_cpu_set.first().unwrap_or(&0));
-        let checker_pmu_type = detect_pmu_type_cached(*checker_cpu_set.first().unwrap_or(&0));
+        let main_pmu_type = PmuType::detect(*main_cpu_set.first().unwrap_or(&0));
+        let checker_pmu_type = PmuType::detect(*checker_cpu_set.first().unwrap_or(&0));
 
         info!("Detected PMU type for main = {:?}", main_pmu_type);
         info!("Detected PMU type for checker = {:?}", checker_pmu_type);

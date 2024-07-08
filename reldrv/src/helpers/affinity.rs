@@ -115,6 +115,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         'disp: 'scope,
     {
         context.process.set_cpu_affinity(self.checker_cpu_set)?;
+        Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         Ok(())
     }

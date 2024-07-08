@@ -43,7 +43,7 @@ use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
 use crate::types::exit_reason::ExitReason;
 use crate::types::process_id::{Checker, Inferior, Main};
-use crate::types::segment::{Segment, SegmentId};
+use crate::types::segment::{Segment, SegmentId, SegmentStatus};
 use crate::types::segment_record::manual_checkpoint::ManualCheckpointRequest;
 use crate::types::segment_record::saved_memory::SavedMemory;
 use crate::types::segment_record::saved_syscall::{
@@ -291,6 +291,14 @@ where
                 );
             }
         }
+
+        if let Some(segment) = &main.segment {
+            let mut status = segment.status.lock();
+            match &mut *status {
+                SegmentStatus::Filling { blocked, .. } => *blocked = false,
+                _ => panic!("Unexpected main status"),
+            }
+        }
     }
 
     /// Take a checkpoint of the main inferior. When taking this checkpoint, the
@@ -365,6 +373,13 @@ where
 
         if let Some(throttler) = throttler {
             let throttling_tracer = self.tracer.trace(timing::Event::MainThrottling);
+            if let Some(segment) = main.segment.as_ref() {
+                match &mut *segment.status.lock() {
+                    SegmentStatus::Filling { blocked, .. } => *blocked = true,
+                    _ => panic!("Unexpected main state"),
+                }
+            }
+
             self.wait_until_unthrottled(main, throttler, &mut segments);
             throttling_tracer.end();
         }

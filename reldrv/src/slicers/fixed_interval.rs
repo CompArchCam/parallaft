@@ -17,10 +17,7 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
-            self,
-            linux::LinuxPerfCounter,
-            pmu_type::{detect_pmu_type_cached, PmuType},
-            PerfCounterWithInterrupt,
+            self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounterWithInterrupt,
         },
         process_id::InferiorRefMut,
     },
@@ -62,7 +59,7 @@ impl FixedIntervalSlicer {
             interval,
             reference,
             state: Mutex::new(None),
-            main_pmu_type: detect_pmu_type_cached(*main_cpu_set.first().unwrap_or(&0)),
+            main_pmu_type: PmuType::detect(*main_cpu_set.first().unwrap_or(&0)),
         }
     }
 

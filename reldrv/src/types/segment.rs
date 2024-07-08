@@ -24,7 +24,7 @@ pub type SegmentId = u32;
 #[derive(Debug)]
 pub enum SegmentStatus {
     /// The main process is running on this segment.
-    Filling { pid: Pid },
+    Filling { pid: Pid, blocked: bool },
 
     /// The main process finished this segment, so that the record is fully
     /// filled.
@@ -47,7 +47,7 @@ impl SegmentStatus {
 
     pub fn pid(&self) -> Option<Pid> {
         match self {
-            SegmentStatus::Filling { pid } => Some(*pid),
+            SegmentStatus::Filling { pid, .. } => Some(*pid),
             SegmentStatus::Filled { checkpoint, .. } => Some(checkpoint.process.lock().pid),
             SegmentStatus::Crashed => None,
         }
@@ -100,7 +100,10 @@ impl Segment {
         Self {
             nr,
             checkpoint_start,
-            status: Mutex::new(SegmentStatus::Filling { pid: main_pid }),
+            status: Mutex::new(SegmentStatus::Filling {
+                pid: main_pid,
+                blocked: false,
+            }),
             status_cvar: Condvar::new(),
             record: SegmentRecord::new(enable_async_events),
             checker_status: Mutex::new(CheckerStatus::new()),

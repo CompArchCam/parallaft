@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
 use nix::libc::siginfo_t;
+use nix::unistd::gettid;
 use std::ops::Deref;
 use std::{fmt::Debug, ops::DerefMut};
 
@@ -22,7 +23,7 @@ use nix::{
         signal::{kill, Signal},
         wait::{waitpid, WaitStatus},
     },
-    unistd::{getpid, Pid},
+    unistd::Pid,
 };
 
 use self::memory::instructions;
@@ -63,7 +64,7 @@ impl Process {
     }
 
     pub fn shell() -> Self {
-        Process::new(getpid())
+        Process::new(gettid())
     }
 
     pub fn procfs(&self) -> Result<&procfs::process::Process> {
