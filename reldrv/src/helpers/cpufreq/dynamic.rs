@@ -324,6 +324,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
 
         let instruction_count = counter.read()?;
         counter.reset()?;
+        drop(counter_option);
 
         *self.main_start_time.lock() = Some(Instant::now());
 
