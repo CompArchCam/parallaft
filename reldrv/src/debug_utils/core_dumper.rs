@@ -75,7 +75,11 @@ impl SegmentEventHandler for CoreDumper {
             }
 
             let exe = checker.process.procfs()?.exe()?;
-            symlink(&exe, &path!(self.output_dir / "exe"))?;
+            match symlink(&exe, &path!(self.output_dir / "exe")) {
+                Ok(_) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                Err(e) => Err(e),
+            }?;
         }
 
         Ok(())
