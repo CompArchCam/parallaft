@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use std::sync::Arc;
@@ -535,18 +536,6 @@ where
     where
         's: 'scope + 'disp,
     {
-        let segment_temp = segment.clone();
-        defer! {
-            let mut checker_status = segment_temp.checker_status.lock();
-            if !checker_status.is_finished() {
-                warn!("Checker worker possibly crashed without marking segment as finished");
-                *checker_status = CheckerStatus::Crashed(Error::Panic);
-                self.aborting.store(true, Ordering::SeqCst);
-                self.main_thread.unpark();
-            }
-            self.workers.lock().remove(&segment_temp.nr).unwrap();
-        }
-
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
@@ -614,8 +603,32 @@ where
             let jh = std::thread::Builder::new()
                 .name(format!("checker-{}", new_segment.nr))
                 .spawn_scoped(scope, move || {
-                    if let Err(e) = self.checker_work(new_segment, scope) {
-                        error!("Checker worker crashed with error: {e:?}");
+                    let ret = catch_unwind(AssertUnwindSafe(|| {
+                        self.checker_work(new_segment.clone(), scope)
+                    }));
+
+                    let abort;
+
+                    match ret {
+                        Err(_) => {
+                            error!("Checker worker panicked");
+                            *new_segment.checker_status.lock() =
+                                CheckerStatus::Crashed(Error::Panic);
+                            abort = true;
+                        }
+                        Ok(Err(e)) => {
+                            error!("Checker worker failed with error: {e:?}");
+                            *new_segment.checker_status.lock() = CheckerStatus::Crashed(e);
+                            abort = true;
+                        }
+                        Ok(Ok(())) => {
+                            abort = false;
+                        }
+                    }
+
+                    if abort {
+                        self.aborting.store(true, Ordering::SeqCst);
+                        self.main_thread.unpark();
                     }
                 })
                 .unwrap();
