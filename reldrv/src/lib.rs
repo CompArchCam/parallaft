@@ -25,6 +25,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use debug_utils::core_dumper::CoreDumper;
 use debug_utils::exec_point_dumper::ExecutionPointDumper;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
@@ -176,6 +177,10 @@ pub struct RelShellOptions {
     pub slicer: SlicerType,
     pub fixed_interval_slicer_skip: Option<u64>,
     pub fixed_interval_slicer_reference_type: ReferenceType,
+
+    // debug utils
+    pub core_dump: bool,
+    pub core_dump_dir: PathBuf,
 
     // integration test
     pub is_test: bool,
@@ -365,6 +370,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     disp.register_module(ExecutionPointDumper);
     disp.register_module(InProtectionAsserter);
+
+    if options.core_dump {
+        disp.register_module(CoreDumper::new("gcore".into(), options.core_dump_dir));
+    }
 
     let check_coord = CheckCoordinator::new(
         child.deref().clone(),

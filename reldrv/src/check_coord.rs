@@ -397,10 +397,13 @@ where
 
         self.dispatcher.handle_segment_completed(checker)?;
 
+        let check_fail_reason;
+
         if self.options.no_state_cmp {
+            check_fail_reason = None;
             checker.segment.checker_status.lock().assume_checked();
         } else {
-            let result = checker.segment.clone().check(
+            check_fail_reason = checker.segment.clone().check(
                 checker,
                 &self.dispatcher.get_ignored_pages(),
                 &self.dispatcher.get_extra_writable_ranges(),
@@ -408,7 +411,7 @@ where
                 self.dispatcher,
             )?;
 
-            match result {
+            match check_fail_reason {
                 Some(reason) => {
                     if self.options.ignore_miscmp {
                         warn!("{checker} Check failed, reason {reason:?}, ignoring");
@@ -421,7 +424,8 @@ where
             }
         }
 
-        self.dispatcher.handle_segment_checked(checker)?;
+        self.dispatcher
+            .handle_segment_checked(checker, &check_fail_reason)?;
 
         let mut segments = self.segments.write();
         self.cleanup_committed_segments(&mut segments, true)?;

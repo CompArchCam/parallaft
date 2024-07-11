@@ -186,6 +186,14 @@ struct CliArgs {
     #[arg(long, default_value = "instructions")]
     fixed_interval_slicer_reference_type: ReferenceType,
 
+    /// Make a core dump on check failures
+    #[arg(long)]
+    core_dump: bool,
+
+    /// Output directory of the core dumps
+    #[arg(long, default_value = ".")]
+    core_dump_dir: PathBuf,
+
     command: String,
     args: Vec<String>,
 }
@@ -305,8 +313,12 @@ fn main() {
             fixed_interval_slicer_skip: cli.fixed_interval_slicer_skip,
             fixed_interval_slicer_reference_type: cli.fixed_interval_slicer_reference_type,
 
+            core_dump: cli.core_dump,
+            core_dump_dir: cli.core_dump_dir,
+
             is_test: false,
             extra_modules: Vec::new(),
+
         },
     );
 

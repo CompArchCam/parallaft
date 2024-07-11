@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     error::Result,
     types::{
+        checker::CheckFailReason,
         process_id::{Checker, Main},
         segment::Segment,
     },
@@ -90,7 +91,11 @@ pub trait SegmentEventHandler {
     /// between the segment-end checkpoint and the checker is compared.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_checked(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_checked(
+        &self,
+        checker: &mut Checker,
+        check_fail_reason: &Option<CheckFailReason>,
+    ) -> Result<()> {
         Ok(())
     }
 

@@ -33,6 +33,7 @@ use crate::{
     throttlers::Throttler,
     types::{
         chains::SegmentChains,
+        checker::CheckFailReason,
         execution_point::ExecutionPoint,
         process_id::{Checker, InferiorId, InferiorRefMut, Main},
         segment::Segment,
@@ -520,7 +521,7 @@ impl SegmentEventHandler for Dispatcher<'_, '_> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main));
     generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker));
     generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker, check_fail_reason: &Option<CheckFailReason>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
 }
 

@@ -16,7 +16,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    types::process_id::Checker,
+    types::{checker::CheckFailReason, process_id::Checker},
 };
 
 use super::{StatisticValue, StatisticsProvider};
@@ -228,7 +228,11 @@ impl ProcessLifetimeHook for Tracer {
 }
 
 impl SegmentEventHandler for Tracer {
-    fn handle_segment_checked(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_checked(
+        &self,
+        checker: &mut Checker,
+        _check_fail_reason: &Option<CheckFailReason>,
+    ) -> Result<()> {
         let ticks_per_second = procfs::ticks_per_second();
         let stats = checker.process.stats()?;
 
