@@ -622,6 +622,13 @@ where
                             abort = true;
                         }
                         Ok(Ok(())) => {
+                            let mut checker_status = new_segment.checker_status.lock();
+
+                            if !checker_status.is_finished() {
+                                info!("Checker not marked finished, assuming it is cancelled");
+                                *checker_status = CheckerStatus::Crashed(Error::Cancelled);
+                            }
+
                             abort = false;
                         }
                     }
