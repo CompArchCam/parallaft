@@ -4,7 +4,7 @@ use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
 
 use super::{
     memory::{instructions, InjectedInstructionContext},
-    registers::Registers,
+    registers::{RegisterAccess, Registers},
     Process, SyscallDir,
 };
 use crate::error::Result;

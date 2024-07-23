@@ -19,7 +19,6 @@ human_bytes = "0.4.2"
 lazy_static = "1.4.0"
 libfpt-rs = { path = "../libfpt-rs" }
 clap-num = "1.0.2"
-unwind = { version = "0.4.1", features = ["ptrace"] }
 parking_lot = { git = "https://github.com/mbyzhang/parking_lot.git", features = ["arc_lock"] }
 typed-arena = "2.0.2"
 pretty_env_logger = "0.5.0"
@@ -32,13 +31,10 @@ derivative = "2.2.0"
 itertools = "0.12.1"
 path_macro = "1.0.0"
 try-insert-ext = "0.1.0"
+cfg-if = "1.0.0"
 
 [dev-dependencies]
 tempfile = "3"
-
-[profile.release]
-debug = true
-panic = 'abort'
 
 [features]
 default = ["intel_cat"]

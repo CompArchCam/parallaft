@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use log::error;
 use nix::sys::uio::RemoteIoVec;
 use reverie_syscalls::{
     may_rw::{SyscallMayRead, SyscallMayWrite},
@@ -16,6 +17,7 @@ use crate::{
         },
         HandlerContext,
     },
+    process::registers::RegisterAccess,
     types::segment_record::{
         saved_memory::SavedMemory,
         saved_syscall::{
@@ -112,6 +114,11 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
 
         if let Ok(saved_syscall) = checker.segment.record.get_syscall() {
             if &saved_syscall.syscall != syscall {
+                error!(
+                    "Unexpected syscall {:?}, expecting {:?}",
+                    syscall, saved_syscall.syscall
+                );
+
                 return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));
@@ -133,6 +140,11 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
             }
         } else if let Ok(incomplete_syscall) = checker.segment.record.get_incomplete_syscall() {
             if &incomplete_syscall.syscall != syscall {
+                error!(
+                    "Unexpected syscall {:?}, expecting {:?}",
+                    syscall, incomplete_syscall.syscall
+                );
+
                 return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));

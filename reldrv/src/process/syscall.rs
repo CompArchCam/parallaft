@@ -11,7 +11,7 @@ use nix::{
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use super::{memory::InjectedInstructionContext, registers::Registers, OwnedProcess, Process};
-use crate::{error::Result, process::memory::instructions};
+use crate::{error::Result, process::{memory::instructions, registers::RegisterAccess}};
 
 impl Process {
     pub fn syscall_direct(

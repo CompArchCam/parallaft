@@ -1,0 +1,14 @@
+[workspace]
+
+members = [
+    "reldrv",
+    "libfpt-rs",
+    "reverie-memory",
+    "reverie-syscalls",
+]
+
+resolver = "2"
+
+[profile.release]
+debug = true
+panic = 'abort'

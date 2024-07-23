@@ -65,15 +65,19 @@ impl Event for HardwareWithDeviceType {
 pub struct LinuxPerfCounter(perf_event::Counter);
 
 mod constants {
-    pub const AMD_EX_RET_BRN: u64 = 0xc2;
-    pub const AMD_EX_RET_BRN_FAR: u64 = 0xc6;
-    pub const INTEL_BR_INST_RETIRED_ALL_BRANCHES: u64 = 0x00c4;
-    pub const INTEL_LAKE_COVE_BR_INST_RETIRED_FAR_BRANCH: u64 = 0x40c4;
-    pub const INTEL_MONT_BR_INST_RETIRED_FAR_BRANCH: u64 = 0xbfc4;
-    pub const INTEL_LAKE_COVE_BR_INST_RETIRED_COND: u64 = 0x11c4;
-    pub const INTEL_MONT_BR_INST_RETIRED_COND: u64 = 0x7ec4;
-    pub const INTEL_LAKE_COVE_BR_INST_RETIRED_COND_TAKEN: u64 = 0x01c4;
-    pub const INTEL_MONT_BR_INST_RETIRED_COND_TAKEN: u64 = 0xfec4;
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            pub const AMD_EX_RET_BRN: u64 = 0xc2;
+            pub const AMD_EX_RET_BRN_FAR: u64 = 0xc6;
+            pub const INTEL_BR_INST_RETIRED_ALL_BRANCHES: u64 = 0x00c4;
+            pub const INTEL_LAKE_COVE_BR_INST_RETIRED_FAR_BRANCH: u64 = 0x40c4;
+            pub const INTEL_MONT_BR_INST_RETIRED_FAR_BRANCH: u64 = 0xbfc4;
+            pub const INTEL_LAKE_COVE_BR_INST_RETIRED_COND: u64 = 0x11c4;
+            pub const INTEL_MONT_BR_INST_RETIRED_COND: u64 = 0x7ec4;
+            pub const INTEL_LAKE_COVE_BR_INST_RETIRED_COND_TAKEN: u64 = 0x01c4;
+            pub const INTEL_MONT_BR_INST_RETIRED_COND_TAKEN: u64 = 0xfec4;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

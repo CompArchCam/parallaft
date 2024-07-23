@@ -10,6 +10,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    process::registers::RegisterAccess,
 };
 
 pub struct RseqHandler {}

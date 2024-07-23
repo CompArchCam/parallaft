@@ -18,6 +18,7 @@ use super::checker::{CheckFailReason, CheckerStatus};
 use super::checkpoint::Checkpoint;
 use super::process_id::{Checker, InferiorId};
 use super::segment_record::SegmentRecord;
+use crate::process::registers::RegisterAccess;
 
 pub type SegmentId = u32;
 

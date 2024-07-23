@@ -1,5 +1,5 @@
 use crate::error::Result;
-use bitflags::bitflags;
+
 use nix::libc::{self, user_regs_struct};
 use std::{
     mem::MaybeUninit,
@@ -9,38 +9,40 @@ use syscalls::{SyscallArgs, Sysno};
 
 use super::Process;
 
-#[cfg(target_arch = "x86_64")]
-const fn bit(i: u32) -> u64 {
-    1 << i
-}
+cfg_if::cfg_if! {
+    if #[cfg(target_arch = "x86_64")] {
+        use bitflags::bitflags;
+        use std::arch::x86_64::CpuidResult;
 
-#[cfg(target_arch = "x86_64")]
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Eflags: u64 {
-        const CF = bit(0);
-        const PF = bit(2);
-        const AF = bit(4);
-        const ZF = bit(6);
-        const SF = bit(7);
-        const TF = bit(8);
-        const IF = bit(9);
-        const DF = bit(10);
-        const OF = bit(11);
-        const IOPL = bit(12) | bit(13);
-        const NT = bit(14);
-        const MD = bit(15);
-        const RF = bit(16);
-        const VM = bit(17);
-        const AC = bit(18);
-        const VIF = bit(19);
-        const VIP = bit(20);
-        const ID = bit(21);
+        const fn bit(i: u32) -> u64 {
+            1 << i
+        }
+
+        bitflags! {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub struct Eflags: u64 {
+                const CF = bit(0);
+                const PF = bit(2);
+                const AF = bit(4);
+                const ZF = bit(6);
+                const SF = bit(7);
+                const TF = bit(8);
+                const IF = bit(9);
+                const DF = bit(10);
+                const OF = bit(11);
+                const IOPL = bit(12) | bit(13);
+                const NT = bit(14);
+                const MD = bit(15);
+                const RF = bit(16);
+                const VM = bit(17);
+                const AC = bit(18);
+                const VIF = bit(19);
+                const VIP = bit(20);
+                const ID = bit(21);
+            }
+        }
     }
 }
-
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::CpuidResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Registers {
@@ -334,10 +336,53 @@ impl Registers {
         s
     }
 
+    #[cfg(target_arch = "aarch64")]
+    pub fn dump(&self) -> String {
+        use std::fmt::Write;
+
+        let mut s = String::new();
+
+        for i in (0..28).step_by(4) {
+            writeln!(
+                &mut s,
+                "X{:#02}: {:#018x}     X{:#02}: {:#018x}     X{:#02}: {:#018x}     X{:#02}: {:#018x}",
+                i,
+                self.inner.regs[i],
+                i + 1,
+                self.inner.regs[i + 1],
+                i + 2,
+                self.inner.regs[i + 2],
+                i + 3,
+                self.inner.regs[i + 3],
+            )
+            .unwrap();
+        }
+
+        writeln!(
+            &mut s,
+            "X28: {:#018x}     X29: {:#018x}     X30: {:#018x}",
+            self.inner.regs[28], self.inner.regs[29], self.inner.regs[30],
+        )
+        .unwrap();
+
+        writeln!(
+            &mut s,
+            " SP: {:#018x}      PC: {:#018x}  PSTATE: {:#018x}",
+            self.inner.sp, self.inner.pc, self.inner.pstate
+        )
+        .unwrap();
+        s
+    }
+
     pub fn strip_orig(mut self) -> Registers {
-        #[cfg(target_arch = "x86_64")]
-        {
-            self.orig_rax = 0;
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")]
+            {
+                self.orig_rax = 0;
+            }
+            else {
+                let _ = &mut self;
+            }
         }
 
         self
@@ -347,6 +392,24 @@ impl Registers {
     pub fn strip_overflow_flag(mut self) -> Registers {
         self.eflags &= !(1 << 11);
         self
+    }
+}
+
+pub trait RegisterAccess {
+    fn read_registers(&self) -> Result<Registers>;
+
+    /// Read the correct x7 in syscall-stops for aarch64
+    fn read_registers_precise(&self) -> Result<Registers> {
+        self.read_registers()
+    }
+
+    fn write_registers(&self, regs: Registers) -> Result<()>;
+
+    fn modify_registers_with(&self, f: impl FnOnce(Registers) -> Registers) -> Result<()> {
+        let regs = self.read_registers()?;
+        let regs = f(regs);
+        self.write_registers(regs)?;
+        Ok(())
     }
 }
 
@@ -392,32 +455,30 @@ impl Process {
 
         Ok(())
     }
+}
 
+impl RegisterAccess for Process {
     #[cfg(target_arch = "x86_64")]
-    pub fn read_registers(&self) -> Result<Registers> {
+    fn read_registers(&self) -> Result<Registers> {
         Ok(Registers::new(self.get_reg_set(libc::NT_PRSTATUS)?))
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn read_registers(&self) -> Result<Registers> {
+    fn read_registers(&self) -> Result<Registers> {
         Ok(Registers::new(
             self.get_reg_set(libc::NT_PRSTATUS)?,
             self.get_reg_set(0x404 /* NT_ARM_SYSTEM_CALL */)?,
         ))
     }
 
+    #[cfg(target_arch = "aarch64")]
     /// Read the correct x7 in syscall-stops for aarch64
-    pub fn read_registers_precise(&self) -> Result<Registers> {
-        #[cfg(target_arch = "aarch64")]
+    fn read_registers_precise(&self) -> Result<Registers> {
         use crate::process::memory::instructions;
-
         use nix::sys::ptrace;
-
-        #[cfg(target_arch = "aarch64")]
         use nix::sys::{signal::Signal, wait::WaitStatus};
 
         match ptrace::getsyscallinfo(self.pid)?.op {
-            #[cfg(target_arch = "aarch64")]
             ptrace::SyscallInfoOp::Entry { .. } => {
                 // syscall entry
                 let mut regs = self.read_registers()?;
@@ -470,7 +531,6 @@ impl Process {
 
                 Ok(regs)
             }
-            #[cfg(target_arch = "aarch64")]
             ptrace::SyscallInfoOp::Exit { .. } => {
                 let mut regs = self.read_registers()?;
 
@@ -525,22 +585,15 @@ impl Process {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn write_registers(&self, regs: Registers) -> Result<()> {
+    fn write_registers(&self, regs: Registers) -> Result<()> {
         self.set_reg_set(libc::NT_PRSTATUS, &regs.inner)
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn write_registers(&self, regs: Registers) -> Result<()> {
+    fn write_registers(&self, regs: Registers) -> Result<()> {
         self.set_reg_set(libc::NT_PRSTATUS, &regs.inner)?;
         self.set_reg_set(0x404 /* NT_ARM_SYSTEM_CALL */, &regs.sysno)?;
 
-        Ok(())
-    }
-
-    pub fn modify_registers_with(&self, f: impl FnOnce(Registers) -> Registers) -> Result<()> {
-        let regs = self.read_registers()?;
-        let regs = f(regs);
-        self.write_registers(regs)?;
         Ok(())
     }
 }
@@ -549,6 +602,9 @@ impl Process {
 mod tests {
     #[cfg(target_arch = "aarch64")]
     use crate::{error::Result, process::syscall::tests::trace};
+
+    #[cfg(target_arch = "aarch64")]
+    use super::RegisterAccess;
 
     #[cfg(target_arch = "aarch64")]
     #[test]
@@ -586,9 +642,13 @@ mod tests {
 
         let mut regs = process.read_registers()?;
         let regs_precise = process.read_registers_precise()?;
+        let mut regs2 = process.read_registers()?;
 
         regs.regs[7] = 42;
         assert_eq!(regs, regs_precise);
+
+        regs2.regs[7] = 42;
+        assert_eq!(regs2, regs_precise);
 
         ptrace::cont(process.pid, None)?;
 
@@ -661,9 +721,13 @@ mod tests {
 
         let mut regs = process.read_registers()?;
         let regs_precise = process.read_registers_precise()?;
+        let mut regs2 = process.read_registers()?;
 
         regs.regs[7] = 42;
         assert_eq!(regs, regs_precise);
+
+        regs2.regs[7] = 42;
+        assert_eq!(regs2, regs_precise);
 
         ptrace::cont(process.pid, None)?;
 

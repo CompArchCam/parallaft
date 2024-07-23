@@ -35,6 +35,7 @@ use crate::events::{
 };
 use crate::exec_point_providers::ExecutionPointProvider;
 use crate::process::dirty_pages::IgnoredPagesProvider;
+use crate::process::registers::RegisterAccess;
 use crate::process::{OwnedProcess, Process};
 use crate::statistics::timing::{self, Tracer};
 use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
@@ -86,7 +87,7 @@ pub struct CheckCoordinatorOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyscallType {
     Standard(Syscall),
-    Custom,
+    Custom(usize, SyscallArgs),
 }
 
 impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer>
@@ -197,7 +198,10 @@ where
                                     scope,
                                 )?;
 
-                                last_syscall_type = Some(SyscallType::Custom);
+                                last_syscall_type = Some(SyscallType::Custom(
+                                    regs.sysno_raw(),
+                                    regs.syscall_args(),
+                                ));
                             }
                         }
                         Some(SyscallType::Standard(syscall)) => {
@@ -211,10 +215,12 @@ where
 
                             last_syscall_type = None;
                         }
-                        Some(SyscallType::Custom) => {
+                        Some(SyscallType::Custom(sysno, args)) => {
                             // Custom syscall exit
                             self.handle_custom_syscall_exit(
                                 &mut child,
+                                sysno,
+                                args,
                                 regs.syscall_ret_val(),
                                 scope,
                             )?;
@@ -823,6 +829,8 @@ where
     where
         's: 'scope + 'disp,
     {
+        info!("{child} Syscall: ... = {ret_val}");
+
         let tracing_event = match child {
             Inferior::Main(_) => timing::Event::MainSyscallExitHandling,
             Inferior::Checker(_) => timing::Event::CheckerSyscallExitHandling,
@@ -992,6 +1000,11 @@ where
     where
         's: 'scope + 'disp,
     {
+        info!(
+            "{child} Syscall: syscall({sysno:#x}, {}, {}, {}, {}, {}, {})",
+            args.arg0, args.arg1, args.arg2, args.arg3, args.arg4, args.arg5
+        );
+
         let handled = self
             .dispatcher
             .handle_custom_syscall_entry(sysno, args, hctx(&mut child.into(), self, scope))
@@ -1041,15 +1054,27 @@ where
     pub fn handle_custom_syscall_exit<'s, 'scope, 'env>(
         &'s self,
         child: &mut Inferior,
+        sysno: usize,
+        args: SyscallArgs,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
         's: 'scope + 'disp,
     {
-        self.dispatcher
+        info!("{child} Syscall: ... = {ret_val}");
+        let handled = self
+            .dispatcher
             .handle_custom_syscall_exit(ret_val, hctx(&mut child.into(), self, scope))
             .unwrap();
+
+        if handled == SyscallHandlerExitAction::NextHandler
+            && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
+        {
+            child
+                .process()
+                .modify_registers_with(|r| r.with_syscall_ret_val(0))?;
+        }
 
         child.process().resume()?;
 

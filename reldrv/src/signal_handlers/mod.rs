@@ -28,6 +28,7 @@ where
             if let Some(segment) = &main.segment {
                 // Main signal, inside protection zone
                 ret = run_instr();
+                #[allow(unreachable_code)]
                 segment
                     .record
                     .push_event(create_event(ret), false, segment)?;

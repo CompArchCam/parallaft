@@ -5,13 +5,13 @@ pub mod registers;
 pub mod sigqueue;
 mod stats;
 mod syscall;
-mod unwind;
 
 use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
 use nix::libc::siginfo_t;
 use nix::unistd::gettid;
+use registers::RegisterAccess;
 use std::ops::Deref;
 use std::{fmt::Debug, ops::DerefMut};
 

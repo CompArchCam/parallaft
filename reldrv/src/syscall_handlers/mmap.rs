@@ -16,6 +16,7 @@ use crate::{
         },
         HandlerContext,
     },
+    process::registers::RegisterAccess,
     types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SavedSyscall, SyscallExitAction,
     },

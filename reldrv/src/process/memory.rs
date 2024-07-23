@@ -1,4 +1,4 @@
-use super::{Process, PAGEMASK};
+use super::{registers::RegisterAccess, Process, PAGEMASK};
 use nix::{
     errno::Errno,
     sys::{
@@ -185,6 +185,8 @@ mod tests {
         error::Result,
         process::{memory::instructions, syscall::tests::trace},
     };
+
+    use super::RegisterAccess;
 
     #[test]
     fn test_instr_at() -> Result<()> {

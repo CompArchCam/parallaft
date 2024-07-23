@@ -15,7 +15,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::{memory::instructions, Process},
+    process::{memory::instructions, registers::RegisterAccess, Process},
     signal_handlers::handle_nondeterministic_instruction,
     syscall_handlers::is_execve_ok,
     types::segment_record::saved_trap_event::SavedTrapEvent,

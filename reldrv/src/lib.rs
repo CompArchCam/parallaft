@@ -1,5 +1,3 @@
-#![feature(error_generic_member_access)]
-
 pub mod check_coord;
 pub mod comparators;
 pub mod debug_utils;
@@ -54,6 +52,7 @@ use types::exit_reason::ExitReason;
 use types::perf_counter::BranchCounterType;
 
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
+#[cfg(target_arch = "x86_64")]
 use crate::comparators::intel_hybrid_workaround::IntelHybridWorkaround;
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
@@ -61,11 +60,13 @@ use crate::dispatcher::Dispatcher;
 
 use crate::helpers::affinity::AffinitySetter;
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
+#[cfg(target_arch = "x86_64")]
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
 // use crate::inferior_rtlib::pmu::PmuSegmentor;
 
 use crate::process::OwnedProcess;
+#[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::cpuid;
 use crate::statistics::counter::CounterCollector;
 use crate::statistics::dirty_pages::DirtyPageStatsCollector;
@@ -194,9 +195,13 @@ impl RelShellOptionsBuilder {
     pub fn test_serial_default() -> Self {
         let mut options = Self::default().max_nr_live_segments(1).is_test(true);
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            options = options.no_cpuid_trap(true).no_rdtsc_trap(true);
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                options = options.no_cpuid_trap(true).no_rdtsc_trap(true);
+            }
+            else {
+                let _ = &mut options;
+            }
         }
 
         options
@@ -216,6 +221,8 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     );
 
     let child = OwnedProcess::new(child_pid);
+
+    #[cfg(target_arch = "x86_64")]
     let mut cpuid_overrides = Vec::from(cpuid::overrides::NO_RDRAND);
 
     assert_eq!(
@@ -238,6 +245,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(RdtscHandler::new());
     }
 
+    #[cfg(target_arch = "x86_64")]
     let mut cpuid_handler = None;
 
     #[cfg(target_arch = "x86_64")]
@@ -254,9 +262,17 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             options.is_test,
         ));
 
-        cpuid_overrides.extend(segmentor.get_cpuid_overrides());
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                cpuid_overrides.extend(segmentor.get_cpuid_overrides());
+            }
+            else {
+                let _ = &segmentor;
+            }
+        }
     }
 
+    #[cfg(target_arch = "x86_64")]
     if let Some(handler) = cpuid_handler {
         handler.set_overrides(cpuid_overrides)
     }
@@ -326,6 +342,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         options.checkpoint_size_watermark,
     ));
 
+    #[cfg(target_arch = "x86_64")]
     disp.register_module(SpecCtrlSetter::new(
         options.enable_speculative_store_bypass_misfeature,
         options.enable_indirect_branch_speculation_misfeature,

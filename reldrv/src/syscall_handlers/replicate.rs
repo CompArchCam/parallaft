@@ -1,3 +1,4 @@
+use log::error;
 use reverie_syscalls::Syscall;
 
 use crate::{
@@ -65,6 +66,11 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
                 .get_syscall()?;
 
             if &saved_syscall.syscall != syscall {
+                error!(
+                    "Unexpected syscall {:?}, expecting {:?}",
+                    syscall, saved_syscall.syscall
+                );
+
                 return Err(Error::UnexpectedEvent(
                     UnexpectedEventReason::IncorrectTypeOrArguments,
                 ));

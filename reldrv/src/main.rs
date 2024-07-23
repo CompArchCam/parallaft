@@ -256,7 +256,9 @@ fn main() {
     let exit_status = run(
         Command::new(cli.command).args(cli.args),
         RelShellOptions {
+            #[cfg(target_arch = "x86_64")]
             no_cpuid_trap: cli.dont_trap_cpuid,
+            #[cfg(target_arch = "x86_64")]
             no_rdtsc_trap: cli.dont_trap_rdtsc,
             dump_stats: {
                 if let Some(path) = cli.stats_output {

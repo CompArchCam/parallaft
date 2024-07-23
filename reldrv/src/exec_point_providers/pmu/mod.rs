@@ -26,7 +26,7 @@ use crate::{
         signal::{SignalHandler, SignalHandlerExitAction},
         HandlerContext,
     },
-    signal_handlers::cpuid::{self, CpuidOverride},
+    process::registers::RegisterAccess,
     statistics::StatisticsProvider,
     statistics_list,
     types::{
@@ -39,6 +39,9 @@ use crate::{
         segment::SegmentId,
     },
 };
+
+#[cfg(target_arch = "x86_64")]
+use crate::signal_handlers::cpuid::{self, CpuidOverride};
 
 use super::ExecutionPointProvider;
 

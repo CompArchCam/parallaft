@@ -16,7 +16,7 @@ use crate::{
         signal::{SignalHandler, SignalHandlerExitAction},
         HandlerContext,
     },
-    process::memory::instructions,
+    process::{memory::instructions, registers::RegisterAccess},
     signal_handlers::handle_nondeterministic_instruction,
     types::segment_record::saved_trap_event::SavedTrapEvent,
 };

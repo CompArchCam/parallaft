@@ -8,7 +8,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::Process,
+    process::{registers::RegisterAccess, Process},
 };
 
 pub struct VdsoRemover;
