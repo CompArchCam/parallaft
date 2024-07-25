@@ -116,14 +116,13 @@ where
     fn run_event_loop<'s, 'scope, 'env>(
         &'s self,
         mut child: Inferior,
+        mut ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<ExitReason>
     where
         's: 'scope + 'disp,
     {
         info!("{child} Ready");
-
-        let mut last_syscall_type = None;
 
         let wall_time_event;
 
@@ -177,18 +176,18 @@ where
                 WaitStatus::PtraceSyscall(_) => {
                     // Tell if it is a syscall entry or exit
                     let is_syscall_entry = child.process().syscall_dir()?.is_entry();
-                    assert_eq!(is_syscall_entry, last_syscall_type.is_none());
+                    assert_eq!(is_syscall_entry, ongoing_syscall.is_none());
 
                     let regs = child.process().read_registers()?;
 
-                    match last_syscall_type {
+                    match ongoing_syscall {
                         None => {
                             // Syscall entry
                             if let Some(sysno) = regs.sysno() {
                                 let syscall = Syscall::from_raw(sysno, regs.syscall_args());
                                 // Standard syscall entry
                                 self.handle_syscall_entry(&mut child, syscall, scope)?;
-                                last_syscall_type = Some(SyscallType::Standard(syscall));
+                                ongoing_syscall = Some(SyscallType::Standard(syscall));
                             } else {
                                 // Custom syscall entry
                                 self.handle_custom_syscall_entry(
@@ -198,7 +197,7 @@ where
                                     scope,
                                 )?;
 
-                                last_syscall_type = Some(SyscallType::Custom(
+                                ongoing_syscall = Some(SyscallType::Custom(
                                     regs.sysno_raw(),
                                     regs.syscall_args(),
                                 ));
@@ -213,7 +212,7 @@ where
                                 scope,
                             )?;
 
-                            last_syscall_type = None;
+                            ongoing_syscall = None;
                         }
                         Some(SyscallType::Custom(sysno, args)) => {
                             // Custom syscall exit
@@ -225,7 +224,7 @@ where
                                 scope,
                             )?;
 
-                            last_syscall_type = None;
+                            ongoing_syscall = None;
                         }
                     }
                 }
@@ -316,6 +315,7 @@ where
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
+        ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
@@ -353,6 +353,9 @@ where
             None
         };
 
+        dbg!(reference.syscall_dir()?);
+        dbg!(reference.read_registers()?.sysno_raw());
+
         main.process.resume()?;
         checkpointing_tracer.end();
 
@@ -375,7 +378,14 @@ where
 
         debug!("{main} New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
-            self.add_checkpoint(main, segments_mut, checkpoint, is_finishing, scope)
+            self.add_checkpoint(
+                main,
+                segments_mut,
+                checkpoint,
+                is_finishing,
+                ongoing_syscall,
+                scope,
+            )
         })?;
 
         if let Some(throttler) = throttler {
@@ -452,15 +462,21 @@ where
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
+        ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
         's: 'scope + 'disp,
     {
         match child {
-            Inferior::Main(main) => {
-                self.take_main_checkpoint(main, is_finishing, restart_old_syscall, caller, scope)
-            }
+            Inferior::Main(main) => self.take_main_checkpoint(
+                main,
+                is_finishing,
+                restart_old_syscall,
+                caller,
+                ongoing_syscall,
+                scope,
+            ),
             Inferior::Checker(checker) => self.take_checker_checkpoint(checker),
         }
     }
@@ -507,6 +523,7 @@ where
                     process,
                     segment: None,
                 }),
+                None,
                 scope,
             ) {
                 Ok(exit_reason) => exit_reason,
@@ -537,6 +554,7 @@ where
     fn checker_work<'s, 'scope, 'env>(
         &'s self,
         segment: Arc<Segment>,
+        ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
@@ -546,6 +564,9 @@ where
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
         let checker_process = segment.start_checker()?;
+        dbg!(checker_process.syscall_dir()?);
+        dbg!(checker_process.read_registers()?.sysno_raw());
+        dbg!(checker_process.read_registers()?.regs[0]);
         checker_forking_tracer.end();
 
         segment.record.wait_for_initial_event()?;
@@ -561,7 +582,7 @@ where
             self.dispatcher.handle_segment_ready(&mut checker)?;
             checker_ready_hook_tracer.end();
 
-            self.run_event_loop(Inferior::Checker(checker), scope)?;
+            self.run_event_loop(Inferior::Checker(checker), ongoing_syscall, scope)?;
         } else {
             segment.checker_status.lock().assume_checked();
         }
@@ -576,6 +597,7 @@ where
         segments: &mut SegmentChains,
         checkpoint: Checkpoint,
         is_finishing: bool,
+        ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
@@ -610,7 +632,7 @@ where
                 .name(format!("checker-{}", new_segment.nr))
                 .spawn_scoped(scope, move || {
                     let ret = catch_unwind(AssertUnwindSafe(|| {
-                        self.checker_work(new_segment.clone(), scope)
+                        self.checker_work(new_segment.clone(), ongoing_syscall, scope)
                     }));
 
                     let abort;
@@ -777,6 +799,7 @@ where
                                 true,
                                 true,
                                 CheckpointCaller::Shell,
+                                Some(SyscallType::Standard(syscall)),
                                 scope,
                             )?;
 
@@ -929,6 +952,7 @@ where
                                 false,
                                 false,
                                 CheckpointCaller::Shell,
+                                Some(SyscallType::Standard(ongoing_syscall.syscall)),
                                 scope,
                             )?;
                             skip_ptrace_syscall = true;
@@ -1030,6 +1054,7 @@ where
                         is_finishing,
                         true,
                         CheckpointCaller::Child,
+                        Some(SyscallType::Custom(sysno, args)),
                         scope,
                     )?;
                 }
@@ -1116,7 +1141,7 @@ where
                 ptrace::syscall(child.process().pid, sig)?;
             }
             SignalHandlerExitAction::Checkpoint => {
-                self.take_checkpoint(child, false, false, CheckpointCaller::Shell, scope)?;
+                self.take_checkpoint(child, false, false, CheckpointCaller::Shell, None, scope)?;
             }
         }
 

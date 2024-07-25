@@ -42,7 +42,7 @@ impl CheckerStatus {
 
     pub fn start(&mut self, from_checkpoint: &Checkpoint) -> Result<OwnedProcess> {
         let mut ref_process = from_checkpoint.process.lock();
-        let checker_process = ref_process.borrow_with(|p| p.fork(true, false))??;
+        let checker_process = ref_process.borrow_with(|p| p.fork(true, true))??;
         *self = CheckerStatus::Executing(checker_process.pid);
 
         Ok(checker_process)
