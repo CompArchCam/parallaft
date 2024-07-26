@@ -353,9 +353,6 @@ where
             None
         };
 
-        dbg!(reference.syscall_dir()?);
-        dbg!(reference.read_registers()?.sysno_raw());
-
         main.process.resume()?;
         checkpointing_tracer.end();
 
@@ -564,9 +561,6 @@ where
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
         let checker_process = segment.start_checker()?;
-        dbg!(checker_process.syscall_dir()?);
-        dbg!(checker_process.read_registers()?.sysno_raw());
-        dbg!(checker_process.read_registers()?.regs[0]);
         checker_forking_tracer.end();
 
         segment.record.wait_for_initial_event()?;
@@ -852,7 +846,7 @@ where
     where
         's: 'scope + 'disp,
     {
-        info!("{child} Syscall: ... = {ret_val}");
+        debug!("{child} Syscall: ... = {ret_val}");
 
         let tracing_event = match child {
             Inferior::Main(_) => timing::Event::MainSyscallExitHandling,
@@ -1087,7 +1081,7 @@ where
     where
         's: 'scope + 'disp,
     {
-        info!("{child} Syscall: ... = {ret_val}");
+        debug!("{child} Syscall: ... = {ret_val}");
         let handled = self
             .dispatcher
             .handle_custom_syscall_exit(ret_val, hctx(&mut child.into(), self, scope))
