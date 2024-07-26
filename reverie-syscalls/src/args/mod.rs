@@ -282,8 +282,8 @@ impl<'a> Displayable for Option<PathPtr<'a>> {
         match self {
             None => f.write_str("NULL"),
             Some(addr) => match addr.read(memory) {
-                Ok(s) => write!(f, "{} -> {:?}", addr.0.0, s),
-                Err(e) => write!(f, "{} -> <{}>", addr.0.0, e),
+                Ok(s) => write!(f, "{} -> {:?}", addr.0 .0, s),
+                Err(e) => write!(f, "{} -> <{}>", addr.0 .0, e),
             },
         }
     }

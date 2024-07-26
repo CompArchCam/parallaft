@@ -87,8 +87,7 @@ impl std::fmt::Display for Timespec {
 }
 
 /// A serializable version of `libc::timeval`.
-#[derive(Serialize, Deserialize)]
-#[derive(Default, Copy, Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Serialize, Deserialize, Default, Copy, Clone, Eq, PartialEq, Debug, Hash)]
 #[repr(C)]
 #[allow(missing_docs)]
 pub struct Timeval {
@@ -107,8 +106,7 @@ impl std::fmt::Display for Timeval {
 }
 
 /// A serializable version of `libc::timezone`.
-#[derive(Serialize, Deserialize)]
-#[derive(Default, Copy, Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Serialize, Deserialize, Default, Copy, Clone, Eq, PartialEq, Debug, Hash)]
 #[repr(C)]
 #[allow(missing_docs)]
 pub struct Timezone {

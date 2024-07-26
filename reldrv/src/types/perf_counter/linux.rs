@@ -3,7 +3,7 @@ use std::path::Path;
 use lazy_static::lazy_static;
 use nix::{sys::signal::Signal, unistd::Pid};
 use perf_event::{
-    events::{Breakpoint, Event, Hardware, Raw},
+    events::{Breakpoint, Dynamic, DynamicBuilder, Event, Hardware, Raw},
     SampleSkid,
 };
 
@@ -64,7 +64,7 @@ impl Event for HardwareWithDeviceType {
 
 pub struct LinuxPerfCounter(perf_event::Counter);
 
-mod constants {
+pub mod constants {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "x86_64")] {
             pub const AMD_EX_RET_BRN: u64 = 0xc2;
@@ -77,6 +77,12 @@ mod constants {
             pub const INTEL_LAKE_COVE_BR_INST_RETIRED_COND_TAKEN: u64 = 0x01c4;
             pub const INTEL_MONT_BR_INST_RETIRED_COND_TAKEN: u64 = 0xfec4;
         }
+        else if #[cfg(target_arch = "aarch64")] {
+            pub const ARMV8_CORTEX_A55: &'static str = "armv8_cortex_a55";
+            pub const ARMV8_CORTEX_A76: &'static str = "armv8_cortex_a76";
+            pub const ARM_BR_RETIRED: &'static str = "br_retired";
+            pub const ARM_EXC_TAKEN: &'static str = "exc_taken";
+        }
     }
 }
 
@@ -84,6 +90,19 @@ mod constants {
 pub enum Target {
     Pid(Pid),
     Cpu(usize),
+}
+
+fn dynamic_event(pmu: impl AsRef<Path>, event: impl AsRef<Path>) -> std::io::Result<Dynamic> {
+    let mut builder = DynamicBuilder::new(pmu)?;
+
+    builder.event(event)?;
+    let params: Vec<String> = builder.params().map(str::to_string).collect();
+
+    for param in params {
+        builder.field(&param, 0)?;
+    }
+
+    Ok(builder.build()?)
 }
 
 impl LinuxPerfCounter {
@@ -275,6 +294,28 @@ impl LinuxPerfCounter {
                     irq_period.map(|period| (period, SampleSkid::RequireZero)),
                 )?)
             }
+            #[cfg(target_arch = "aarch64")]
+            (PmuType::Armv8CortexA55, BranchCounterType::AllExclFar) => Box::new(SubPerfCounter(
+                Self::new(
+                    dynamic_event(constants::ARMV8_CORTEX_A55, constants::ARM_BR_RETIRED)?,
+                    target,
+                    true,
+                    irq_period.map(|period| (period, SampleSkid::RequestZero)),
+                )?,
+                Self::new(
+                    dynamic_event(constants::ARMV8_CORTEX_A55, constants::ARM_EXC_TAKEN)?,
+                    target,
+                    true,
+                    None,
+                )?,
+            )),
+            #[cfg(target_arch = "aarch64")]
+            (PmuType::Armv8CortexA76, BranchCounterType::AllExclFar) => Box::new(Self::new(
+                dynamic_event(constants::ARMV8_CORTEX_A76, constants::ARM_BR_RETIRED)?,
+                target,
+                true,
+                None,
+            )?),
             _ => Err(Error::NotSupported(
                 "Unsupported PMU and branch type combination".to_string(),
             ))?,

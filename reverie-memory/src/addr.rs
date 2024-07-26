@@ -467,7 +467,6 @@ impl<'a, T> AddrSliceMut<'a, T> {
         }
     }
 
-
     /// Returns the raw pointer.
     pub unsafe fn as_mut_ptr(&mut self) -> *mut T {
         self.inner.as_mut_ptr()
