@@ -946,7 +946,7 @@ where
                                 false,
                                 false,
                                 CheckpointCaller::Shell,
-                                Some(SyscallType::Standard(ongoing_syscall.syscall)),
+                                None,
                                 scope,
                             )?;
                             skip_ptrace_syscall = true;
