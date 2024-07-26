@@ -110,7 +110,7 @@ impl Registers {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn with_syscall_args(mut self, args: SyscallArgs) -> Self {
+    pub fn with_syscall_args(mut self, args: SyscallArgs, _keep_ret_val: bool) -> Self {
         self.rdi = args.arg0 as _;
         self.rsi = args.arg1 as _;
         self.rdx = args.arg2 as _;
@@ -122,8 +122,11 @@ impl Registers {
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn with_syscall_args(mut self, args: SyscallArgs) -> Self {
-        self.regs[0] = args.arg0 as _;
+    pub fn with_syscall_args(mut self, args: SyscallArgs, keep_ret_val: bool) -> Self {
+        if !keep_ret_val {
+            self.regs[0] = args.arg0 as _;
+        }
+
         self.regs[1] = args.arg1 as _;
         self.regs[2] = args.arg2 as _;
         self.regs[3] = args.arg3 as _;

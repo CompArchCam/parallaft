@@ -71,7 +71,7 @@ impl StandardSyscallHandler for MmapHandler {
 
                     if mmap.fd() >= 0 {
                         main.modify_registers_with(|regs| {
-                            regs.with_syscall_args(mmap.into_parts().1)
+                            regs.with_syscall_args(mmap.into_parts().1, false)
                         })?;
 
                         Ok(
@@ -87,7 +87,9 @@ impl StandardSyscallHandler for MmapHandler {
                         panic!("Mmap unexpected fd");
                     }
                 } else {
-                    main.modify_registers_with(|regs| regs.with_syscall_args(mmap.into_parts().1))?;
+                    main.modify_registers_with(|regs| {
+                        regs.with_syscall_args(mmap.into_parts().1, false)
+                    })?;
 
                     Ok(StandardSyscallEntryMainHandlerExitAction::StoreSyscall(
                         SavedIncompleteSyscall {
@@ -152,7 +154,8 @@ impl StandardSyscallHandler for MmapHandler {
 
                             let (new_sysno, new_args) = mmap.into_parts();
                             checker.process.modify_registers_with(|regs| {
-                                regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                                regs.with_sysno(new_sysno)
+                                    .with_syscall_args(new_args, false)
                             })?;
                         }
                     }
@@ -188,7 +191,8 @@ impl StandardSyscallHandler for MmapHandler {
 
                     let (new_sysno, new_args) = mremap.into_parts();
                     checker.process.modify_registers_with(|regs| {
-                        regs.with_sysno(new_sysno).with_syscall_args(new_args)
+                        regs.with_sysno(new_sysno)
+                            .with_syscall_args(new_args, false)
                     })?;
                 }
 
@@ -209,7 +213,7 @@ impl StandardSyscallHandler for MmapHandler {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
                 // restore registers as if we haven't modified mmap/mremap flags
                 main.modify_registers_with(|regs| {
-                    regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1)
+                    regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1, true)
                 })?;
 
                 Ok(SyscallHandlerExitAction::ContinueInferior)
@@ -238,7 +242,7 @@ impl StandardSyscallHandler for MmapHandler {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
                 // restore registers as if we haven't modified mmap/mremap flags
                 context.process().modify_registers_with(|regs| {
-                    regs.with_syscall_args(saved_syscall.syscall.into_parts().1)
+                    regs.with_syscall_args(saved_syscall.syscall.into_parts().1, true)
                 })?;
 
                 Ok(SyscallHandlerExitAction::ContinueInferior)

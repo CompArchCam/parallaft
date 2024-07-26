@@ -936,7 +936,7 @@ where
 
                             // restore registers as if we haven't modified any flags
                             main.process.modify_registers_with(|regs| {
-                                regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1)
+                                regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1, true)
                             })?;
 
                             syscall_exit_handling_tracer.end();
@@ -1074,7 +1074,7 @@ where
         &'s self,
         child: &mut Inferior,
         sysno: usize,
-        args: SyscallArgs,
+        _args: SyscallArgs,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>

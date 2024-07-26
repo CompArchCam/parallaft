@@ -11,7 +11,10 @@ use nix::{
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
 use super::{memory::InjectedInstructionContext, registers::Registers, OwnedProcess, Process};
-use crate::{error::Result, process::{memory::instructions, registers::RegisterAccess}};
+use crate::{
+    error::Result,
+    process::{memory::instructions, registers::RegisterAccess},
+};
 
 impl Process {
     pub fn syscall_direct(
@@ -90,7 +93,7 @@ impl Process {
         };
 
         // prepare the injected syscall number and arguments
-        self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args))?;
+        self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args, false))?;
 
         // execute our injected syscall
         ptrace::syscall(self.pid, None)?;
