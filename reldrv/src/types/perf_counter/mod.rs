@@ -5,7 +5,6 @@ pub mod symbolic_events;
 
 use std::{collections::HashMap, io};
 
-use clap::ValueEnum;
 use cpu_info::{detect_all_cpu_info, CpuInfo};
 use lazy_static::lazy_static;
 

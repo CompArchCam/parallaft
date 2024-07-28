@@ -62,7 +62,7 @@ impl BasePerfCounterWithInterrupt {
 
         let sig_data = rand::random();
 
-        let mut counter = builder
+        let counter = builder
             .pinned(pinned)
             .enabled(true)
             .observe_pid(pid.as_raw() as _)
@@ -71,12 +71,10 @@ impl BasePerfCounterWithInterrupt {
             .sigtrap(true)
             .sig_data(sig_data)
             .precise_ip(sample_skid)
-            .remove_on_exec(true);
+            .remove_on_exec(true)
+            .build()?;
 
-        Ok(Self {
-            counter: counter.build()?,
-            sig_data,
-        })
+        Ok(Self { counter, sig_data })
     }
 }
 
@@ -101,6 +99,7 @@ impl PerfCounter for BasePerfCounterWithInterrupt {
 impl PerfCounterWithInterrupt for BasePerfCounterWithInterrupt {
     fn is_interrupt(&self, sig_info: &nix::libc::siginfo_t) -> crate::error::Result<bool> {
         // TODO: check si_perf
+        let _ = self.sig_data;
         Ok(
             sig_info.si_signo == nix::libc::SIGTRAP && sig_info.si_code == 0x6, /* TRAP_PERF */
         )

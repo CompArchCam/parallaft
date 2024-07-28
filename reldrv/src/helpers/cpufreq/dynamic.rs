@@ -21,7 +21,6 @@ use crate::{
     events::{module_lifetime::ModuleLifetimeHook, segment::SegmentEventHandler},
     types::{
         perf_counter::{
-            self,
             symbolic_events::{expr::Target, GenericHardwareEventCounter},
             PerfCounter,
         },

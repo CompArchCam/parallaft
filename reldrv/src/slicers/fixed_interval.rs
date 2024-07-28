@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use log::debug;
 use nix::{sys::signal::Signal, unistd::Pid};
 use parking_lot::Mutex;
-use perf_event::SampleSkid;
 use reverie_syscalls::Syscall;
 
 use crate::{
@@ -18,8 +17,8 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
-            symbolic_events::{expr::Target, GenericHardwareEventCounterWithInterrupt},
-            PerfCounter, PerfCounterWithInterrupt,
+            symbolic_events::GenericHardwareEventCounterWithInterrupt, PerfCounter,
+            PerfCounterWithInterrupt,
         },
         process_id::InferiorRefMut,
     },

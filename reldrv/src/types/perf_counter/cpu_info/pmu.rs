@@ -1,4 +1,4 @@
-use std::{fs, ops::Range, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use itertools::Itertools;
 

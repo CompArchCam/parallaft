@@ -11,7 +11,7 @@ use std::{
 };
 
 use exec_point::BranchCounterBasedExecutionPoint;
-use log::{debug, error, info};
+use log::{debug, error};
 
 use nix::sys::signal::Signal;
 use parking_lot::Mutex;
@@ -87,6 +87,7 @@ pub struct PerfCounterBasedExecutionPointProvider<'a> {
     main_branch_counter: Mutex<Option<BranchCounter>>,
     main_cpu_set: &'a [usize],
     checker_cpu_set: &'a [usize],
+    #[cfg(target_arch = "x86_64")]
     main_cpu_model: CpuModel,
     checker_cpu_model: CpuModel,
     is_test: bool,
@@ -108,6 +109,7 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             segment_info_map: Mutex::new(HashMap::new()),
             main_cpu_set,
             checker_cpu_set,
+            #[cfg(target_arch = "x86_64")]
             main_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(main_cpu_set)
                 .unwrap()
                 .0,
@@ -131,7 +133,7 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             // Quirk: Workaround Intel Gracemont microarchitecture overcounting xsave/xsavec instructions as conditional branch
             results.extend(cpuid::overrides::NO_XSAVE);
 
-            info!("Disabling xsave instructions")
+            log::info!("Disabling xsave instructions")
         }
 
         results
