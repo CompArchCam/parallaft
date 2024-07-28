@@ -15,7 +15,7 @@ use git_version::git_version;
 use reldrv::helpers::cpufreq::{CpuFreqGovernor, CpuFreqScalerType};
 use reldrv::slicers::{ReferenceType, SlicerType};
 use reldrv::types::exit_reason::ExitReason;
-use reldrv::types::perf_counter::BranchCounterType;
+use reldrv::types::perf_counter::symbolic_events::BranchType;
 use reldrv::StatsOutput;
 use reldrv::{
     check_coord::CheckCoordinatorOptions, parent_work, statistics::perf::CounterKind,
@@ -141,7 +141,7 @@ struct CliArgs {
 
     /// In PMU-based segmentation, type of branch to count.
     #[arg(long, default_value = "all-excl-far")]
-    pmu_segmentation_branch_type: BranchCounterType,
+    pmu_segmentation_branch_type: BranchType,
 
     /// Dirty page tracker to use
     #[arg(long, default_value = "soft-dirty")]

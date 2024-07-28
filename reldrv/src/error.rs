@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use procfs::ProcError;
 
+use crate::types::perf_counter::symbolic_events::expr::PmuError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnexpectedEventReason {
     /// Application made an excess syscall/trap (possibly due to skidding).
@@ -48,6 +50,9 @@ pub enum Error {
 
     #[error("Errno returned to user")]
     ReturnedToUser(nix::errno::Errno, String),
+
+    #[error("PMU error: `{0}`")]
+    PmuError(#[from] PmuError),
 }
 
 impl From<std::io::Error> for Error {

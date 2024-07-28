@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use log::debug;
 use nix::{sys::signal::Signal, unistd::Pid};
 use parking_lot::Mutex;
+use perf_event::SampleSkid;
 use reverie_syscalls::Syscall;
 
 use crate::{
@@ -17,7 +18,8 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         perf_counter::{
-            self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounterWithInterrupt,
+            symbolic_events::{expr::Target, GenericHardwareEventCounterWithInterrupt},
+            PerfCounter, PerfCounterWithInterrupt,
         },
         process_id::InferiorRefMut,
     },
@@ -26,8 +28,8 @@ use crate::{
 use super::ReferenceType;
 
 enum State {
-    Skipping(Box<dyn PerfCounterWithInterrupt + Send + Sync>),
-    Normal(Box<dyn PerfCounterWithInterrupt + Send + Sync>),
+    Skipping(GenericHardwareEventCounterWithInterrupt),
+    Normal(GenericHardwareEventCounterWithInterrupt),
 }
 
 impl Debug for State {
@@ -39,27 +41,27 @@ impl Debug for State {
     }
 }
 
-pub struct FixedIntervalSlicer {
+pub struct FixedIntervalSlicer<'a> {
     skip: Option<u64>,
     interval: u64,
     reference: ReferenceType,
     state: Mutex<Option<State>>,
-    main_pmu_type: PmuType,
+    main_cpu_set: &'a [usize],
 }
 
-impl FixedIntervalSlicer {
+impl<'a> FixedIntervalSlicer<'a> {
     pub fn new(
         skip: Option<u64>,
         interval: u64,
         reference: ReferenceType,
-        main_cpu_set: &[usize],
+        main_cpu_set: &'a [usize],
     ) -> Self {
         Self {
             skip,
             interval,
             reference,
             state: Mutex::new(None),
-            main_pmu_type: PmuType::detect(*main_cpu_set.first().unwrap_or(&0)),
+            main_cpu_set,
         }
     }
 
@@ -67,17 +69,19 @@ impl FixedIntervalSlicer {
         &self,
         interval: u64,
         pid: Pid,
-    ) -> Result<Box<dyn PerfCounterWithInterrupt + Sync>> {
-        Ok(Box::new(LinuxPerfCounter::interrupt_after_n_hw_events(
+    ) -> Result<GenericHardwareEventCounterWithInterrupt> {
+        GenericHardwareEventCounterWithInterrupt::new(
             self.reference.into(),
-            self.main_pmu_type,
-            perf_counter::linux::Target::Pid(pid),
+            pid,
+            true,
+            self.main_cpu_set,
             interval,
-        )?))
+            None,
+        )
     }
 }
 
-impl StandardSyscallHandler for FixedIntervalSlicer {
+impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
     fn handle_standard_syscall_exit(
         &self,
         ret_val: isize,
@@ -110,7 +114,7 @@ impl StandardSyscallHandler for FixedIntervalSlicer {
     }
 }
 
-impl SignalHandler for FixedIntervalSlicer {
+impl SignalHandler for FixedIntervalSlicer<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
@@ -128,9 +132,11 @@ impl SignalHandler for FixedIntervalSlicer {
 
             let next_state;
 
+            let sig_info = main.process.get_siginfo()?;
+
             match state.take() {
                 Some(State::Skipping(mut perf_counter)) => {
-                    if !perf_counter.is_interrupt(signal, &main.process)? {
+                    if !perf_counter.is_interrupt(&sig_info)? {
                         *state = Some(State::Skipping(perf_counter));
                         return Ok(SignalHandlerExitAction::NextHandler);
                     }
@@ -148,7 +154,7 @@ impl SignalHandler for FixedIntervalSlicer {
                     );
                 }
                 Some(State::Normal(mut perf_counter)) => {
-                    if !perf_counter.is_interrupt(signal, &main.process)? {
+                    if !perf_counter.is_interrupt(&sig_info)? {
                         *state = Some(State::Normal(perf_counter));
                         return Ok(SignalHandlerExitAction::NextHandler);
                     }
@@ -179,7 +185,7 @@ impl SignalHandler for FixedIntervalSlicer {
     }
 }
 
-impl Module for FixedIntervalSlicer {
+impl Module for FixedIntervalSlicer<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,

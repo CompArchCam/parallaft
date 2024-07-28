@@ -32,6 +32,7 @@ itertools = "0.12.1"
 path_macro = "1.0.0"
 try-insert-ext = "0.1.0"
 cfg-if = "1.0.0"
+rand = "0.8.5"
 
 [dev-dependencies]
 tempfile = "3"

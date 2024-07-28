@@ -6,7 +6,10 @@ use parking_lot::Mutex;
 use crate::{
     error::Result,
     process::Process,
-    types::{execution_point::ExecutionPoint, perf_counter::BranchCounterType, segment::Segment},
+    types::{
+        execution_point::ExecutionPoint, perf_counter::symbolic_events::BranchType,
+        segment::Segment,
+    },
 };
 
 use super::{PerfCounterBasedExecutionPointProvider, SegmentInfo};
@@ -15,7 +18,7 @@ use super::{PerfCounterBasedExecutionPointProvider, SegmentInfo};
 pub struct BranchCounterBasedExecutionPoint {
     pub branch_counter: u64,
     pub instruction_pointer: usize,
-    pub ty: BranchCounterType,
+    pub ty: BranchType,
     pub segment_info: Arc<Mutex<SegmentInfo>>,
 }
 

@@ -30,7 +30,11 @@ use crate::{
     },
     syscall_handlers::is_execve_ok,
     types::{
-        perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
+        // perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
+        perf_counter::{
+            symbolic_events::{expr::Target, GenericHardwareEventCounter},
+            PerfCounter,
+        },
         process_id::Main,
     },
 };
@@ -64,21 +68,21 @@ impl Default for DynamicSlicerParams {
     }
 }
 
-pub struct DynamicSlicer {
+pub struct DynamicSlicer<'a> {
     params: DynamicSlicerParams,
     worker: Mutex<Option<Sender<()>>>,
-    main_cycles_counter: Mutex<Option<Box<dyn PerfCounter>>>,
-    main_pmu_type: PmuType,
+    main_cycles_counter: Mutex<Option<GenericHardwareEventCounter>>,
+    main_cpu_set: &'a [usize],
     epoch: AtomicU32,
 }
 
-impl DynamicSlicer {
-    pub fn new(main_cpu_set: &[usize]) -> Self {
+impl<'a> DynamicSlicer<'a> {
+    pub fn new(main_cpu_set: &'a [usize]) -> Self {
         Self {
             params: DynamicSlicerParams::default(),
             worker: Mutex::new(None),
             main_cycles_counter: Mutex::new(None),
-            main_pmu_type: PmuType::detect(*main_cpu_set.first().unwrap_or(&0)),
+            main_cpu_set,
             epoch: AtomicU32::new(0),
         }
     }
@@ -133,17 +137,17 @@ impl DynamicSlicer {
     }
 }
 
-impl SegmentEventHandler for DynamicSlicer {
+impl SegmentEventHandler for DynamicSlicer<'_> {
     fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
         self.main_cycles_counter
             .lock()
             .get_or_try_insert_with(|| -> Result<_> {
-                Ok(Box::new(LinuxPerfCounter::count_hw_events(
+                GenericHardwareEventCounter::new(
                     Hardware::CPU_CYCLES,
-                    self.main_pmu_type,
+                    Target::Pid(main.process.pid),
                     false,
-                    perf_counter::linux::Target::Pid(main.process.pid),
-                )?))
+                    self.main_cpu_set,
+                )
             })?
             .reset()?;
 
@@ -151,7 +155,7 @@ impl SegmentEventHandler for DynamicSlicer {
     }
 }
 
-impl StandardSyscallHandler for DynamicSlicer {
+impl StandardSyscallHandler for DynamicSlicer<'_> {
     fn handle_standard_syscall_exit(
         &self,
         ret_val: isize,
@@ -167,7 +171,7 @@ impl StandardSyscallHandler for DynamicSlicer {
     }
 }
 
-impl ProcessLifetimeHook for DynamicSlicer {
+impl ProcessLifetimeHook for DynamicSlicer<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
@@ -206,7 +210,7 @@ impl ProcessLifetimeHook for DynamicSlicer {
     }
 }
 
-impl ModuleLifetimeHook for DynamicSlicer {
+impl ModuleLifetimeHook for DynamicSlicer<'_> {
     fn fini<'s, 'scope, 'env>(&'s self, _scope: &'scope Scope<'scope, 'env>) -> Result<()>
     where
         's: 'scope,
@@ -221,7 +225,7 @@ impl ModuleLifetimeHook for DynamicSlicer {
     }
 }
 
-impl Module for DynamicSlicer {
+impl Module for DynamicSlicer<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,

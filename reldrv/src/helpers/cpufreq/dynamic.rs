@@ -20,18 +20,21 @@ use crate::{
     error::Result,
     events::{module_lifetime::ModuleLifetimeHook, segment::SegmentEventHandler},
     types::{
-        perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
+        perf_counter::{
+            self,
+            symbolic_events::{expr::Target, GenericHardwareEventCounter},
+            PerfCounter,
+        },
         process_id::{Checker, Main},
         segment::{Segment, SegmentId, SegmentStatus},
     },
 };
 
 pub struct DynamicCpuFreqScaler<'a> {
+    main_cpu_set: &'a [usize],
     checker_cpu_set: &'a [usize],
-    checker_pmu_type: PmuType,
     segment_info_map: Mutex<HashMap<SegmentId, SegmentInfo>>,
-    main_pmu_type: PmuType,
-    main_instruction_counter: Mutex<Option<Box<dyn PerfCounter>>>,
+    main_instruction_counter: Mutex<Option<GenericHardwareEventCounter>>,
     main_start_time: Mutex<Option<Instant>>,
     adjustment_period: Duration,
     worker: Mutex<Option<Sender<()>>>,
@@ -49,10 +52,10 @@ struct SegmentInfo {
     main_start_time: Instant,
     main_end_time: Option<Instant>,
     #[derivative(Debug = "ignore")]
-    checker_instruction_counter: Option<Box<dyn PerfCounter>>,
+    checker_instruction_counter: Option<GenericHardwareEventCounter>,
     checker_instructions: u64,
     #[derivative(Debug = "ignore")]
-    checker_cycle_counter: Option<Box<dyn PerfCounter>>,
+    checker_cycle_counter: Option<GenericHardwareEventCounter>,
     checker_cycles: u64,
     checker_done: bool,
 }
@@ -82,9 +85,8 @@ impl DynamicCpuFreqScaler<'_> {
         checker_cpu_set: &'a [usize],
     ) -> DynamicCpuFreqScaler<'a> {
         DynamicCpuFreqScaler {
-            main_pmu_type: PmuType::detect(*main_cpu_set.first().unwrap_or(&0)),
+            main_cpu_set,
             checker_cpu_set,
-            checker_pmu_type: PmuType::detect(*checker_cpu_set.first().unwrap_or(&0)),
             freq_step_khz: 50_000, /* 50MHz */
             segment_info_map: Mutex::new(HashMap::new()),
             main_instruction_counter: Mutex::new(None),
@@ -312,15 +314,14 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
     fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
         let mut counter_option = self.main_instruction_counter.lock();
 
-        let counter =
-            counter_option.get_or_try_insert_with(|| -> Result<Box<dyn PerfCounter>> {
-                Ok(Box::new(LinuxPerfCounter::count_hw_events(
-                    Hardware::INSTRUCTIONS,
-                    self.main_pmu_type,
-                    true,
-                    perf_counter::linux::Target::Pid(main.process.pid),
-                )?))
-            })?;
+        let counter = counter_option.get_or_try_insert_with(|| {
+            GenericHardwareEventCounter::new(
+                Hardware::INSTRUCTIONS,
+                Target::Pid(main.process.pid),
+                true,
+                self.main_cpu_set,
+            )
+        })?;
 
         let instruction_count = counter.read()?;
         counter.reset()?;
@@ -361,20 +362,19 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         let mut segment_info_map = self.segment_info_map.lock();
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
 
-        segment_info.checker_instruction_counter =
-            Some(Box::new(LinuxPerfCounter::count_hw_events(
-                Hardware::INSTRUCTIONS,
-                self.checker_pmu_type,
-                true,
-                perf_counter::linux::Target::Pid(checker.process.pid),
-            )?));
-
-        segment_info.checker_cycle_counter = Some(Box::new(LinuxPerfCounter::count_hw_events(
-            Hardware::CPU_CYCLES,
-            self.checker_pmu_type,
+        segment_info.checker_instruction_counter = Some(GenericHardwareEventCounter::new(
+            Hardware::INSTRUCTIONS,
+            Target::Pid(checker.process.pid),
             true,
-            perf_counter::linux::Target::Pid(checker.process.pid),
-        )?));
+            self.checker_cpu_set,
+        )?);
+
+        segment_info.checker_cycle_counter = Some(GenericHardwareEventCounter::new(
+            Hardware::CPU_CYCLES,
+            Target::Pid(checker.process.pid),
+            true,
+            self.checker_cpu_set,
+        )?);
 
         Ok(())
     }

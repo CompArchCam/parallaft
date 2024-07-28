@@ -14,7 +14,10 @@ use reldrv::{
     error::Result,
     events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     process::PAGESIZE,
-    types::perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
+    types::perf_counter::{
+        symbolic_events::{expr::Target, GenericHardwareEventCounter},
+        PerfCounter,
+    },
     RelShellOptionsBuilder,
 };
 
@@ -22,9 +25,8 @@ use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 
 struct CyclesCounter {
     cpu_affinity: usize,
-    events: Mutex<BTreeMap<String, Box<dyn PerfCounter>>>,
+    events: Mutex<BTreeMap<String, GenericHardwareEventCounter>>,
     values: Arc<Mutex<BTreeMap<String, u64>>>,
-    main_pmu_type: PmuType,
 }
 
 impl CyclesCounter {
@@ -34,11 +36,8 @@ impl CyclesCounter {
     ];
 
     pub fn new(cpu_affinity: usize, values: Arc<Mutex<BTreeMap<String, u64>>>) -> Self {
-        let main_pmu_type = PmuType::detect(cpu_affinity);
-
         Self {
             cpu_affinity,
-            main_pmu_type,
             events: Mutex::new(BTreeMap::new()),
             values,
         }
@@ -60,12 +59,12 @@ impl ProcessLifetimeHook for CyclesCounter {
         for (name, event) in Self::EVENT_LIST {
             counters.insert(
                 name.to_string(),
-                Box::new(LinuxPerfCounter::count_hw_events(
+                GenericHardwareEventCounter::new(
                     event,
-                    self.main_pmu_type,
+                    Target::Cpu(self.cpu_affinity),
                     false,
-                    perf_counter::linux::Target::Cpu(self.cpu_affinity),
-                )?),
+                    &[self.cpu_affinity],
+                )?,
             );
         }
 

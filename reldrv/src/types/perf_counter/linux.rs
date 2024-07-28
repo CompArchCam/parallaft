@@ -3,7 +3,7 @@ use std::path::Path;
 use lazy_static::lazy_static;
 use nix::{sys::signal::Signal, unistd::Pid};
 use perf_event::{
-    events::{Breakpoint, Dynamic, DynamicBuilder, Event, Hardware, Raw},
+    events::{Breakpoint, DynamicBuilder, Event, Hardware, Raw},
     SampleSkid,
 };
 
@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    pmu_type::PmuType, sub::SubPerfCounter, BranchCounterType, PerfCounter,
-    PerfCounterCheckInterrupt, PerfCounterWithInterrupt,
+    raw_events::Dynamic, sub::SubPerfCounter, BranchCounterType, PerfCounter,
+    PerfCounterWithInterrupt,
 };
 
 lazy_static! {
@@ -23,46 +23,6 @@ lazy_static! {
         Ok(std::fs::read_to_string(path)?.trim().parse()?)
     };
 }
-
-struct RawWithDeviceType {
-    ty: u32,
-    config: u64,
-}
-
-impl RawWithDeviceType {
-    pub fn new(ty: u32, config: u64) -> Self {
-        Self { ty, config }
-    }
-}
-
-impl Event for RawWithDeviceType {
-    fn update_attrs(self, attr: &mut perf_event_open_sys::bindings::perf_event_attr) {
-        attr.type_ = self.ty;
-        attr.config = self.config;
-        attr.__bindgen_anon_3.config1 = 0;
-        attr.__bindgen_anon_4.config2 = 0;
-    }
-}
-
-struct HardwareWithDeviceType {
-    ty: u32,
-    config: Hardware,
-}
-
-impl HardwareWithDeviceType {
-    pub fn new(ty: u32, config: Hardware) -> Self {
-        Self { ty, config }
-    }
-}
-
-impl Event for HardwareWithDeviceType {
-    fn update_attrs(self, attr: &mut perf_event_open_sys::bindings::perf_event_attr) {
-        attr.type_ = perf_event_open_sys::bindings::PERF_TYPE_HARDWARE;
-        attr.config = <Hardware as Into<u64>>::into(self.config) | ((self.ty as u64) << 32);
-    }
-}
-
-pub struct LinuxPerfCounter(perf_event::Counter);
 
 pub mod constants {
     cfg_if::cfg_if! {
@@ -78,32 +38,14 @@ pub mod constants {
             pub const INTEL_MONT_BR_INST_RETIRED_COND_TAKEN: u64 = 0xfec4;
         }
         else if #[cfg(target_arch = "aarch64")] {
-            pub const ARMV8_CORTEX_A55: &'static str = "armv8_cortex_a55";
-            pub const ARMV8_CORTEX_A76: &'static str = "armv8_cortex_a76";
             pub const ARM_BR_RETIRED: &'static str = "br_retired";
             pub const ARM_EXC_TAKEN: &'static str = "exc_taken";
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    Pid(Pid),
-    Cpu(usize),
-}
 
-fn dynamic_event(pmu: impl AsRef<Path>, event: impl AsRef<Path>) -> std::io::Result<Dynamic> {
-    let mut builder = DynamicBuilder::new(pmu)?;
-
-    builder.event(event)?;
-    let params: Vec<String> = builder.params().map(str::to_string).collect();
-
-    for param in params {
-        builder.field(&param, 0)?;
-    }
-
-    Ok(builder.build()?)
-}
+pub struct LinuxPerfCounter(perf_event::Counter);
 
 impl LinuxPerfCounter {
     pub fn new<E>(
@@ -297,13 +239,13 @@ impl LinuxPerfCounter {
             #[cfg(target_arch = "aarch64")]
             (PmuType::Armv8CortexA55, BranchCounterType::AllExclFar) => Box::new(SubPerfCounter(
                 Self::new(
-                    dynamic_event(constants::ARMV8_CORTEX_A55, constants::ARM_BR_RETIRED)?,
+                    Dynamic::new(constants::ARMV8_CORTEX_A55, constants::ARM_BR_RETIRED)?,
                     target,
                     true,
                     irq_period.map(|period| (period, SampleSkid::RequestZero)),
                 )?,
                 Self::new(
-                    dynamic_event(constants::ARMV8_CORTEX_A55, constants::ARM_EXC_TAKEN)?,
+                    Dynamic::new(constants::ARMV8_CORTEX_A55, constants::ARM_EXC_TAKEN)?,
                     target,
                     true,
                     None,
@@ -311,7 +253,7 @@ impl LinuxPerfCounter {
             )),
             #[cfg(target_arch = "aarch64")]
             (PmuType::Armv8CortexA76, BranchCounterType::AllExclFar) => Box::new(Self::new(
-                dynamic_event(constants::ARMV8_CORTEX_A76, constants::ARM_BR_RETIRED)?,
+                Dynamic::new(constants::ARMV8_CORTEX_A76, constants::ARM_BR_RETIRED)?,
                 target,
                 true,
                 None,
@@ -341,12 +283,10 @@ impl PerfCounter for LinuxPerfCounter {
     }
 }
 
-impl PerfCounterCheckInterrupt for LinuxPerfCounter {
+impl PerfCounterWithInterrupt for LinuxPerfCounter {
     fn is_interrupt(&self, signal: Signal, process: &Process) -> Result<bool> {
         Ok(
             signal == Signal::SIGTRAP && process.get_siginfo()?.si_code == 0x6, /* TRAP_PERF */
         )
     }
 }
-
-impl PerfCounterWithInterrupt for LinuxPerfCounter {}

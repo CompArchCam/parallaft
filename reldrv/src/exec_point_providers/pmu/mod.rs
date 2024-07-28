@@ -32,8 +32,12 @@ use crate::{
     types::{
         execution_point::ExecutionPoint,
         perf_counter::{
-            self, linux::LinuxPerfCounter, pmu_type::PmuType, BranchCounterType,
-            PerfCounterCheckInterrupt, PerfCounterWithInterrupt,
+            cpu_info::CpuModel,
+            symbolic_events::{
+                expr::{lookup_cpu_model_and_pmu_name_from_cpu_set, Target},
+                BranchCounter, BranchCounterWithInterrupt, BranchType, Breakpoint,
+            },
+            PerfCounter, PerfCounterWithInterrupt,
         },
         process_id::{Checker, InferiorRefMut, Main},
         segment::SegmentId,
@@ -46,7 +50,7 @@ use crate::signal_handlers::cpuid::{self, CpuidOverride};
 use super::ExecutionPointProvider;
 
 pub struct SegmentInfo {
-    checker_branch_counter: Option<Box<dyn PerfCounterWithInterrupt + Send>>,
+    checker_branch_counter: Option<BranchCounter>,
     active_exec_point: Option<(BranchCounterBasedExecutionPoint, ExecutionPointReplayState)>,
     upcoming_exec_points: LinkedList<BranchCounterBasedExecutionPoint>,
 }
@@ -62,10 +66,10 @@ impl Debug for SegmentInfo {
 
 enum ExecutionPointReplayState {
     CountingBranches {
-        branch_irq: Box<dyn PerfCounterWithInterrupt + Send>,
+        branch_irq: BranchCounterWithInterrupt,
     },
     Stepping {
-        breakpoint: Box<dyn PerfCounterCheckInterrupt + Send>,
+        breakpoint: Breakpoint,
     },
 }
 
@@ -78,36 +82,38 @@ impl Debug for ExecutionPointReplayState {
     }
 }
 
-pub struct PerfCounterBasedExecutionPointProvider {
+pub struct PerfCounterBasedExecutionPointProvider<'a> {
     segment_info_map: Mutex<HashMap<SegmentId, Arc<Mutex<SegmentInfo>>>>,
-    main_branch_counter: Mutex<Option<Box<dyn PerfCounterWithInterrupt + Send>>>,
-    main_pmu_type: PmuType,
-    checker_pmu_type: PmuType,
+    main_branch_counter: Mutex<Option<BranchCounter>>,
+    main_cpu_set: &'a [usize],
+    checker_cpu_set: &'a [usize],
+    main_cpu_model: CpuModel,
+    checker_cpu_model: CpuModel,
     is_test: bool,
     checkpoint_count: AtomicU64,
-    branch_counter_type: BranchCounterType,
+    branch_counter_type: BranchType,
 }
 
-impl PerfCounterBasedExecutionPointProvider {
+impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
     pub(self) const SIGVAL_CHECKER_PREPARE_EXEC_POINT: usize = 0xeb5aadf82a35bd9f;
 
     pub fn new(
-        main_cpu_set: &[usize],
-        checker_cpu_set: &[usize],
-        branch_counter_type: BranchCounterType,
+        main_cpu_set: &'a [usize],
+        checker_cpu_set: &'a [usize],
+        branch_counter_type: BranchType,
         is_test: bool,
     ) -> Self {
-        let main_pmu_type = PmuType::detect(*main_cpu_set.first().unwrap_or(&0));
-        let checker_pmu_type = PmuType::detect(*checker_cpu_set.first().unwrap_or(&0));
-
-        info!("Detected PMU type for main = {:?}", main_pmu_type);
-        info!("Detected PMU type for checker = {:?}", checker_pmu_type);
-
         Self {
             main_branch_counter: Mutex::new(None),
             segment_info_map: Mutex::new(HashMap::new()),
-            main_pmu_type,
-            checker_pmu_type,
+            main_cpu_set,
+            checker_cpu_set,
+            main_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(main_cpu_set)
+                .unwrap()
+                .0,
+            checker_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(checker_cpu_set)
+                .unwrap()
+                .0,
             is_test,
             checkpoint_count: AtomicU64::new(0),
             branch_counter_type,
@@ -118,12 +124,9 @@ impl PerfCounterBasedExecutionPointProvider {
     pub fn get_cpuid_overrides(&self) -> Vec<CpuidOverride> {
         let mut results = Vec::new();
 
-        if self.main_pmu_type != self.checker_pmu_type
-            && (matches!(self.main_pmu_type, PmuType::IntelMont { in_hybrid: true })
-                || matches!(
-                    self.checker_pmu_type,
-                    PmuType::IntelMont { in_hybrid: true }
-                ))
+        if self.main_cpu_model != self.checker_cpu_model
+            && (matches!(self.main_cpu_model, PmuType::IntelMont)
+                || matches!(self.checker_cpu_model, PmuType::IntelMont))
         {
             // Quirk: Workaround Intel Gracemont microarchitecture overcounting xsave/xsavec instructions as conditional branch
             results.extend(cpuid::overrides::NO_XSAVE);
@@ -135,7 +138,7 @@ impl PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider {
+impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_checkpoint_created_pre(&self, _main: &mut Main) -> Result<()> {
         let mut t = self.main_branch_counter.lock();
         let counter = t.as_mut().unwrap();
@@ -162,13 +165,12 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider {
 
         let mut segment_info = segment_info_map.get(&checker.segment.nr).unwrap().lock();
 
-        segment_info.checker_branch_counter =
-            Some(LinuxPerfCounter::count_branches_with_interrupt(
-                self.checker_pmu_type,
-                self.branch_counter_type,
-                perf_counter::linux::Target::Pid(checker.process.pid),
-                None,
-            )?);
+        segment_info.checker_branch_counter = Some(BranchCounter::new(
+            self.branch_counter_type,
+            Target::Pid(checker.process.pid),
+            true,
+            self.checker_cpu_set,
+        )?);
 
         self.activate_first_exec_point_in_queue(checker, &mut segment_info)?;
 
@@ -181,7 +183,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider {
+impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
@@ -190,18 +192,18 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider {
         's: 'disp,
         'disp: 'scope,
     {
-        *self.main_branch_counter.lock() = Some(LinuxPerfCounter::count_branches_with_interrupt(
-            self.main_pmu_type,
+        *self.main_branch_counter.lock() = Some(BranchCounter::new(
             self.branch_counter_type,
-            perf_counter::linux::Target::Pid(context.process.pid),
-            None,
+            Target::Pid(context.process.pid),
+            true,
+            self.main_cpu_set,
         )?);
 
         Ok(())
     }
 }
 
-impl PerfCounterBasedExecutionPointProvider {
+impl PerfCounterBasedExecutionPointProvider<'_> {
     fn activate_first_exec_point_in_queue(
         &self,
         checker: &mut Checker,
@@ -226,27 +228,27 @@ impl PerfCounterBasedExecutionPointProvider {
             let initial_state;
 
             if exec_point.branch_counter - branch_count_curr
-                <= self.checker_pmu_type.max_skid() + self.checker_pmu_type.min_irq_period()
+                <= self.checker_cpu_model.max_skid() + self.checker_cpu_model.min_irq_period()
             {
                 debug!("{checker} ... using breakpoint");
                 initial_state = ExecutionPointReplayState::Stepping {
-                    breakpoint: Box::new(LinuxPerfCounter::interrupt_on_breakpoint(
-                        perf_counter::linux::Target::Pid(checker.process.pid),
+                    breakpoint: Breakpoint::new(
+                        checker.process.pid,
                         exec_point.instruction_pointer,
-                    )?),
+                    )?,
                 };
             } else {
                 debug!("{checker} ... using branch count overflow interrupt");
                 initial_state = ExecutionPointReplayState::CountingBranches {
-                    branch_irq: LinuxPerfCounter::count_branches_with_interrupt(
-                        self.checker_pmu_type,
+                    branch_irq: BranchCounterWithInterrupt::new(
                         self.branch_counter_type,
-                        perf_counter::linux::Target::Pid(checker.process.pid),
-                        Some(
-                            exec_point.branch_counter
-                                - branch_count_curr
-                                - self.checker_pmu_type.max_skid(),
-                        ),
+                        checker.process.pid,
+                        true,
+                        self.checker_cpu_set,
+                        exec_point.branch_counter
+                            - branch_count_curr
+                            - self.checker_cpu_model.max_skid(),
+                        None,
                     )?,
                 };
             }
@@ -257,7 +259,7 @@ impl PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl SignalHandler for PerfCounterBasedExecutionPointProvider {
+impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
@@ -299,27 +301,25 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider {
                     if let Some((exec_point, mut state)) = segment_info.active_exec_point.take() {
                         let mut replay_done = false;
 
+                        let sig_info = checker.process.get_siginfo()?;
+
                         match &state {
                             ExecutionPointReplayState::CountingBranches { branch_irq } => {
-                                if branch_irq.is_interrupt(signal, &checker.process.as_ref())? {
+                                if branch_irq.is_interrupt(&sig_info)? {
                                     debug!("{checker} Branch count interrupt fired, setting up breakpoint");
 
                                     state = ExecutionPointReplayState::Stepping {
-                                        breakpoint: Box::new(
-                                            LinuxPerfCounter::interrupt_on_breakpoint(
-                                                perf_counter::linux::Target::Pid(
-                                                    checker.process.pid,
-                                                ),
-                                                exec_point.instruction_pointer,
-                                            )?,
-                                        ),
+                                        breakpoint: Breakpoint::new(
+                                            checker.process.pid,
+                                            exec_point.instruction_pointer,
+                                        )?,
                                     };
 
                                     handled = true;
                                 }
                             }
                             ExecutionPointReplayState::Stepping { breakpoint } => {
-                                if breakpoint.is_interrupt(signal, &checker.process.as_ref())? {
+                                if breakpoint.is_interrupt(&sig_info)? {
                                     debug!("{checker} Breakpoint hit");
 
                                     debug_assert_eq!(
@@ -395,7 +395,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl StatisticsProvider for PerfCounterBasedExecutionPointProvider {
+impl StatisticsProvider for PerfCounterBasedExecutionPointProvider<'_> {
     fn class_name(&self) -> &'static str {
         "pmu_segmentor"
     }
@@ -405,7 +405,7 @@ impl StatisticsProvider for PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider {
+impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
     fn get_current_execution_point(
         &self,
         child: &mut InferiorRefMut,
@@ -444,7 +444,7 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider {
+impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     fn fini<'s, 'scope, 'env>(
         &'s self,
         _scope: &'scope std::thread::Scope<'scope, 'env>,
@@ -460,7 +460,7 @@ impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider {
     }
 }
 
-impl Module for PerfCounterBasedExecutionPointProvider {
+impl Module for PerfCounterBasedExecutionPointProvider<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,

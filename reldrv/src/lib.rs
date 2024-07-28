@@ -29,7 +29,6 @@ use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
 use dispatcher::Module;
-// use inferior_rtlib::pmu::BranchCounterType;
 
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
@@ -49,7 +48,7 @@ use statistics::perf::CounterKind;
 
 use clap::ValueEnum;
 use types::exit_reason::ExitReason;
-use types::perf_counter::BranchCounterType;
+use types::perf_counter::symbolic_events::BranchType;
 
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
 #[cfg(target_arch = "x86_64")]
@@ -150,7 +149,7 @@ pub struct RelShellOptions {
 
     // enable automatic segmentation based on precise PMU interrupts
     pub pmu_segmentation: bool, // TODO: change this name
-    pub pmu_segmentation_branch_type: BranchCounterType,
+    pub pmu_segmentation_branch_type: BranchType,
 
     // dirty page tracker backend to use
     pub dirty_page_tracker: DirtyPageAddressTrackerType,
