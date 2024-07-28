@@ -1,5 +1,6 @@
 use std::{arch::asm, sync::atomic::AtomicU64};
 
+use log::info;
 use reldrv::{
     dispatcher::Module,
     error::Result,
@@ -63,6 +64,8 @@ impl StandardSyscallHandler for PmcTester {
                 .downcast_ref::<BranchCounterBasedExecutionPoint>()
                 .unwrap();
 
+            info!("Current exec point: {:?}", exec_point);
+
             let count_expected;
 
             match self.test_mode {
@@ -117,11 +120,11 @@ impl Module for PmcTester {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[test]
 fn pmc_monotonicity() {
     trace_w_options::<()>(
         || {
+            #[cfg(target_arch = "x86_64")]
             unsafe {
                 asm!(
                     "
@@ -144,6 +147,28 @@ fn pmc_monotonicity() {
                 )
             };
 
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                asm!(
+                    "
+                    mov w8, 0xff77 // checkpoint_take
+                    svc #0
+                    mov x9, 100
+                2:
+                    mov w8, 172    // getpid
+                    svc #0
+                    subs x9, x9, 1
+                    cbnz x9, 2b
+
+                    mov w8, 0xff78 // checkpoint_fini
+                    svc #0
+                    ",
+                    out("w9") _,
+                    out("w8") _,
+                    out("x0") _,
+                )
+            }
+
             Ok(())
         },
         RelShellOptionsBuilder::test_serial_default()
@@ -160,11 +185,11 @@ fn pmc_monotonicity() {
     .expect()
 }
 
-#[cfg(target_arch = "x86_64")]
 #[test]
 fn pmc_consistency() {
     trace_w_options::<()>(
         || {
+            #[cfg(target_arch = "x86_64")]
             unsafe {
                 asm!(
                     "
@@ -189,6 +214,31 @@ fn pmc_consistency() {
                     out("rax") _,
                 )
             };
+
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                asm!(
+                    "
+                    mov w8, 0xff77 // checkpoint_take
+                    svc #0
+                    mov x9, 100
+                    b 2f
+                2:
+                    mov w8, 172    // getpid
+                    svc #0
+                    mov w8, 0xff77 // checkpoint_take
+                    svc #0
+                    subs x9, x9, 1
+                    cbnz x9, 2b
+
+                    mov w8, 0xff78 // checkpoint_fini
+                    svc #0
+                    ",
+                    out("w9") _,
+                    out("w8") _,
+                    out("x0") _,
+                )
+            }
 
             Ok(())
         },
