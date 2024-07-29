@@ -2,7 +2,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::segment::SegmentEventHandler,
-    process::Process,
+    process::{dirty_pages::PageFlag, Process},
     types::process_id::{Checker, InferiorId, Main},
 };
 
@@ -33,10 +33,10 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 .unwrap()
                 .process
                 .lock()
-                .get_dirty_pages()?,
+                .get_dirty_pages(PageFlag::SoftDirty)?,
             InferiorId::Checker(segment) => {
                 let pid = segment.checker_status.lock().pid().unwrap();
-                Process::new(pid).get_dirty_pages()?
+                Process::new(pid).get_dirty_pages(PageFlag::SoftDirty)?
             }
         };
 
@@ -46,15 +46,6 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 contains_writable_only: true,
             },
         })
-    }
-
-    fn nr_dirty_pages(&self, inferior_id: InferiorId) -> Result<usize> {
-        let pid = match inferior_id {
-            InferiorId::Main(segment) => segment.unwrap().status.lock().pid().unwrap(),
-            InferiorId::Checker(segment) => segment.checker_status.lock().pid().unwrap(),
-        };
-
-        Ok(Process::new(pid).memory_stats()?.dirty_pages)
     }
 }
 

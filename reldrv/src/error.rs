@@ -53,6 +53,8 @@ pub enum Error {
 
     #[error("PMU error: `{0}`")]
     PmuError(#[from] PmuError),
+    #[error("Userfaultfd error: `{0}`")]
+    Userfaultfd(Arc<userfaultfd::Error>),
 }
 
 impl From<std::io::Error> for Error {
@@ -64,6 +66,12 @@ impl From<std::io::Error> for Error {
 impl From<ProcError> for Error {
     fn from(value: ProcError) -> Self {
         Self::Proc(Arc::new(value))
+    }
+}
+
+impl From<userfaultfd::Error> for Error {
+    fn from(value: userfaultfd::Error) -> Self {
+        Self::Userfaultfd(Arc::new(value))
     }
 }
 

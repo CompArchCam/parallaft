@@ -103,8 +103,14 @@ pub fn page_diff(
     Ok(true)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageFlag {
+    SoftDirty,
+    UffdWp,
+}
+
 impl Process {
-    pub fn get_dirty_pages(&self) -> Result<Vec<usize>> {
+    pub fn get_dirty_pages(&self, page_flag: PageFlag) -> Result<Vec<usize>> {
         let maps = self.procfs()?.maps()?;
         let page_size = procfs::page_size();
         let mut pagemap = self.procfs()?.pagemap()?;
@@ -132,12 +138,22 @@ impl Process {
                 .zip(range_info)
             {
                 let is_dirty = match pte {
-                    procfs::process::PageInfo::MemoryPage(flags) => {
-                        flags.contains(procfs::process::MemoryPageFlags::SOFT_DIRTY)
-                    }
-                    procfs::process::PageInfo::SwapPage(flags) => {
-                        flags.contains(procfs::process::SwapPageFlags::SOFT_DIRTY)
-                    }
+                    procfs::process::PageInfo::MemoryPage(flags) => match page_flag {
+                        PageFlag::SoftDirty => {
+                            flags.contains(procfs::process::MemoryPageFlags::SOFT_DIRTY)
+                        }
+                        PageFlag::UffdWp => {
+                            !flags.contains(procfs::process::MemoryPageFlags::UFFD_WP)
+                        }
+                    },
+                    procfs::process::PageInfo::SwapPage(flags) => match page_flag {
+                        PageFlag::SoftDirty => {
+                            flags.contains(procfs::process::SwapPageFlags::SOFT_DIRTY)
+                        }
+                        PageFlag::UffdWp => {
+                            !flags.contains(procfs::process::SwapPageFlags::UFFD_WP)
+                        }
+                    },
                 };
 
                 if is_dirty {

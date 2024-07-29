@@ -144,7 +144,7 @@ struct CliArgs {
     pmu_segmentation_branch_type: BranchType,
 
     /// Dirty page tracker to use
-    #[arg(long, default_value = "soft-dirty")]
+    #[arg(long, default_value_t = Default::default())]
     dirty_page_tracker: DirtyPageAddressTrackerType,
 
     /// Enable on-demand fork (ODF)

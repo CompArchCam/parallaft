@@ -7,7 +7,7 @@ edition = "2021"
 clap = { version = "4.1.1", features = ["derive"] }
 log = "0.4.17"
 nix = { git = "https://github.com/mbyzhang/nix.git", branch = "ptrace-get-rseq-configuration" }
-procfs = { git = "https://github.com/mbyzhang/procfs.git" }
+procfs = { git = "https://github.com/mbyzhang/procfs.git", rev = "3a457564213c9b3402c9bc5042742d3ec0dd5d3e" }
 pretty-hex = "0.3.0"
 reverie-syscalls = { path = "../reverie-syscalls" }
 syscalls = "*"
@@ -33,6 +33,7 @@ path_macro = "1.0.0"
 try-insert-ext = "0.1.0"
 cfg-if = "1.0.0"
 rand = "0.8.5"
+userfaultfd = { git = "https://github.com/mbyzhang/userfaultfd-rs.git", features = ["linux5_7"], rev = "00335e2ba375061232beadfe8b06ccb1a4da14d7" }
 
 [dev-dependencies]
 tempfile = "3"

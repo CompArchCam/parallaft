@@ -23,11 +23,13 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use cfg_if::cfg_if;
 use debug_utils::core_dumper::CoreDumper;
 use debug_utils::exec_point_dumper::ExecutionPointDumper;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
+use dirty_page_trackers::uffd::UffdDirtyPageTracker;
 use dispatcher::Module;
 
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
@@ -91,11 +93,35 @@ use crate::exec_point_providers::pmu::PerfCounterBasedExecutionPointProvider;
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DirtyPageAddressTrackerType {
-    #[default]
     SoftDirty,
     Fpt,
+    Uffd,
+}
+
+impl ToString for DirtyPageAddressTrackerType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::SoftDirty => "soft-dirty",
+            Self::Fpt => "fpt",
+            Self::Uffd => "uffd",
+        }
+        .to_string()
+    }
+}
+
+impl Default for DirtyPageAddressTrackerType {
+    fn default() -> Self {
+        cfg_if! {
+            if #[cfg(target_arch = "aarch64")] {
+                Self::Uffd
+            }
+            else {
+                Self::SoftDirty
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -375,6 +401,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         }
         DirtyPageAddressTrackerType::Fpt => {
             disp.register_module(FptDirtyPageTracker::new());
+        }
+        DirtyPageAddressTrackerType::Uffd => {
+            disp.register_module(UffdDirtyPageTracker::new(options.dont_clear_soft_dirty));
         }
     }
 
