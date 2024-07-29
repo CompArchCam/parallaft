@@ -1,25 +1,30 @@
+// TODO: track new memory mappings
+
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
     sync::Arc,
-    usize,
 };
 
 use log::debug;
 use parking_lot::Mutex;
-use path_macro::path;
+use pidfd_getfd::{GetFdFlags, PidFdExt};
+use procfs::process::{MMPermissions, MMapPath, MemoryMap};
+use reverie_syscalls::Syscall;
 use syscalls::syscall_args;
+use try_insert_ext::OptionInsertExt;
 use userfaultfd::{RegisterMode, Uffd};
 
 use crate::{
     dispatcher::Module,
     error::Result,
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
+        HandlerContext,
     },
     process::{dirty_pages::PageFlag, Process},
+    syscall_handlers::is_execve_ok,
     types::{
         process_id::{Checker, InferiorId, Main},
         segment::{Segment, SegmentId},
@@ -34,19 +39,21 @@ fn create_uffd(process: &Process) -> Result<Uffd> {
 
     let remote_fd = process.syscall_direct(
         syscalls::Sysno::userfaultfd,
-        syscall_args!(0),
+        syscall_args!(nix::libc::O_CLOEXEC as _),
         true,
         true,
-        false,
+        true,
     )?;
 
     if remote_fd < 0 {
         return Err(std::io::Error::from_raw_os_error(-remote_fd as _).into());
     }
 
-    let fd = OpenOptions::new().read(true).write(true).open(path!(
-        "/proc" / process.pid.to_string() / "fd" / remote_fd.to_string()
-    ))?;
+    debug!("UFFD created with remote fd {}", remote_fd);
+
+    let pfd = unsafe { pidfd::PidFd::open(process.pid.as_raw(), 0)? };
+
+    let fd = pfd.get_file(remote_fd as _, GetFdFlags::empty())?;
 
     let mut api = raw::uffdio_api {
         api: raw::UFFD_API,
@@ -59,6 +66,42 @@ fn create_uffd(process: &Process) -> Result<Uffd> {
 
     let uffd = unsafe { Uffd::from_raw_fd(fd.into_raw_fd()) };
     Ok(uffd)
+}
+
+fn for_each_writable_map(process: &Process, f: impl Fn(&MemoryMap) -> Result<()>) -> Result<()> {
+    let maps = process.procfs()?.maps()?;
+
+    for map in maps {
+        if map.perms.contains(MMPermissions::WRITE)
+            && ![MMapPath::Vdso, MMapPath::Vsyscall, MMapPath::Vvar].contains(&map.pathname)
+        {
+            f(&map)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn register_uffd(uffd: &Uffd, process: &Process) -> Result<()> {
+    for_each_writable_map(process, |map| {
+        uffd.register_with_mode(
+            map.address.0 as _,
+            (map.address.1 - map.address.0) as _,
+            RegisterMode::WRITE_PROTECT,
+        )
+        .expect("UFFD registration failed");
+
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn write_protect_uffd(uffd: &Uffd, process: &Process) -> Result<()> {
+    for_each_writable_map(process, |map| {
+        uffd.write_protect(map.address.0 as _, (map.address.1 - map.address.0) as _)
+            .expect("UFFD WP failed");
+        Ok(())
+    })
 }
 
 pub struct UffdDirtyPageTracker {
@@ -106,43 +149,22 @@ impl DirtyPageAddressTracker for UffdDirtyPageTracker {
     }
 }
 
-impl ProcessLifetimeHook for UffdDirtyPageTracker {
-    fn handle_main_init<'s, 'scope, 'disp>(
-        &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
-    ) -> Result<()>
-    where
-        's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
-    {
-        let uffd = create_uffd(&context.process)?;
-        debug!("Registering UFFD for process {}", context.process.pid);
-        uffd.register_with_mode(0 as _, usize::MAX, RegisterMode::WRITE_PROTECT)?;
-
-        *self.main_uffd.lock() = Some(uffd);
-
-        Ok(())
-    }
-}
-
 impl SegmentEventHandler for UffdDirtyPageTracker {
-    fn handle_checkpoint_created_pre(&self, _main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
         if !self.dont_clear_dirty {
-            self.main_uffd
-                .lock()
-                .as_ref()
-                .unwrap()
-                .write_protect(0 as _, usize::MAX)?;
+            let mut uffd_mg = self.main_uffd.lock();
+            let uffd = uffd_mg.get_or_try_insert_with(|| create_uffd(&main.process))?;
+            register_uffd(uffd, &main.process)?;
+            write_protect_uffd(uffd, &main.process)?;
         }
         Ok(())
     }
 
     fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
         let uffd = create_uffd(&checker.process)?;
-        uffd.register_with_mode(0 as _, usize::MAX, RegisterMode::WRITE_PROTECT)?;
+        register_uffd(&uffd, &checker.process)?;
         if !self.dont_clear_dirty {
-            uffd.write_protect(0 as _, usize::MAX)?;
+            write_protect_uffd(&uffd, &checker.process)?;
         }
         self.checker_uffds.lock().insert(checker.segment.nr, uffd);
 
@@ -162,6 +184,22 @@ impl SegmentEventHandler for UffdDirtyPageTracker {
     }
 }
 
+impl StandardSyscallHandler for UffdDirtyPageTracker {
+    fn handle_standard_syscall_exit(
+        &self,
+        ret_val: isize,
+        syscall: &Syscall,
+        _context: HandlerContext,
+    ) -> Result<SyscallHandlerExitAction> {
+        if is_execve_ok(syscall, ret_val) {
+            *self.main_uffd.lock() = None;
+        }
+        Ok(SyscallHandlerExitAction::NextHandler)
+    }
+
+    // TODO: handle mmap/mremap
+}
+
 impl Module for UffdDirtyPageTracker {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut crate::dispatcher::Subscribers<'d>)
     where
@@ -169,6 +207,6 @@ impl Module for UffdDirtyPageTracker {
     {
         subs.set_dirty_page_tracker(self);
         subs.install_segment_event_handler(self);
-        subs.install_process_lifetime_hook(self);
+        subs.install_standard_syscall_handler(self);
     }
 }

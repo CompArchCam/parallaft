@@ -34,6 +34,8 @@ try-insert-ext = "0.1.0"
 cfg-if = "1.0.0"
 rand = "0.8.5"
 userfaultfd = { git = "https://github.com/mbyzhang/userfaultfd-rs.git", features = ["linux5_7"], rev = "00335e2ba375061232beadfe8b06ccb1a4da14d7" }
+pidfd_getfd = "0.2.2"
+pidfd = "0.2.4"
 
 [dev-dependencies]
 tempfile = "3"

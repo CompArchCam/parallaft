@@ -130,8 +130,13 @@ impl Process {
                 continue;
             }
 
+            if page_flag == PageFlag::UffdWp && !map.perms.contains(MMPermissions::WRITE) {
+                continue;
+            }
+
             let range = (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
             let range_info = pagemap.get_range_info(range)?;
+            let mut dirty_page_count: usize = 0;
 
             for (loc, pte) in (map.address.0..map.address.1)
                 .step_by(page_size as _)
@@ -159,8 +164,10 @@ impl Process {
                 if is_dirty {
                     trace!("Dirty page: {:?}", loc as *const u8);
                     dirty_pages_it.push(loc as _);
+                    dirty_page_count += 1;
                 }
             }
+            debug!("{} dirty pages", dirty_page_count);
         }
 
         Ok(dirty_pages_it)

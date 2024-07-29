@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 
-use log::{error, info};
+use log::{debug, error, info};
 use nix::unistd::Pid;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
@@ -223,6 +223,8 @@ impl Segment {
             dpa_merged = filter_writable_addresses(dpa_merged, &writable_ranges);
         }
 
+        debug!("Comparing {} dirty pages", dpa_merged.len());
+
         if !reference_process.borrow_with(|reference_borrowed| {
             page_diff(checker_process, (*reference_borrowed).as_ref(), &dpa_merged)
         })?? {
@@ -321,6 +323,14 @@ impl Segment {
             }
 
             info!("{checker} Comparing memory");
+            debug!(
+                "Main dirty pages: {}",
+                dpa_main.addresses.as_ref().as_ref().len()
+            );
+            debug!(
+                "Checker dirty pages: {}",
+                dpa_checker.addresses.as_ref().as_ref().len()
+            );
             let result = self.compare_memory(
                 &dpa_main,
                 &dpa_checker,
