@@ -127,8 +127,8 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
         let mut results = Vec::new();
 
         if self.main_cpu_model != self.checker_cpu_model
-            && (matches!(self.main_cpu_model, PmuType::IntelMont)
-                || matches!(self.checker_cpu_model, PmuType::IntelMont))
+            && (matches!(self.main_cpu_model, CpuModel::IntelMont)
+                || matches!(self.checker_cpu_model, CpuModel::IntelMont))
         {
             // Quirk: Workaround Intel Gracemont microarchitecture overcounting xsave/xsavec instructions as conditional branch
             results.extend(cpuid::overrides::NO_XSAVE);

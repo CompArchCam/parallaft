@@ -4,7 +4,7 @@ use perf_event::SampleSkid;
 #[cfg(target_arch = "x86_64")]
 mod x86_64 {
     #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-    enum IntelCoreType {
+    pub enum IntelCoreType {
         Atom,
         Core,
         Other,
@@ -49,7 +49,7 @@ impl CpuModel {
         };
         use scopeguard::defer;
 
-        use self::x86_64::CoreType;
+        use self::x86_64::IntelCoreType;
 
         let pid_self = Pid::from_raw(0);
         let mut cpu_set = CpuSet::new();
