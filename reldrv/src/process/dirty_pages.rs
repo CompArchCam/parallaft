@@ -13,6 +13,7 @@ use procfs::{
     KPageCount,
 };
 use reverie_syscalls::MemoryAccess;
+use try_insert_ext::OptionInsertExt;
 
 use crate::error::Result;
 use crate::process::Process;
@@ -145,7 +146,7 @@ impl Process {
         let mut pagemap = self.procfs()?.pagemap()?;
         let mut dirty_pages_it: Vec<usize> = Vec::new();
 
-        let mut kpagecount = KPageCount::new()?;
+        let mut kpagecount = None;
 
         debug!("Page map for pid {}", self.pid);
 
@@ -189,7 +190,10 @@ impl Process {
                                     if pfn.0 == 0 {
                                         panic!("Unexpected PFN, check your permissions");
                                     }
-                                    kpagecount.get_count_at_pfn(pfn)? == 1
+                                    kpagecount
+                                        .get_or_try_insert_with(|| KPageCount::new())?
+                                        .get_count_at_pfn(pfn)?
+                                        == 1
                                 }
                                 PageInfo::SwapPage(_) => {
                                     // we don't know whether the page is dirty or not
