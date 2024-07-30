@@ -8,7 +8,10 @@ use std::{
 use log::{debug, info, trace};
 
 use pretty_hex::PrettyHex;
-use procfs::process::{MMPermissions, MMapPath};
+use procfs::{
+    process::{MMPermissions, MMapPath, MemoryPageFlags, PageInfo, SwapPageFlags},
+    KPageCount,
+};
 use reverie_syscalls::MemoryAccess;
 
 use crate::error::Result;
@@ -107,68 +110,106 @@ pub fn page_diff(
 pub enum PageFlag {
     SoftDirty,
     UffdWp,
+    KPageCountEqualsOne,
 }
 
 impl Process {
-    pub fn get_dirty_pages(&self, page_flag: PageFlag) -> Result<Vec<usize>> {
-        let maps = self.procfs()?.maps()?;
+    pub fn for_each_writable_map<F>(
+        &self,
+        mut f: F,
+        extra_writable_ranges: &[Range<usize>],
+    ) -> Result<()>
+    where
+        F: FnMut(procfs::process::MemoryMap) -> Result<()>,
+    {
+        for map in self.procfs()?.maps()? {
+            if (map.perms.contains(MMPermissions::WRITE)
+                && ![MMapPath::Vdso, MMapPath::Vsyscall, MMapPath::Vvar].contains(&map.pathname))
+                || extra_writable_ranges
+                    .iter()
+                    .any(|r| (map.address.0 < r.end as u64 && map.address.1 > r.start as u64))
+            {
+                f(map)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get_dirty_pages(
+        &self,
+        page_flag: PageFlag,
+        extra_writable_ranges: &[Range<usize>],
+    ) -> Result<Vec<usize>> {
         let page_size = procfs::page_size();
         let mut pagemap = self.procfs()?.pagemap()?;
         let mut dirty_pages_it: Vec<usize> = Vec::new();
 
+        let mut kpagecount = KPageCount::new()?;
+
         debug!("Page map for pid {}", self.pid);
 
-        for map in maps {
-            debug!(
-                "Map: {:?}-{:?}: {:?} @ {:p}",
-                map.address.0 as *const u8,
-                map.address.1 as *const u8,
-                map.pathname,
-                map.offset as *const u8
-            );
-            if [MMapPath::Vdso, MMapPath::Vsyscall, MMapPath::Vvar].contains(&map.pathname) {
-                continue;
-            }
+        self.for_each_writable_map(
+            |map| {
+                debug!(
+                    "Map: {:?}-{:?}: {:?} @ {:p}",
+                    map.address.0 as *const u8,
+                    map.address.1 as *const u8,
+                    map.pathname,
+                    map.offset as *const u8
+                );
 
-            if page_flag == PageFlag::UffdWp && !map.perms.contains(MMPermissions::WRITE) {
-                continue;
-            }
+                let range =
+                    (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
+                let range_info = pagemap.get_range_info(range)?;
+                let mut dirty_page_count: usize = 0;
 
-            let range = (map.address.0 / page_size) as usize..(map.address.1 / page_size) as usize;
-            let range_info = pagemap.get_range_info(range)?;
-            let mut dirty_page_count: usize = 0;
+                for (loc, pte) in (map.address.0..map.address.1)
+                    .step_by(page_size as _)
+                    .zip(range_info)
+                {
+                    let is_dirty = match page_flag {
+                        PageFlag::SoftDirty => match pte {
+                            PageInfo::MemoryPage(flags) => {
+                                flags.contains(MemoryPageFlags::SOFT_DIRTY)
+                            }
+                            PageInfo::SwapPage(flags) => flags.contains(SwapPageFlags::SOFT_DIRTY),
+                        },
+                        PageFlag::UffdWp => !match pte {
+                            PageInfo::MemoryPage(flags) => flags.contains(MemoryPageFlags::UFFD_WP),
+                            PageInfo::SwapPage(flags) => flags.contains(SwapPageFlags::UFFD_WP),
+                        },
+                        PageFlag::KPageCountEqualsOne => {
+                            match pte {
+                                PageInfo::MemoryPage(flags) => {
+                                    if !flags.contains(MemoryPageFlags::PRESENT) {
+                                        continue;
+                                    }
+                                    let pfn = flags.get_page_frame_number();
+                                    if pfn.0 == 0 {
+                                        panic!("Unexpected PFN, check your permissions");
+                                    }
+                                    kpagecount.get_count_at_pfn(pfn)? == 1
+                                }
+                                PageInfo::SwapPage(_) => {
+                                    // we don't know whether the page is dirty or not
+                                    true
+                                }
+                            }
+                        }
+                    };
 
-            for (loc, pte) in (map.address.0..map.address.1)
-                .step_by(page_size as _)
-                .zip(range_info)
-            {
-                let is_dirty = match pte {
-                    procfs::process::PageInfo::MemoryPage(flags) => match page_flag {
-                        PageFlag::SoftDirty => {
-                            flags.contains(procfs::process::MemoryPageFlags::SOFT_DIRTY)
-                        }
-                        PageFlag::UffdWp => {
-                            !flags.contains(procfs::process::MemoryPageFlags::UFFD_WP)
-                        }
-                    },
-                    procfs::process::PageInfo::SwapPage(flags) => match page_flag {
-                        PageFlag::SoftDirty => {
-                            flags.contains(procfs::process::SwapPageFlags::SOFT_DIRTY)
-                        }
-                        PageFlag::UffdWp => {
-                            !flags.contains(procfs::process::SwapPageFlags::UFFD_WP)
-                        }
-                    },
-                };
-
-                if is_dirty {
-                    trace!("Dirty page: {:?}", loc as *const u8);
-                    dirty_pages_it.push(loc as _);
-                    dirty_page_count += 1;
+                    if is_dirty {
+                        trace!("Dirty page: {:?}", loc as *const u8);
+                        dirty_pages_it.push(loc as _);
+                        dirty_page_count += 1;
+                    }
                 }
-            }
-            debug!("{} dirty pages", dirty_page_count);
-        }
+                debug!("{} dirty pages", dirty_page_count);
+                Ok(())
+            },
+            extra_writable_ranges,
+        )?;
 
         Ok(dirty_pages_it)
     }

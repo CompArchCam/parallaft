@@ -44,6 +44,7 @@ impl DirtyPageAddressTracker for FptDirtyPageTracker {
     fn take_dirty_pages_addresses(
         &self,
         inferior_id: InferiorId,
+        _extra_writable_ranges: &[std::ops::Range<usize>],
     ) -> Result<DirtyPageAddressesWithFlags> {
         let mut record_map = self.record_map.lock();
 

@@ -29,6 +29,7 @@ use debug_utils::exec_point_dumper::ExecutionPointDumper;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
+use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
 use dirty_page_trackers::uffd::UffdDirtyPageTracker;
 use dispatcher::Module;
 
@@ -98,6 +99,7 @@ pub enum DirtyPageAddressTrackerType {
     SoftDirty,
     Fpt,
     Uffd,
+    KPageCount,
 }
 
 impl ToString for DirtyPageAddressTrackerType {
@@ -106,6 +108,7 @@ impl ToString for DirtyPageAddressTrackerType {
             Self::SoftDirty => "soft-dirty",
             Self::Fpt => "fpt",
             Self::Uffd => "uffd",
+            Self::KPageCount => "kpagecount",
         }
         .to_string()
     }
@@ -404,6 +407,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         }
         DirtyPageAddressTrackerType::Uffd => {
             disp.register_module(UffdDirtyPageTracker::new(options.dont_clear_soft_dirty));
+        }
+        DirtyPageAddressTrackerType::KPageCount => {
+            disp.register_module(KPageCountDirtyPageTracker::new());
         }
     }
 

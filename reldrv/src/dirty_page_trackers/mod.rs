@@ -1,4 +1,5 @@
 pub mod fpt;
+pub mod kpagecount;
 pub mod soft_dirty;
 pub mod uffd;
 
@@ -39,6 +40,7 @@ pub trait DirtyPageAddressTracker {
     fn take_dirty_pages_addresses(
         &self,
         inferior_id: InferiorId,
+        extra_writable_ranges: &[Range<usize>],
     ) -> Result<DirtyPageAddressesWithFlags>;
 
     fn nr_dirty_pages(&self, inferior_id: InferiorId) -> Result<usize> {

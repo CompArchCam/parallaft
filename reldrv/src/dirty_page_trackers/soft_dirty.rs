@@ -24,6 +24,7 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
     fn take_dirty_pages_addresses(
         &self,
         inferior_id: InferiorId,
+        extra_writable_ranges: &[std::ops::Range<usize>],
     ) -> Result<DirtyPageAddressesWithFlags> {
         let pages = match &inferior_id {
             InferiorId::Main(segment) => segment
@@ -33,10 +34,10 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 .unwrap()
                 .process
                 .lock()
-                .get_dirty_pages(PageFlag::SoftDirty)?,
+                .get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?,
             InferiorId::Checker(segment) => {
                 let pid = segment.checker_status.lock().pid().unwrap();
-                Process::new(pid).get_dirty_pages(PageFlag::SoftDirty)?
+                Process::new(pid).get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?
             }
         };
 

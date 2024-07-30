@@ -154,6 +154,7 @@ impl Segment {
     fn get_main_dirty_page_addresses_once(
         self: &Arc<Self>,
         dirty_page_tracker: &dyn DirtyPageAddressTracker,
+        extra_writable_ranges: &[Range<usize>],
     ) -> Result<Arc<DirtyPageAddressesWithFlags>> {
         let mut status = self.status.lock();
 
@@ -167,7 +168,10 @@ impl Segment {
                 None => {
                     let new_dirty_page_addresses = MutexGuard::unlocked(&mut status, || {
                         dirty_page_tracker
-                            .take_dirty_pages_addresses(InferiorId::Main(Some(self.clone())))
+                            .take_dirty_pages_addresses(
+                                InferiorId::Main(Some(self.clone())),
+                                extra_writable_ranges,
+                            )
                             .map(Arc::new)
                     })?;
 
@@ -300,10 +304,12 @@ impl Segment {
 
         self.wait_until_main_finished()?;
 
-        let dpa_main = self.get_main_dirty_page_addresses_once(dirty_page_tracker)?;
-        let dpa_checker = Arc::new(
-            dirty_page_tracker.take_dirty_pages_addresses(InferiorId::Checker(self.clone()))?,
-        );
+        let dpa_main =
+            self.get_main_dirty_page_addresses_once(dirty_page_tracker, extra_writable_ranges)?;
+        let dpa_checker = Arc::new(dirty_page_tracker.take_dirty_pages_addresses(
+            InferiorId::Checker(self.clone()),
+            extra_writable_ranges,
+        )?);
 
         let result = (|| {
             let checkpoint_end = self

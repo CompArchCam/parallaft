@@ -550,6 +550,7 @@ impl<'a, 'm> DirtyPageAddressTracker for Dispatcher<'a, 'm> {
         fn take_dirty_pages_addresses<'b>(
             &self,
             inferior_id: InferiorId,
+            extra_writable_ranges: &[Range<usize>],
         ) -> Result<DirtyPageAddressesWithFlags>
     );
 
