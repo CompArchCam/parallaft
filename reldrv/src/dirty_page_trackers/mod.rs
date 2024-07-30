@@ -1,5 +1,6 @@
 pub mod fpt;
 pub mod kpagecount;
+pub mod null;
 pub mod soft_dirty;
 #[cfg(feature = "dpt_uffd")]
 pub mod uffd;

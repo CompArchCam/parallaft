@@ -30,6 +30,7 @@ use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
 use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
+use dirty_page_trackers::null::NullDirtyPageTracker;
 #[cfg(feature = "dpt_uffd")]
 use dirty_page_trackers::uffd::UffdDirtyPageTracker;
 use dispatcher::Module;
@@ -102,6 +103,7 @@ pub enum DirtyPageAddressTrackerType {
     #[cfg(feature = "dpt_uffd")]
     Uffd,
     KPageCount,
+    None,
 }
 
 impl ToString for DirtyPageAddressTrackerType {
@@ -112,6 +114,7 @@ impl ToString for DirtyPageAddressTrackerType {
             #[cfg(feature = "dpt_uffd")]
             Self::Uffd => "uffd",
             Self::KPageCount => "kpagecount",
+            Self::None => "none",
         }
         .to_string()
     }
@@ -414,6 +417,9 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         }
         DirtyPageAddressTrackerType::KPageCount => {
             disp.register_module(KPageCountDirtyPageTracker::new());
+        }
+        DirtyPageAddressTrackerType::None => {
+            disp.register_module(NullDirtyPageTracker::new());
         }
     }
 
