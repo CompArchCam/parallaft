@@ -113,7 +113,7 @@ impl ToString for DirtyPageAddressTrackerType {
             Self::Fpt => "fpt",
             #[cfg(feature = "dpt_uffd")]
             Self::Uffd => "uffd",
-            Self::KPageCount => "kpagecount",
+            Self::KPageCount => "k-page-count",
             Self::None => "none",
         }
         .to_string()
