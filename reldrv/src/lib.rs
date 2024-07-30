@@ -30,6 +30,7 @@ use debug_utils::in_protection_asserter::InProtectionAsserter;
 use derivative::Derivative;
 use derive_builder::Builder;
 use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
+#[cfg(feature = "dpt_uffd")]
 use dirty_page_trackers::uffd::UffdDirtyPageTracker;
 use dispatcher::Module;
 
@@ -98,6 +99,7 @@ use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
 pub enum DirtyPageAddressTrackerType {
     SoftDirty,
     Fpt,
+    #[cfg(feature = "dpt_uffd")]
     Uffd,
     KPageCount,
 }
@@ -107,6 +109,7 @@ impl ToString for DirtyPageAddressTrackerType {
         match self {
             Self::SoftDirty => "soft-dirty",
             Self::Fpt => "fpt",
+            #[cfg(feature = "dpt_uffd")]
             Self::Uffd => "uffd",
             Self::KPageCount => "kpagecount",
         }
@@ -118,7 +121,7 @@ impl Default for DirtyPageAddressTrackerType {
     fn default() -> Self {
         cfg_if! {
             if #[cfg(target_arch = "aarch64")] {
-                Self::Uffd
+                Self::KPageCount
             }
             else {
                 Self::SoftDirty
@@ -405,6 +408,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         DirtyPageAddressTrackerType::Fpt => {
             disp.register_module(FptDirtyPageTracker::new());
         }
+        #[cfg(feature = "dpt_uffd")]
         DirtyPageAddressTrackerType::Uffd => {
             disp.register_module(UffdDirtyPageTracker::new(options.dont_clear_soft_dirty));
         }

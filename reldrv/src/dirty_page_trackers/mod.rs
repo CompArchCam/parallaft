@@ -1,6 +1,7 @@
 pub mod fpt;
 pub mod kpagecount;
 pub mod soft_dirty;
+#[cfg(feature = "dpt_uffd")]
 pub mod uffd;
 
 use std::{fmt::Debug, ops::Range};
