@@ -135,13 +135,17 @@ struct CliArgs {
     #[arg(long, use_value_delimiter = true)]
     enabled_perf_counters: Vec<CounterKind>,
 
-    /// Automatic segmentation based precise PMU interrupts. Conflicts with relrtlibs.
+    /// Enable execution point record and replay support.
     #[arg(short, long)]
-    pmu_segmentation: bool,
+    exec_point_replay: bool,
 
-    /// In PMU-based segmentation, type of branch to count.
+    /// Reference branch event to use for execution points.
     #[arg(long, default_value = "all-excl-far")]
-    pmu_segmentation_branch_type: BranchType,
+    exec_point_replay_branch_type: BranchType,
+
+    /// During replay of an execution point for a checker, always use breakpoints instead of branch count overflow events.
+    #[arg(long)]
+    exec_point_replay_checker_never_use_branch_count_overflow: bool,
 
     /// Dirty page tracker to use
     #[arg(long, default_value_t = Default::default())]
@@ -274,7 +278,7 @@ fn main() {
                 no_checker_exec: cli.dont_run_checker,
                 no_fork: cli.dont_fork,
                 ignore_miscmp: cli.ignore_check_errors,
-                enable_async_events: cli.pmu_segmentation,
+                enable_async_events: cli.exec_point_replay,
             },
             checkpoint_period: cli.checkpoint_period,
             max_nr_live_segments: cli.max_nr_live_segments,
@@ -296,11 +300,12 @@ fn main() {
                 })
             }),
             enabled_perf_counters: cli.enabled_perf_counters,
-            pmu_segmentation: cli.pmu_segmentation,
+            exec_point_replay: cli.exec_point_replay,
+            exec_point_replay_branch_type: cli.exec_point_replay_branch_type,
+            exec_point_replay_checker_never_use_branch_count_overflow: cli.exec_point_replay_checker_never_use_branch_count_overflow,
             dirty_page_tracker: cli.dirty_page_tracker,
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
-            pmu_segmentation_branch_type: cli.pmu_segmentation_branch_type,
             sample_memory_usage: cli.sample_memory_usage,
             memory_sample_includes_rt: cli.memory_sample_includes_rt,
             memory_sample_interval: cli.memory_sample_interval,

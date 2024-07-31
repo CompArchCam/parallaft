@@ -15,6 +15,7 @@ use log::{debug, error};
 
 use nix::sys::signal::Signal;
 use parking_lot::Mutex;
+use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Module, Subscribers},
@@ -24,18 +25,20 @@ use crate::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
+        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::registers::RegisterAccess,
+    process::{memory::instructions, registers::RegisterAccess, siginfo::SigInfoExt},
     statistics::StatisticsProvider,
     statistics_list,
     types::{
+        breakpoint::{breakpoint, Breakpoint},
         execution_point::ExecutionPoint,
         perf_counter::{
             cpu_info::CpuModel,
             symbolic_events::{
                 expr::{lookup_cpu_model_and_pmu_name_from_cpu_set, Target},
-                BranchCounter, BranchCounterWithInterrupt, BranchType, Breakpoint,
+                BranchCounter, BranchCounterWithInterrupt, BranchType,
             },
             PerfCounter, PerfCounterWithInterrupt,
         },
@@ -69,7 +72,9 @@ enum ExecutionPointReplayState {
         branch_irq: BranchCounterWithInterrupt,
     },
     Stepping {
-        breakpoint: Breakpoint,
+        breakpoint: Box<dyn Breakpoint>,
+        breakpoint_suspended: bool,
+        single_stepping: bool,
     },
 }
 
@@ -93,6 +98,7 @@ pub struct PerfCounterBasedExecutionPointProvider<'a> {
     is_test: bool,
     checkpoint_count: AtomicU64,
     branch_counter_type: BranchType,
+    checker_never_use_branch_count_overflow: bool,
 }
 
 impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
@@ -102,6 +108,7 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
         main_cpu_set: &'a [usize],
         checker_cpu_set: &'a [usize],
         branch_counter_type: BranchType,
+        checker_never_use_branch_count_overflow: bool,
         is_test: bool,
     ) -> Self {
         Self {
@@ -119,6 +126,7 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             is_test,
             checkpoint_count: AtomicU64::new(0),
             branch_counter_type,
+            checker_never_use_branch_count_overflow,
         }
     }
 
@@ -231,13 +239,13 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
 
             if exec_point.branch_counter - branch_count_curr
                 <= self.checker_cpu_model.max_skid() + self.checker_cpu_model.min_irq_period()
+                || self.checker_never_use_branch_count_overflow
             {
                 debug!("{checker} ... using breakpoint");
                 initial_state = ExecutionPointReplayState::Stepping {
-                    breakpoint: Breakpoint::new(
-                        checker.process.pid,
-                        exec_point.instruction_pointer,
-                    )?,
+                    breakpoint: breakpoint(&mut checker.process, exec_point.instruction_pointer)?,
+                    breakpoint_suspended: false,
+                    single_stepping: false,
                 };
             } else {
                 debug!("{checker} ... using branch count overflow interrupt");
@@ -275,6 +283,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
         }
 
         let mut handled = false;
+        let mut do_single_step = false;
 
         match context.child {
             InferiorRefMut::Checker(checker) => {
@@ -305,24 +314,33 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
                         let sig_info = checker.process.get_siginfo()?;
 
-                        match &state {
+                        match &mut state {
                             ExecutionPointReplayState::CountingBranches { branch_irq } => {
                                 if branch_irq.is_interrupt(&sig_info)? {
                                     debug!("{checker} Branch count interrupt fired, setting up breakpoint");
 
                                     state = ExecutionPointReplayState::Stepping {
-                                        breakpoint: Breakpoint::new(
-                                            checker.process.pid,
+                                        breakpoint: breakpoint(
+                                            &mut checker.process,
                                             exec_point.instruction_pointer,
                                         )?,
+                                        breakpoint_suspended: false,
+                                        single_stepping: false,
                                     };
 
                                     handled = true;
                                 }
                             }
-                            ExecutionPointReplayState::Stepping { breakpoint } => {
-                                if breakpoint.is_interrupt(&sig_info)? {
+                            ExecutionPointReplayState::Stepping {
+                                breakpoint,
+                                breakpoint_suspended,
+                                single_stepping,
+                            } => {
+                                if breakpoint.is_hit(&checker.process)? {
                                     debug!("{checker} Breakpoint hit");
+
+                                    assert!(!*breakpoint_suspended);
+                                    assert!(!*single_stepping);
 
                                     debug_assert_eq!(
                                         checker.process.read_registers()?.ip(),
@@ -342,16 +360,42 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                     match branch_count_curr.cmp(&branch_count_target) {
                                         std::cmp::Ordering::Less => {
                                             // keep going
+
+                                            if breakpoint
+                                                .characteristics()
+                                                .needs_single_step_after_hit
+                                            {
+                                                let regs = checker.process.read_registers()?;
+
+                                                if breakpoint
+                                                    .characteristics()
+                                                    .needs_bp_disabled_during_single_stepping
+                                                {
+                                                    debug!("{checker} Disabling breakpoint for single stepping");
+                                                    breakpoint.disable(&mut checker.process)?;
+                                                    *breakpoint_suspended = true;
+                                                }
+
+                                                if !checker
+                                                    .process
+                                                    .instr_eq(regs.ip(), instructions::SYSCALL)
+                                                {
+                                                    // PTRACE_SINGLESTEP will
+                                                    // miss syscalls, so we can
+                                                    // only do PTRACE_SYSCALL
+                                                    // when the next instruction
+                                                    // is a syscall
+                                                    do_single_step = true;
+                                                    *single_stepping = true;
+                                                } else {
+                                                    debug!("{checker} Next instruction is a syscall, skipping single stepping");
+                                                }
+                                            }
                                         }
                                         std::cmp::Ordering::Equal => {
                                             debug!(
                                                 "{checker} Reached execution point {exec_point:?}"
                                             );
-
-                                            #[cfg(target_arch = "x86_64")]
-                                            checker.process.modify_registers_with(|r| {
-                                                r.with_resume_flag_cleared()
-                                            })?;
 
                                             replay_done = true;
                                         }
@@ -361,6 +405,19 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                     }
 
                                     handled = true;
+                                } else if checker.process.get_siginfo()?.is_trap_trace() {
+                                    if *single_stepping {
+                                        debug!("{checker} Single step trap");
+                                        *single_stepping = false;
+
+                                        if *breakpoint_suspended {
+                                            debug!("{checker} Resuming breakpoint");
+                                            *breakpoint_suspended = false;
+                                            breakpoint.enable(&mut checker.process)?;
+                                        }
+
+                                        handled = true;
+                                    }
                                 }
                             }
                         }
@@ -390,10 +447,48 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
         }
 
         if handled {
-            Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior)
+            Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                single_step: do_single_step,
+            })
         } else {
             Ok(SignalHandlerExitAction::NextHandler)
         }
+    }
+}
+
+impl StandardSyscallHandler for PerfCounterBasedExecutionPointProvider<'_> {
+    fn handle_standard_syscall_exit(
+        &self,
+        _ret_val: isize,
+        _syscall: &Syscall,
+        context: HandlerContext,
+    ) -> Result<SyscallHandlerExitAction> {
+        if let InferiorRefMut::Checker(checker) = context.child {
+            let segment_id = checker.segment.nr;
+            let segment_info_map = self.segment_info_map.lock();
+            if let Some(segment_info) = segment_info_map.get(&segment_id) {
+                let mut segment_info = segment_info.lock();
+                match &mut segment_info.active_exec_point {
+                    Some((
+                        _,
+                        ExecutionPointReplayState::Stepping {
+                            breakpoint,
+                            breakpoint_suspended,
+                            single_stepping,
+                        },
+                    )) => {
+                        assert!(!*single_stepping);
+                        if *breakpoint_suspended {
+                            debug!("Resuming breakpoint");
+                            *breakpoint_suspended = false;
+                            breakpoint.enable(context.child.process_mut())?;
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -473,5 +568,6 @@ impl Module for PerfCounterBasedExecutionPointProvider<'_> {
         subs.set_execution_point_provider(self);
         subs.install_module_lifetime_hook(self);
         subs.install_process_lifetime_hook(self);
+        subs.install_standard_syscall_handler(self);
     }
 }

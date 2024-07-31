@@ -3,7 +3,7 @@ use std::ops::Deref;
 use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
 
 use super::{
-    memory::{instructions, InjectedInstructionContext},
+    memory::{instructions, ReplacedInstructionWithOldIp},
     registers::{RegisterAccess, Registers},
     Process, SyscallDir,
 };
@@ -17,7 +17,7 @@ fn attach(process: &Process, state: &SavedState) -> Result<()> {
         WaitStatus::PtraceEvent(process.pid, Signal::SIGSTOP, nix::libc::PTRACE_EVENT_STOP)
     );
 
-    process.instr_restore(state.instr)?;
+    process.instr_restore_and_jump_back(state.instr)?;
 
     if state.syscall_dir == SyscallDir::Entry {
         process
@@ -32,14 +32,14 @@ fn attach(process: &Process, state: &SavedState) -> Result<()> {
 /// State (e.g. registers) saved for a detached process for later restoration
 #[derive(Debug)]
 struct SavedState {
-    instr: InjectedInstructionContext,
+    instr: ReplacedInstructionWithOldIp,
     registers: Registers,
     syscall_dir: SyscallDir,
 }
 
 fn detach(process: &Process) -> Result<SavedState> {
     let registers = process.read_registers()?;
-    let saved_ctx = process.instr_inject(instructions::TRAP)?;
+    let saved_ctx = process.instr_inject_and_jump(instructions::TRAP, false)?;
     let syscall_dir = process.syscall_dir()?;
 
     if syscall_dir == SyscallDir::Entry {

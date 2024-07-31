@@ -12,7 +12,7 @@ pub enum SignalHandlerExitAction {
     ContinueInferior,
 
     /// Suppress the signal and continue the inferior
-    SuppressSignalAndContinueInferior,
+    SuppressSignalAndContinueInferior { single_step: bool },
 
     /// Skip ptrace syscall.
     SkipPtraceSyscall,

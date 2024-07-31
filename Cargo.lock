@@ -333,6 +333,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbg_hex"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35df069ad4872b5d65ee7f5e37d12ab629834b1e162b3292a71f30ba7e8884ee"
+
+[[package]]
 name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1055,6 +1061,7 @@ dependencies = [
  "cfg-if",
  "clap",
  "clap-num",
+ "dbg_hex",
  "derivative",
  "derive_builder",
  "git-version",

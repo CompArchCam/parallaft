@@ -39,6 +39,7 @@ pidfd = { version = "0.2.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+dbg_hex = "0.2.0"
 
 [features]
 default = ["intel_cat"]

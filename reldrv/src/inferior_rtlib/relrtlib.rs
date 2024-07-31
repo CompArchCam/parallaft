@@ -153,7 +153,9 @@ impl SignalHandler for RelRtLib {
             {
                 info!("{} Trap: Perf", context.child);
                 self.schedule_checkpoint(context.check_coord).unwrap();
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                    single_step: false,
+                });
             }
         }
 

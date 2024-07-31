@@ -14,7 +14,7 @@ fn pmu_segmentation() {
             Ok(())
         },
         RelShellOptionsBuilder::test_serial_default()
-            .pmu_segmentation(true)
+            .exec_point_replay(true)
             .checkpoint_period(10000000)
             .main_cpu_set(vec![0])
             .checker_cpu_set(vec![0])

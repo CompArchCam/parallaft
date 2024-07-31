@@ -264,6 +264,14 @@ impl Registers {
         self
     }
 
+    #[cfg(target_arch = "aarch64")]
+    /// Clear the SS flag in PSTATE register for aarch64
+    pub fn with_resume_flag_cleared(mut self) -> Self {
+        self.pstate &= !(1 << 21);
+
+        self
+    }
+
     #[cfg(target_arch = "x86_64")]
     pub fn ip(self) -> usize {
         self.rip as _
@@ -498,7 +506,7 @@ impl RegisterAccess for Process {
                 ));
 
                 // inject a breakpoint
-                let old_instr = self.instr_inject(instructions::TRAP)?;
+                let old_instr = self.instr_inject_and_jump(instructions::TRAP, false)?;
                 self.resume()?;
 
                 // expect the injected breakpoint
@@ -510,7 +518,7 @@ impl RegisterAccess for Process {
                 regs.regs[7] = x7;
 
                 // restore the original instruction
-                self.instr_restore(old_instr)?;
+                self.instr_restore_and_jump_back(old_instr)?;
 
                 // re-enter the original syscall
                 self.write_registers(
@@ -538,7 +546,7 @@ impl RegisterAccess for Process {
                 let mut regs = self.read_registers()?;
 
                 // inject a breakpoint
-                let old_instr = self.instr_inject(instructions::TRAP)?;
+                let old_instr = self.instr_inject_and_jump(instructions::TRAP, false)?;
                 self.resume()?;
 
                 // expect the injected breakpoint
@@ -550,7 +558,7 @@ impl RegisterAccess for Process {
                 regs.regs[7] = x7;
 
                 // restore the original instruction
-                self.instr_restore(old_instr)?;
+                self.instr_restore_and_jump_back(old_instr)?;
 
                 // re-enter the original syscall
                 self.write_registers(
@@ -601,22 +609,18 @@ impl RegisterAccess for Process {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 #[cfg(test)]
 mod tests {
-    #[cfg(target_arch = "aarch64")]
-    use crate::{error::Result, process::syscall::tests::trace};
-
-    #[cfg(target_arch = "aarch64")]
     use super::RegisterAccess;
+    use crate::error::Result;
+    use crate::test_utils::ptraced;
+    use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
+    use std::arch::asm;
 
-    #[cfg(target_arch = "aarch64")]
     #[test]
     fn test_read_registers_precise_syscall_entry() -> Result<()> {
-        use std::arch::asm;
-
-        use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
-
-        let process = trace(|| {
+        let process = ptraced(|| {
             unsafe {
                 asm!(
                     "
@@ -679,14 +683,9 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_arch = "aarch64")]
     #[test]
     fn test_read_registers_precise_syscall_exit() -> Result<()> {
-        use std::arch::asm;
-
-        use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
-
-        let process = trace(|| {
+        let process = ptraced(|| {
             unsafe {
                 asm!(
                     "

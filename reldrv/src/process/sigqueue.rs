@@ -1,4 +1,4 @@
-use super::Process;
+use super::{siginfo::SigInfoExt, Process};
 use crate::error::Result;
 
 #[allow(non_camel_case_types)]
@@ -42,14 +42,6 @@ impl Process {
     }
 
     pub fn get_sigval(&self) -> Result<Option<usize>> {
-        let siginfo = self.get_siginfo()?;
-
-        if siginfo.si_signo == nix::libc::SIGTRAP && siginfo.si_code == -1
-        /* SI_QUEUE */
-        {
-            return Ok(Some(unsafe { siginfo.si_value().sival_ptr } as usize));
-        } else {
-            return Ok(None);
-        }
+        Ok(self.get_siginfo()?.sigval())
     }
 }

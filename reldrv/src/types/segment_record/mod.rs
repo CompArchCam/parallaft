@@ -72,7 +72,7 @@ impl<T> WithIsLastEvent<T> {
         if self.is_last_event {
             SignalHandlerExitAction::Checkpoint
         } else {
-            SignalHandlerExitAction::SuppressSignalAndContinueInferior
+            SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step: false }
         }
     }
 }

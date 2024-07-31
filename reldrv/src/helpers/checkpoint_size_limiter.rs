@@ -86,7 +86,9 @@ impl SignalHandler for CheckpointSizeLimiter {
                     .schedule_checkpoint(context.check_coord)
                     .unwrap();
 
-                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior);
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                    single_step: false,
+                });
             }
         }
 

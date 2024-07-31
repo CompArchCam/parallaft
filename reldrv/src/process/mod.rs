@@ -2,6 +2,7 @@ pub mod detach;
 pub mod dirty_pages;
 pub mod memory;
 pub mod registers;
+pub mod siginfo;
 pub mod sigqueue;
 mod stats;
 mod syscall;
@@ -9,7 +10,6 @@ mod syscall;
 use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
-use nix::libc::siginfo_t;
 use nix::unistd::gettid;
 use registers::RegisterAccess;
 use std::ops::Deref;
@@ -77,8 +77,18 @@ impl Process {
         Ok(p)
     }
 
+    pub fn single_step(&self) -> Result<()> {
+        ptrace::step(self.pid, None)?;
+        Ok(())
+    }
+
     pub fn resume(&self) -> Result<()> {
         ptrace::syscall(self.pid, None)?;
+        Ok(())
+    }
+
+    pub fn cont(&self) -> Result<()> {
+        ptrace::cont(self.pid, None)?;
         Ok(())
     }
 
@@ -90,10 +100,6 @@ impl Process {
     pub fn kill(&self) -> Result<()> {
         kill(self.pid, Signal::SIGKILL)?;
         Ok(())
-    }
-
-    pub fn get_siginfo(&self) -> Result<siginfo_t> {
-        Ok(ptrace::getsiginfo(self.pid)?)
     }
 
     pub fn set_cpu_affinity(&self, cpus: &[usize]) -> Result<()> {

@@ -172,7 +172,7 @@ fn pmc_monotonicity() {
             Ok(())
         },
         RelShellOptionsBuilder::test_serial_default()
-            .pmu_segmentation(true)
+            .exec_point_replay(true)
             .main_cpu_set(vec![0])
             .checker_cpu_set(vec![0])
             .extra_modules(vec![Box::new(PmcTester::new(TestMode::Incrementing {
@@ -243,7 +243,7 @@ fn pmc_consistency() {
             Ok(())
         },
         RelShellOptionsBuilder::test_serial_default()
-            .pmu_segmentation(true)
+            .exec_point_replay(true)
             .main_cpu_set(vec![0])
             .checker_cpu_set(vec![0])
             .extra_modules(vec![Box::new(PmcTester::new(TestMode::Constant(1)))])

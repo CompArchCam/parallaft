@@ -16,6 +16,9 @@ pub mod syscall_handlers;
 pub mod throttlers;
 pub mod types;
 
+#[cfg(test)]
+mod test_utils;
+
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs;
@@ -124,7 +127,7 @@ impl Default for DirtyPageAddressTrackerType {
     fn default() -> Self {
         cfg_if! {
             if #[cfg(target_arch = "aarch64")] {
-                Self::KPageCount
+                Self::None
             }
             else {
                 Self::SoftDirty
@@ -182,9 +185,10 @@ pub struct RelShellOptions {
     // perf counter plugin options
     pub enabled_perf_counters: Vec<CounterKind>,
 
-    // enable automatic segmentation based on precise PMU interrupts
-    pub pmu_segmentation: bool, // TODO: change this name
-    pub pmu_segmentation_branch_type: BranchType,
+    // enable execution point replay support
+    pub exec_point_replay: bool,
+    pub exec_point_replay_branch_type: BranchType,
+    pub exec_point_replay_checker_never_use_branch_count_overflow: bool,
 
     // dirty page tracker backend to use
     pub dirty_page_tracker: DirtyPageAddressTrackerType,
@@ -288,20 +292,22 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     }
 
     // Execution point providers
-    if options.pmu_segmentation {
-        let segmentor = disp.register_module(PerfCounterBasedExecutionPointProvider::new(
-            &options.main_cpu_set,
-            &options.checker_cpu_set,
-            options.pmu_segmentation_branch_type,
-            options.is_test,
-        ));
+    if options.exec_point_replay {
+        let exec_point_provider =
+            disp.register_module(PerfCounterBasedExecutionPointProvider::new(
+                &options.main_cpu_set,
+                &options.checker_cpu_set,
+                options.exec_point_replay_branch_type,
+                options.exec_point_replay_checker_never_use_branch_count_overflow,
+                options.is_test,
+            ));
 
         cfg_if::cfg_if! {
             if #[cfg(target_arch = "x86_64")] {
-                cpuid_overrides.extend(segmentor.get_cpuid_overrides());
+                cpuid_overrides.extend(exec_point_provider.get_cpuid_overrides());
             }
             else {
-                let _ = &segmentor;
+                let _ = &exec_point_provider;
             }
         }
     }

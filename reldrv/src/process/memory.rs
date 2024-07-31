@@ -6,7 +6,7 @@ use nix::{
         uio::{process_vm_readv, process_vm_writev, RemoteIoVec},
     },
 };
-use reverie_syscalls::{Addr, MemoryAccess};
+pub use reverie_syscalls::{Addr, MemoryAccess};
 
 #[cfg(target_arch = "x86_64")]
 pub type RawInstruction = u128;
@@ -61,13 +61,19 @@ pub mod instructions {
 
     pub const SYSCALL: Instruction = Instruction::new(0xd4000001); /* svc #0 */
     pub const TRAP: Instruction = Instruction::new(0xd4200000); /* brk #0 */
+    pub const NOP: Instruction = Instruction::new(0xd503201f); /* nop */
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct InjectedInstructionContext {
+pub struct ReplacedInstruction {
     addr: usize,
-    old_pc: usize,
-    old_word: u64,
+    old_word: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReplacedInstructionWithOldIp {
+    old_ip: usize,
+    replaced_insn: ReplacedInstruction,
 }
 
 impl MemoryAccess for Process {
@@ -141,30 +147,58 @@ impl Process {
     pub fn instr_inject(
         &self,
         instr: Instruction,
-    ) -> crate::error::Result<InjectedInstructionContext> {
+        addr: usize,
+    ) -> crate::error::Result<ReplacedInstruction> {
+        let old_word: usize = self.read_value(addr)?;
+
+        assert!(instr.length() <= std::mem::size_of::<*mut std::ffi::c_void>());
+
+        let mask = (1_usize << (instr.length() * 8)) - 1;
+        let new_word = (instr.value as usize) & mask | (old_word & !mask);
+
+        unsafe { ptrace::write(self.pid, addr as *mut _, new_word as *mut _)? };
+
+        Ok(ReplacedInstruction { addr, old_word })
+    }
+
+    pub fn instr_inject_and_jump(
+        &self,
+        instr: Instruction,
+        keep_ip: bool,
+    ) -> crate::error::Result<ReplacedInstructionWithOldIp> {
         let registers = self.read_registers()?;
-        let old_pc = registers.ip();
+        let old_ip = registers.ip();
 
-        // Assume the page of the current PC is executable
-        let addr = old_pc & *PAGEMASK;
+        let addr;
 
-        let old_word: u64 = self.read_value(addr)?;
+        if keep_ip {
+            addr = old_ip;
+        } else {
+            // Assume the page of the current IP is executable
+            addr = old_ip & *PAGEMASK;
+        }
 
-        unsafe { ptrace::write(self.pid, addr as *mut _, instr.value as *mut _)? };
+        let replaced_insn = self.instr_inject(instr, addr)?;
 
         self.write_registers(registers.with_ip(addr))?;
 
-        Ok(InjectedInstructionContext {
-            addr,
-            old_pc,
-            old_word,
+        Ok(ReplacedInstructionWithOldIp {
+            old_ip,
+            replaced_insn,
         })
     }
 
-    pub fn instr_restore(&self, ctx: InjectedInstructionContext) -> crate::error::Result<()> {
-        self.write_registers(self.read_registers()?.with_ip(ctx.old_pc))?;
-
+    pub fn instr_restore(&self, ctx: ReplacedInstruction) -> crate::error::Result<()> {
         unsafe { ptrace::write(self.pid, ctx.addr as *mut _, ctx.old_word as *mut _)? };
+        Ok(())
+    }
+
+    pub fn instr_restore_and_jump_back(
+        &self,
+        ctx: ReplacedInstructionWithOldIp,
+    ) -> crate::error::Result<()> {
+        self.write_registers(self.read_registers()?.with_ip(ctx.old_ip))?;
+        self.instr_restore(ctx.replaced_insn)?;
 
         Ok(())
     }
@@ -181,16 +215,13 @@ mod tests {
         unistd::getpid,
     };
 
-    use crate::{
-        error::Result,
-        process::{memory::instructions, syscall::tests::trace},
-    };
+    use crate::{error::Result, process::memory::instructions, test_utils::ptraced};
 
     use super::RegisterAccess;
 
     #[test]
     fn test_instr_at() -> Result<()> {
-        let process = trace(|| {
+        let process = ptraced(|| {
             getpid();
             0
         });
@@ -226,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_instr_inject_and_restore() -> Result<()> {
-        let process = trace(|| {
+        let process = ptraced(|| {
             raise(Signal::SIGSTOP).unwrap();
             0
         });
@@ -238,7 +269,7 @@ mod tests {
 
         // inject a trap
         let mut regs = process.read_registers()?;
-        let old_instr = process.instr_inject(instructions::TRAP)?;
+        let old_instr = process.instr_inject_and_jump(instructions::TRAP, false)?;
 
         ptrace::cont(process.pid, None)?;
 
@@ -247,7 +278,7 @@ mod tests {
         assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGTRAP)));
 
         // jump back
-        process.instr_restore(old_instr)?;
+        process.instr_restore_and_jump_back(old_instr)?;
 
         let mut regs_now = process.read_registers()?;
 

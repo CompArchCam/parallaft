@@ -10,7 +10,7 @@ use nix::{
 
 use syscalls::{syscall_args, SyscallArgs, Sysno};
 
-use super::{memory::InjectedInstructionContext, registers::Registers, OwnedProcess, Process};
+use super::{memory::ReplacedInstructionWithOldIp, registers::Registers, OwnedProcess, Process};
 use crate::{
     error::Result,
     process::{memory::instructions, registers::RegisterAccess},
@@ -75,7 +75,7 @@ impl Process {
                 restart_child_old_syscall = false;
                 restart_parent_old_syscall = false;
 
-                saved_instr = Some(self.instr_inject(instructions::SYSCALL)?);
+                saved_instr = Some(self.instr_inject_and_jump(instructions::SYSCALL, false)?);
 
                 ptrace::syscall(self.pid, None)?;
 
@@ -206,7 +206,7 @@ impl Process {
         saved_regs: Registers,
         saved_sigmask: u64,
         restart_old_syscall: bool,
-        saved_instr: Option<InjectedInstructionContext>,
+        saved_instr: Option<ReplacedInstructionWithOldIp>,
     ) -> Result<()> {
         let process = Process::new(pid);
 
@@ -234,7 +234,7 @@ impl Process {
         }
 
         if let Some(saved_instr) = saved_instr {
-            process.instr_restore(saved_instr)?;
+            process.instr_restore_and_jump_back(saved_instr)?;
         }
 
         if restart_old_syscall {
@@ -270,43 +270,17 @@ impl Process {
 #[cfg(test)]
 pub(crate) mod tests {
     use nix::{
-        sys::{
-            signal::{kill, raise, Signal::SIGKILL},
-            wait::WaitPidFlag,
-        },
-        unistd::{fork, getpid, gettid, getuid, ForkResult},
+        sys::signal::{kill, raise, Signal::SIGKILL},
+        unistd::{getpid, gettid, getuid},
     };
 
-    use crate::process::SyscallDir;
+    use crate::{process::SyscallDir, test_utils::ptraced};
 
     use super::*;
 
-    pub fn trace(f: impl FnOnce() -> i32) -> OwnedProcess {
-        match unsafe { fork().unwrap() } {
-            ForkResult::Parent { child } => {
-                let wait_status = waitpid(child, Some(WaitPidFlag::WSTOPPED)).unwrap();
-                assert_eq!(wait_status, WaitStatus::Stopped(child, Signal::SIGSTOP));
-                ptrace::seize(
-                    child,
-                    ptrace::Options::PTRACE_O_TRACESYSGOOD
-                        | ptrace::Options::PTRACE_O_TRACECLONE
-                        | ptrace::Options::PTRACE_O_TRACEFORK
-                        | ptrace::Options::PTRACE_O_EXITKILL,
-                )
-                .unwrap();
-                OwnedProcess::new(child)
-            }
-            ForkResult::Child => {
-                raise(Signal::SIGSTOP).unwrap();
-                let code = f();
-                std::process::exit(code)
-            }
-        }
-    }
-
     #[test]
     fn test_process_syscall_injection_on_entry() {
-        let process = trace(|| {
+        let process = ptraced(|| {
             let pid1 = getpid();
             raise(Signal::SIGSTOP).unwrap();
 
@@ -380,7 +354,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_process_syscall_injection_on_exit() {
-        let process = trace(|| {
+        let process = ptraced(|| {
             let pid1 = getpid();
             raise(Signal::SIGSTOP).unwrap();
 
@@ -453,7 +427,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_process_syscall_injection_on_exit_with_clone() {
-        let parent = trace(|| {
+        let parent = ptraced(|| {
             let pid1 = getpid();
             raise(Signal::SIGSTOP).unwrap();
 
@@ -534,7 +508,7 @@ pub(crate) mod tests {
     }
 
     fn test_process_clone(restart_parent_syscall: bool, restart_child_syscall: bool) {
-        let parent = trace(|| {
+        let parent = ptraced(|| {
             // syscall is injected here
             getpid();
 

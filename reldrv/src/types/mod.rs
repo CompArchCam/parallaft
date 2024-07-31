@@ -1,3 +1,4 @@
+pub mod breakpoint;
 pub mod chains;
 pub mod checker;
 pub mod checkpoint;

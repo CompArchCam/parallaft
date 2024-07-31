@@ -1124,8 +1124,12 @@ where
 
         match result {
             SignalHandlerExitAction::SkipPtraceSyscall => (),
-            SignalHandlerExitAction::SuppressSignalAndContinueInferior => {
-                child.process().resume()?;
+            SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step } => {
+                if single_step {
+                    child.process().single_step()?;
+                } else {
+                    child.process().resume()?;
+                }
             }
             SignalHandlerExitAction::NextHandler => {
                 info!("{child} Signal: {:}", sig);

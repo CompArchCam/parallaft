@@ -245,10 +245,14 @@ impl Segment {
         reference_process: &mut DetachedProcess<OwnedProcess>,
         comparator: &dyn RegisterComparator,
     ) -> Result<Option<CheckFailReason>> {
-        let mut checker_regs = checker_process.read_registers_precise()?.strip_orig();
+        let mut checker_regs = checker_process
+            .read_registers_precise()?
+            .strip_orig()
+            .with_resume_flag_cleared();
         let mut reference_registers = reference_process
             .borrow_with(|p2| p2.read_registers())??
-            .strip_orig();
+            .strip_orig()
+            .with_resume_flag_cleared();
 
         #[cfg(target_arch = "x86_64")]
         {
