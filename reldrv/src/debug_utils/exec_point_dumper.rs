@@ -9,14 +9,12 @@ use crate::{
         HandlerContext,
     },
     exec_point_providers::ExecutionPointProvider,
-    syscall_handlers::CUSTOM_SYSNO_START,
+    types::custom_sysno::CustomSysno,
 };
 
 /// Dump the current execution point to log on each SYSNO_DUMP_EXEC_POINT custom
 /// syscall.
 pub struct ExecutionPointDumper;
-
-pub const SYSNO_DUMP_EXEC_POINT: usize = CUSTOM_SYSNO_START + 2;
 
 impl CustomSyscallHandler for ExecutionPointDumper {
     fn handle_custom_syscall_entry(
@@ -25,7 +23,7 @@ impl CustomSyscallHandler for ExecutionPointDumper {
         _args: SyscallArgs,
         context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if sysno == SYSNO_DUMP_EXEC_POINT {
+        if CustomSysno::from_repr(sysno) == Some(CustomSysno::DumpExecPoint) {
             if context.child.segment().is_some() {
                 let exec_point = context
                     .check_coord

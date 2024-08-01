@@ -214,6 +214,9 @@ pub struct RelShellOptions {
 
     // slicer
     pub slicer: SlicerType,
+    pub slicer_auto_start: bool,
+
+    // fixed interval slicer
     pub fixed_interval_slicer_skip: Option<u64>,
     pub fixed_interval_slicer_reference_type: ReferenceType,
 
@@ -335,6 +338,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
                 options.fixed_interval_slicer_reference_type,
                 &options.main_cpu_set,
                 options.is_test,
+                options.slicer_auto_start,
             ));
         }
         SlicerType::EntireProgram => {

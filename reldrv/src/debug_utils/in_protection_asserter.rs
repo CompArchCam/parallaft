@@ -1,8 +1,6 @@
 use crate::{
-    dispatcher::Module, events::syscall::CustomSyscallHandler, syscall_handlers::CUSTOM_SYSNO_START,
+    dispatcher::Module, events::syscall::CustomSyscallHandler, types::custom_sysno::CustomSysno,
 };
-
-pub const SYSNO_ASSERT_IN_PROTECTION: usize = CUSTOM_SYSNO_START + 3;
 
 pub struct InProtectionAsserter;
 
@@ -13,7 +11,7 @@ impl CustomSyscallHandler for InProtectionAsserter {
         _args: syscalls::SyscallArgs,
         context: crate::events::HandlerContext,
     ) -> crate::error::Result<crate::events::syscall::SyscallHandlerExitAction> {
-        if sysno == SYSNO_ASSERT_IN_PROTECTION {
+        if CustomSysno::from_repr(sysno) == Some(CustomSysno::AssertInProtection) {
             assert!(
                 context.child.segment().is_some(),
                 "Assertion failed: in protection zone"

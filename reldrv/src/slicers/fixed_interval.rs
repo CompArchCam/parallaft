@@ -11,13 +11,14 @@ use crate::{
     events::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         signal::{SignalHandler, SignalHandlerExitAction},
-        syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
+        syscall::{CustomSyscallHandler, StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
     process::Process,
     signal_handlers::begin_protection::main_begin_protection_req,
     syscall_handlers::is_execve_ok,
     types::{
+        custom_sysno::CustomSysno,
         perf_counter::{
             symbolic_events::GenericHardwareEventCounterWithInterrupt, PerfCounter,
             PerfCounterWithInterrupt,
@@ -49,6 +50,7 @@ pub struct FixedIntervalSlicer<'a> {
     state: Mutex<Option<State>>,
     main_cpu_set: &'a [usize],
     is_test: bool,
+    auto_start: bool,
 }
 
 impl<'a> FixedIntervalSlicer<'a> {
@@ -58,6 +60,7 @@ impl<'a> FixedIntervalSlicer<'a> {
         reference: ReferenceType,
         main_cpu_set: &'a [usize],
         is_test: bool,
+        auto_start: bool,
     ) -> Self {
         Self {
             skip,
@@ -66,6 +69,7 @@ impl<'a> FixedIntervalSlicer<'a> {
             state: Mutex::new(None),
             main_cpu_set,
             is_test,
+            auto_start,
         }
     }
 
@@ -84,7 +88,21 @@ impl<'a> FixedIntervalSlicer<'a> {
         )
     }
 
+    fn start_if_auto(&self, process: &Process) -> Result<()> {
+        if self.auto_start {
+            self.start(process)?;
+        }
+
+        Ok(())
+    }
+
     fn start(&self, process: &Process) -> Result<()> {
+        let mut state = self.state.lock();
+        if state.is_some() {
+            debug!("Automatic slicing is already started, ignoring start request");
+            return Ok(());
+        }
+
         if let Some(skip) = self.skip {
             debug!("Skipping the first {} {}", skip, self.reference);
             *self.state.lock() = Some(State::Skipping(
@@ -98,7 +116,7 @@ impl<'a> FixedIntervalSlicer<'a> {
 
             main_begin_protection_req(process.pid)?;
 
-            *self.state.lock() = Some(State::Normal(
+            *state = Some(State::Normal(
                 self.get_perf_counter_interrupt(self.interval, process.pid)?,
             ));
         }
@@ -116,7 +134,47 @@ impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
-            self.start(context.child.process())?;
+            self.start_if_auto(context.child.process())?;
+        }
+
+        Ok(SyscallHandlerExitAction::NextHandler)
+    }
+}
+
+impl CustomSyscallHandler for FixedIntervalSlicer<'_> {
+    fn handle_custom_syscall_entry(
+        &self,
+        sysno: usize,
+        _args: syscalls::SyscallArgs,
+        context: HandlerContext,
+    ) -> Result<SyscallHandlerExitAction> {
+        match CustomSysno::from_repr(sysno) {
+            Some(CustomSysno::SlicingStart) => {
+                if context.child.is_main() {
+                    self.start(context.child.process())?;
+                }
+
+                return Ok(SyscallHandlerExitAction::ContinueInferior);
+            }
+            Some(CustomSysno::CheckpointFini) => {
+                if context.child.is_main() {
+                    let mut state = self.state.lock();
+                    match state.take() {
+                        Some(State::Skipping(mut perf_counter)) => {
+                            perf_counter.disable()?;
+                            perf_counter.reset()?;
+                        }
+                        Some(State::Normal(mut perf_counter)) => {
+                            perf_counter.disable()?;
+                            perf_counter.reset()?;
+                        }
+                        None => (),
+                    }
+                }
+
+                return Ok(SyscallHandlerExitAction::NextHandler);
+            }
+            _ => {}
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
@@ -205,7 +263,7 @@ impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
         'disp: 'scope,
     {
         if self.is_test {
-            self.start(context.process)?;
+            self.start_if_auto(context.process)?;
         }
 
         Ok(())
@@ -220,5 +278,6 @@ impl Module for FixedIntervalSlicer<'_> {
         subs.install_standard_syscall_handler(self);
         subs.install_signal_handler(self);
         subs.install_process_lifetime_hook(self);
+        subs.install_custom_syscall_handler(self);
     }
 }

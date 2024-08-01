@@ -7,10 +7,8 @@ use nix::{
 };
 pub use reldrv::RelShellOptions;
 use reldrv::{
-    debug_utils::in_protection_asserter::SYSNO_ASSERT_IN_PROTECTION,
     parent_work,
-    syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_SYNC, SYSNO_CHECKPOINT_TAKE},
-    types::exit_reason::ExitReason,
+    types::{custom_sysno::CustomSysno, exit_reason::ExitReason},
     RelShellOptionsBuilder,
 };
 
@@ -28,20 +26,20 @@ pub fn setup() {
 }
 
 pub fn checkpoint_take() {
-    unsafe { libc::syscall(SYSNO_CHECKPOINT_TAKE as _) };
+    unsafe { libc::syscall(CustomSysno::CheckpointTake as _) };
 }
 
 pub fn checkpoint_fini() {
-    unsafe { libc::syscall(SYSNO_CHECKPOINT_FINI as _) };
+    unsafe { libc::syscall(CustomSysno::CheckpointFini as _) };
 }
 
 #[allow(dead_code)]
 pub fn checkpoint_sync() {
-    unsafe { libc::syscall(SYSNO_CHECKPOINT_SYNC as _) };
+    unsafe { libc::syscall(CustomSysno::CheckpointSync as _) };
 }
 
 pub fn assert_in_protection() {
-    unsafe { libc::syscall(SYSNO_ASSERT_IN_PROTECTION as _) };
+    unsafe { libc::syscall(CustomSysno::AssertInProtection as _) };
 }
 
 #[must_use]

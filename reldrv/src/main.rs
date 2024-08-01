@@ -190,6 +190,10 @@ struct CliArgs {
     #[arg(long, default_value = "instructions")]
     fixed_interval_slicer_reference_type: ReferenceType,
 
+    /// Start slicing automatically. Works for fixed-interval slicer only.
+    #[arg(long, default_value = "true")]
+    slicer_auto_start: bool,
+
     /// Make a core dump on check failures
     #[arg(long)]
     core_dump: bool,
@@ -317,6 +321,7 @@ fn main() {
             enable_intel_hybrid_workaround: cli.enable_intel_hybrid_workaround,
 
             slicer: cli.slicer,
+            slicer_auto_start: cli.slicer_auto_start,
             fixed_interval_slicer_skip: cli.fixed_interval_slicer_skip,
             fixed_interval_slicer_reference_type: cli.fixed_interval_slicer_reference_type,
 

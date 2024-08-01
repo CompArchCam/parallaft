@@ -11,8 +11,7 @@ use crate::{
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    syscall_handlers::SYSNO_CHECKPOINT_SYNC,
-    types::{chains::SegmentChains, process_id::Main},
+    types::{chains::SegmentChains, custom_sysno::CustomSysno, process_id::Main},
 };
 
 pub struct CheckpointSyncThrottler {
@@ -66,7 +65,7 @@ impl CustomSyscallHandler for CheckpointSyncThrottler {
         _args: syscalls::SyscallArgs,
         context: HandlerContext,
     ) -> crate::error::Result<SyscallHandlerExitAction> {
-        if sysno != SYSNO_CHECKPOINT_SYNC {
+        if CustomSysno::from_repr(sysno) != Some(CustomSysno::CheckpointSync) {
             return Ok(SyscallHandlerExitAction::NextHandler);
         }
 

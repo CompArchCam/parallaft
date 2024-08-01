@@ -1,7 +1,7 @@
 use std::{arch::asm, marker::PhantomPinned, num::NonZeroUsize, os::fd::OwnedFd};
 
 use nix::{libc, sys::mman};
-use reldrv::{inferior_rtlib::relrtlib::SYSNO_SET_COUNTER_ADDR, process::PAGESIZE};
+use reldrv::{process::PAGESIZE, types::custom_sysno::CustomSysno};
 
 pub struct RelRt {
     counter_addr: *mut u64,
@@ -29,7 +29,7 @@ impl RelRt {
     }
 
     pub fn enable(&mut self) {
-        unsafe { libc::syscall(SYSNO_SET_COUNTER_ADDR as _, self.counter_addr) };
+        unsafe { libc::syscall(CustomSysno::RelRtLibSetCounterAddr as _, self.counter_addr) };
     }
 
     #[cfg(target_arch = "x86_64")]

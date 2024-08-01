@@ -38,11 +38,11 @@ use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::registers::RegisterAccess;
 use crate::process::{OwnedProcess, Process};
 use crate::statistics::timing::{self, Tracer};
-use crate::syscall_handlers::{SYSNO_CHECKPOINT_FINI, SYSNO_CHECKPOINT_TAKE};
 use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
 use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
+use crate::types::custom_sysno::CustomSysno;
 use crate::types::exit_reason::ExitReason;
 use crate::types::process_id::{Checker, Inferior, Main};
 use crate::types::segment::{Segment, SegmentId, SegmentStatus};
@@ -1029,9 +1029,12 @@ where
             .unwrap();
 
         if handled == SyscallHandlerExitAction::NextHandler
-            && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
+            && (matches!(
+                CustomSysno::from_repr(sysno),
+                Some(CustomSysno::CheckpointTake) | Some(CustomSysno::CheckpointFini)
+            ))
         {
-            let is_finishing = sysno == SYSNO_CHECKPOINT_FINI;
+            let is_finishing = CustomSysno::from_repr(sysno) == Some(CustomSysno::CheckpointFini);
 
             match child {
                 Inferior::Main(main) => {
@@ -1088,7 +1091,10 @@ where
             .unwrap();
 
         if handled == SyscallHandlerExitAction::NextHandler
-            && (sysno == SYSNO_CHECKPOINT_TAKE || sysno == SYSNO_CHECKPOINT_FINI)
+            && (matches!(
+                CustomSysno::from_repr(sysno),
+                Some(CustomSysno::CheckpointTake) | Some(CustomSysno::CheckpointFini)
+            ))
         {
             child
                 .process()

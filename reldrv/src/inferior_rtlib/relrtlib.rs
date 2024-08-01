@@ -17,13 +17,10 @@ use crate::{
     },
     inferior_rtlib::ScheduleCheckpointReady,
     process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
-    syscall_handlers::{CUSTOM_SYSNO_START, SYSNO_CHECKPOINT_TAKE},
-    types::{checkpoint::CheckpointCaller, process_id::Main},
+    types::{checkpoint::CheckpointCaller, custom_sysno::CustomSysno, process_id::Main},
 };
 
 use super::ScheduleCheckpoint;
-
-pub const SYSNO_SET_COUNTER_ADDR: usize = CUSTOM_SYSNO_START + 1;
 
 pub struct RelRtLib {
     period: u64,
@@ -91,44 +88,48 @@ impl CustomSyscallHandler for RelRtLib {
         args: SyscallArgs,
         context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if sysno == SYSNO_SET_COUNTER_ADDR {
-            assert!(context.child.is_main()); // TODO: handle this more gracefully
-            assert!(self.perf_counter.lock().is_none());
+        match CustomSysno::from_repr(sysno) {
+            Some(CustomSysno::RelRtLibSetCounterAddr) => {
+                assert!(context.child.is_main()); // TODO: handle this more gracefully
+                assert!(self.perf_counter.lock().is_none());
 
-            let base_address = if args.arg0 == 0 {
-                None
-            } else {
-                Some(args.arg0)
-            };
+                let base_address = if args.arg0 == 0 {
+                    None
+                } else {
+                    Some(args.arg0)
+                };
 
-            info!(
-                "Set counter address {:?} requested",
-                base_address.map(|p| p as *const u8)
-            );
+                info!(
+                    "Set counter address {:?} requested",
+                    base_address.map(|p| p as *const u8)
+                );
 
-            let counter = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
-                .observe_pid(context.process().pid.as_raw())
-                .wakeup_watermark(1)
-                .sample_period(self.period)
-                .sample(SampleFlag::IP)
-                .sigtrap(true)
-                .remove_on_exec(true)
-                .build()?;
+                let counter = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
+                    .observe_pid(context.process().pid.as_raw())
+                    .wakeup_watermark(1)
+                    .sample_period(self.period)
+                    .sample(SampleFlag::IP)
+                    .sigtrap(true)
+                    .remove_on_exec(true)
+                    .build()?;
 
-            *self.counter_addr.write() = base_address;
+                *self.counter_addr.write() = base_address;
 
-            self.perf_counter.lock().insert(counter).enable().unwrap();
+                self.perf_counter.lock().insert(counter).enable().unwrap();
 
-            context
-                .check_coord
-                .dispatcher
-                .handle_ready_to_schedule_checkpoint(context.check_coord)?;
+                context
+                    .check_coord
+                    .dispatcher
+                    .handle_ready_to_schedule_checkpoint(context.check_coord)?;
 
-            return Ok(SyscallHandlerExitAction::ContinueInferior);
-        } else if sysno == SYSNO_CHECKPOINT_TAKE && context.child.is_main() {
-            if let Some(c) = self.perf_counter.lock().as_mut() {
-                c.enable()?;
+                return Ok(SyscallHandlerExitAction::ContinueInferior);
             }
+            Some(CustomSysno::CheckpointTake) if context.child.is_main() => {
+                if let Some(c) = self.perf_counter.lock().as_mut() {
+                    c.enable()?;
+                }
+            }
+            _ => (),
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)

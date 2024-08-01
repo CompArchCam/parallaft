@@ -12,11 +12,8 @@ use crate::{
         HandlerContext,
     },
     process::{dirty_pages::IgnoredPagesProvider, Process},
-    syscall_handlers::CUSTOM_SYSNO_START,
-    types::{checkpoint::CheckpointCaller, process_id::Main},
+    types::{checkpoint::CheckpointCaller, custom_sysno::CustomSysno, process_id::Main},
 };
-
-const SYSNO_SET_CLI_CONTROL_ADDR: usize = CUSTOM_SYSNO_START;
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
@@ -102,7 +99,7 @@ impl CustomSyscallHandler for LegacyInferiorRtLib {
         args: SyscallArgs,
         context: HandlerContext,
     ) -> Result<SyscallHandlerExitAction> {
-        if sysno == SYSNO_SET_CLI_CONTROL_ADDR {
+        if CustomSysno::from_repr(sysno) == Some(CustomSysno::LegacyRtSetCliControlAddr) {
             assert!(context.child.is_main());
 
             let base_address = if args.arg0 == 0 {
