@@ -13,7 +13,7 @@ impl BasePerfCounter {
         E: Event,
     {
         let mut builder = perf_event::Builder::new(event);
-        let mut counter = builder.pinned(pinned).enabled(true);
+        let mut counter = builder.pinned(pinned).enabled(true).exclude_guest(true);
 
         counter = match target {
             Target::Pid(pid) => counter.observe_pid(pid.as_raw() as _),
@@ -72,6 +72,7 @@ impl BasePerfCounterWithInterrupt {
             .sig_data(sig_data)
             .precise_ip(sample_skid)
             .remove_on_exec(true)
+            .exclude_guest(true)
             .build()?;
 
         Ok(Self { counter, sig_data })

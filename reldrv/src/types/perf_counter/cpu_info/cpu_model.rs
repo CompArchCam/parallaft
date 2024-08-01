@@ -38,6 +38,10 @@ pub enum CpuModel {
     Armv8CortexA76,
     #[cfg(target_arch = "aarch64")]
     Armv8NeoverseN1,
+    #[cfg(target_arch = "aarch64")]
+    AppleAvalancheM2,
+    #[cfg(target_arch = "aarch64")]
+    AppleBlizzardM2,
 
     Unknown,
 }
@@ -145,6 +149,8 @@ impl CpuModel {
             (0x41, 0xd05) => Self::Armv8CortexA55,
             (0x41, 0xd0b) => Self::Armv8CortexA76,
             (0x41, 0xd0c) => Self::Armv8NeoverseN1,
+            (0x61, 0x033) => Self::AppleAvalancheM2,
+            (0x61, 0x032) => Self::AppleBlizzardM2,
             _ => Self::Unknown,
         }
     }
@@ -156,7 +162,11 @@ impl CpuModel {
             #[cfg(target_arch = "x86_64")]
             Self::IntelLakeCove | Self::IntelMont | Self::IntelOther => 2048, // orig: 1024
             #[cfg(target_arch = "aarch64")]
-            Self::Armv8CortexA55 | Self::Armv8CortexA76 | Self::Armv8NeoverseN1 => 512,
+            Self::Armv8CortexA55
+            | Self::Armv8CortexA76
+            | Self::Armv8NeoverseN1
+            | Self::AppleAvalancheM2
+            | Self::AppleBlizzardM2 => 512, // TODO: verify this
             _ => 0,
         }
     }
@@ -168,7 +178,10 @@ impl CpuModel {
             #[cfg(target_arch = "x86_64")]
             Self::IntelLakeCove | Self::IntelMont | Self::IntelOther => 16384,
             #[cfg(target_arch = "aarch64")]
-            Self::Armv8CortexA55 | Self::Armv8CortexA76 => 16384, // TODO: verify this
+            Self::Armv8CortexA55
+            | Self::Armv8CortexA76
+            | Self::AppleAvalancheM2
+            | Self::AppleBlizzardM2 => 16384, // TODO: verify this
             _ => 0,
         }
     }

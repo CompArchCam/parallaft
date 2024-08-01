@@ -30,6 +30,7 @@ mod constants {
         else if #[cfg(target_arch = "aarch64")] {
             pub const ARM_BR_RETIRED: &'static str = "br_retired";
             pub const ARM_EXC_TAKEN: &'static str = "exc_taken";
+            pub const APPLE_BR_RETIRED: u64 = 0x8d;
         }
     }
 }
@@ -43,6 +44,7 @@ fn get_expr(branch_type: BranchType, cpu_model: CpuModel) -> Expr {
                     Box::new(Expr::Dynamic(constants::ARM_EXC_TAKEN)),
                 ),
                 (BranchType::AllExclFar, CpuModel::Armv8CortexA76 | CpuModel::Armv8NeoverseN1) => Expr::Dynamic(constants::ARM_BR_RETIRED),
+                (BranchType::AllExclFar, CpuModel::AppleAvalancheM2 | CpuModel::AppleBlizzardM2) => Expr::Raw(constants::APPLE_BR_RETIRED),
                 _ => todo!(),
             }
         }
