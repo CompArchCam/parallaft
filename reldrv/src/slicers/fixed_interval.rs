@@ -9,10 +9,12 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::{
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    process::Process,
     signal_handlers::begin_protection::main_begin_protection_req,
     syscall_handlers::is_execve_ok,
     types::{
@@ -46,6 +48,7 @@ pub struct FixedIntervalSlicer<'a> {
     reference: ReferenceType,
     state: Mutex<Option<State>>,
     main_cpu_set: &'a [usize],
+    is_test: bool,
 }
 
 impl<'a> FixedIntervalSlicer<'a> {
@@ -54,6 +57,7 @@ impl<'a> FixedIntervalSlicer<'a> {
         interval: u64,
         reference: ReferenceType,
         main_cpu_set: &'a [usize],
+        is_test: bool,
     ) -> Self {
         Self {
             skip,
@@ -61,6 +65,7 @@ impl<'a> FixedIntervalSlicer<'a> {
             reference,
             state: Mutex::new(None),
             main_cpu_set,
+            is_test,
         }
     }
 
@@ -78,6 +83,28 @@ impl<'a> FixedIntervalSlicer<'a> {
             None,
         )
     }
+
+    fn start(&self, process: &Process) -> Result<()> {
+        if let Some(skip) = self.skip {
+            debug!("Skipping the first {} {}", skip, self.reference);
+            *self.state.lock() = Some(State::Skipping(
+                self.get_perf_counter_interrupt(skip, process.pid)?,
+            ));
+        } else {
+            debug!(
+                "Starting automatic slicing with interval: {} {}",
+                self.interval, self.reference
+            );
+
+            main_begin_protection_req(process.pid)?;
+
+            *self.state.lock() = Some(State::Normal(
+                self.get_perf_counter_interrupt(self.interval, process.pid)?,
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
@@ -89,24 +116,7 @@ impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
-
-            if let Some(skip) = self.skip {
-                debug!("Skipping the first {} {}", skip, self.reference);
-                *self.state.lock() = Some(State::Skipping(
-                    self.get_perf_counter_interrupt(skip, context.child.process().pid)?,
-                ));
-            } else {
-                debug!(
-                    "Starting automatic slicing with interval: {} {}",
-                    self.interval, self.reference
-                );
-
-                main_begin_protection_req(context.child.process().pid)?;
-
-                *self.state.lock() = Some(State::Normal(
-                    self.get_perf_counter_interrupt(self.interval, context.child.process().pid)?,
-                ));
-            }
+            self.start(context.child.process())?;
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
@@ -184,6 +194,24 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
     }
 }
 
+impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
+    fn handle_main_init<'s, 'scope, 'disp>(
+        &'s self,
+        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'scope,
+        's: 'disp,
+        'disp: 'scope,
+    {
+        if self.is_test {
+            self.start(context.process)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl Module for FixedIntervalSlicer<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -191,5 +219,6 @@ impl Module for FixedIntervalSlicer<'_> {
     {
         subs.install_standard_syscall_handler(self);
         subs.install_signal_handler(self);
+        subs.install_process_lifetime_hook(self);
     }
 }

@@ -334,6 +334,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
                 options.checkpoint_period,
                 options.fixed_interval_slicer_reference_type,
                 &options.main_cpu_set,
+                options.is_test,
             ));
         }
         SlicerType::EntireProgram => {
