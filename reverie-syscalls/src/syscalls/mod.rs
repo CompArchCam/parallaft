@@ -2329,20 +2329,45 @@ typed_syscall! {
 
 typed_syscall! {
     // TODO: Wrap each futex operation in a type, similar to fcntl and ioctl.
-    #[may_read_specified_only]
-    #[may_write_specified_only]
+    #[no_impl_may_read]
+    #[no_impl_may_write]
     pub struct Futex {
-        // TODO: #[object_may_read]
-        #[object_may_written]
         uaddr: Option<AddrMut<libc::c_int>>,
         futex_op: libc::c_int,
         val: libc::c_int,
-        #[object_may_read]
         timeout: Option<Addr<Timespec>>,
-        // TODO: #[object_may_read]
-        #[object_may_written]
         uaddr2: Option<AddrMut<libc::c_int>>,
         val3: libc::c_int,
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayRead<'a, M> for Futex {
+    fn may_read(&'a self, memory: &'a M) -> Result<Box<[AddrSlice<'a, u8>]>, Errno> {
+        let mut builder = RangesSyscallMayReadBuilder::new(memory);
+
+        if [libc::FUTEX_WAIT, libc::FUTEX_WAKE_BITSET].contains(&self.futex_op()) {
+            builder = builder.may_read_object(self.timeout());
+        }
+
+        builder.build()
+    }
+}
+
+impl<'a, M: MemoryAccess> SyscallMayWrite<'a, M> for Futex {
+    fn may_write(&'a self, memory: &'a M) -> Result<Box<[AddrSliceMut<'a, u8>]>, Errno> {
+        let mut builder = RangesSyscallMayWriteBuilder::new(memory);
+
+        if [
+            libc::FUTEX_REQUEUE,
+            libc::FUTEX_CMP_REQUEUE,
+            libc::FUTEX_WAKE_OP,
+        ]
+        .contains(&self.futex_op())
+        {
+            builder = builder.may_write_object(self.uaddr2());
+        }
+
+        builder.may_write_object(self.uaddr()).build()
     }
 }
 
