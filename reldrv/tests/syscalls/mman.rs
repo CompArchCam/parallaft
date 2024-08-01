@@ -168,7 +168,7 @@ fn mmap_fd_write_shared_memfd() {
 
         Ok::<_, ()>(())
     })
-    .expect_state_mismatch() // shared mmap not handled yet
+    .expect()
 }
 
 // TODO: test MAP_SHARED-to-MAP_PRIVATE transformation

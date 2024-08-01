@@ -1,6 +1,6 @@
 use std::{collections::HashSet, ops::Range};
 
-use log::{error, info};
+use log::{debug, error, info};
 use parking_lot::Mutex;
 use reverie_syscalls::{Addr, AddrMut, MapFlags, ProtFlags, Syscall, SyscallInfo};
 
@@ -120,15 +120,23 @@ impl StandardSyscallHandler for MmapHandler {
         let checker = context.child.unwrap_checker();
 
         match syscall {
-            Syscall::Mmap(mmap) => {
+            Syscall::Mmap(mut mmap) => {
                 // checker process
                 // use MAP_FIXED, mapping exactly the same address that the main process did
 
+                mmap = mmap.with_flags(
+                    (mmap.flags() & !MapFlags::MAP_SHARED) | MapFlags::MAP_PRIVATE, // TODO: MAP_SHARED_VALIDATE
+                );
+
                 if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
-                    info!("Checker mmap checkpoint fini");
+                    debug!("{} Mmap: Checkpoint fini", { checker });
                     // File-backed mmap
 
                     if mmap.fd() >= 0 {
+                        checker.process.modify_registers_with(|regs| {
+                            regs.with_syscall_args(mmap.into_parts().1, false)
+                        })?;
+
                         Ok(StandardSyscallEntryCheckerHandlerExitAction::Checkpoint)
                     } else {
                         panic!("Unexpected fd")
@@ -211,6 +219,7 @@ impl StandardSyscallHandler for MmapHandler {
         let main = context.process();
         match saved_incomplete_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
+                debug!("{} Mmap: restoring registers", context.child);
                 // restore registers as if we haven't modified mmap/mremap flags
                 main.modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1, true)
@@ -240,6 +249,7 @@ impl StandardSyscallHandler for MmapHandler {
     ) -> Result<SyscallHandlerExitAction> {
         match saved_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) => {
+                debug!("{} Mmap: restoring registers", context.child);
                 // restore registers as if we haven't modified mmap/mremap flags
                 context.process().modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_syscall.syscall.into_parts().1, true)
