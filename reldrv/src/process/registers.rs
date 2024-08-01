@@ -499,7 +499,7 @@ impl RegisterAccess for Process {
 
                 // syscall exit
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::PtraceSyscall(_)));
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     ptrace::SyscallInfoOp::Exit { .. }
@@ -511,7 +511,7 @@ impl RegisterAccess for Process {
 
                 // expect the injected breakpoint
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGTRAP)));
+                assert_eq!(status, WaitStatus::Stopped(self.pid, Signal::SIGTRAP));
 
                 // read the unclobbered x7 register
                 let x7 = self.read_registers()?.regs[7];
@@ -526,7 +526,7 @@ impl RegisterAccess for Process {
                 )?;
                 self.resume()?;
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::PtraceSyscall(_)));
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     ptrace::SyscallInfoOp::Entry { .. }
@@ -551,7 +551,7 @@ impl RegisterAccess for Process {
 
                 // expect the injected breakpoint
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGTRAP)));
+                assert_eq!(status, WaitStatus::Stopped(self.pid, Signal::SIGTRAP));
 
                 // read the unclobbered x7 register
                 let x7 = self.read_registers()?.regs[7];
@@ -570,7 +570,7 @@ impl RegisterAccess for Process {
                 self.resume()?;
 
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::PtraceSyscall(_)));
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     ptrace::SyscallInfoOp::Entry { .. }
@@ -580,7 +580,7 @@ impl RegisterAccess for Process {
                 self.resume()?;
 
                 let status = self.waitpid()?;
-                assert!(matches!(status, WaitStatus::PtraceSyscall(_)));
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
                 debug_assert!(matches!(
                     ptrace::getsyscallinfo(self.pid)?.op,
                     ptrace::SyscallInfoOp::Exit { .. }
