@@ -9,7 +9,7 @@ use log::{debug, info, trace};
 
 use pretty_hex::PrettyHex;
 use procfs::{
-    process::{MMPermissions, MMapPath, MemoryPageFlags, PageInfo, SwapPageFlags},
+    process::{MMPermissions, MMapPath, MemoryMap, MemoryPageFlags, PageInfo, SwapPageFlags},
     KPageCount,
 };
 use reverie_syscalls::MemoryAccess;
@@ -292,6 +292,21 @@ impl Process {
         }
 
         Ok(())
+    }
+}
+
+pub trait AsIoSlice {
+    fn as_io_slice(&self) -> std::io::IoSlice<'static>;
+}
+
+impl AsIoSlice for MemoryMap {
+    fn as_io_slice(&self) -> std::io::IoSlice<'static> {
+        unsafe {
+            std::io::IoSlice::new(slice::from_raw_parts(
+                self.address.0 as *const u8,
+                (self.address.1 - self.address.0) as usize,
+            ))
+        }
     }
 }
 

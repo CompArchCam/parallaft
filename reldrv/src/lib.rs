@@ -41,6 +41,7 @@ use dispatcher::Module;
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
+use helpers::madviser::Madviser;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
@@ -207,6 +208,9 @@ pub struct RelShellOptions {
     // speculation control options
     pub enable_speculative_store_bypass_misfeature: bool,
     pub enable_indirect_branch_speculation_misfeature: bool,
+
+    // madviser
+    pub enable_madviser: bool,
 
     #[cfg(target_arch = "x86_64")]
     // Intel hybrid workaround
@@ -395,6 +399,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     disp.register_module(SliceSegmentHandler);
     disp.register_module(BeginProtectionHandler);
+
+    if options.enable_madviser {
+        disp.register_module(Madviser::new());
+    }
 
     // Statistics
     let tracer = disp.register_module(Tracer::new());

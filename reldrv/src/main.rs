@@ -175,6 +175,10 @@ struct CliArgs {
     #[arg(long)]
     enable_indirect_branch_speculation_misfeature: bool,
 
+    /// Advise the kernel to swap out checkpoint pages should there be a memory pressure
+    #[arg(long)]
+    madviser: bool,
+
     #[cfg(target_arch = "x86_64")]
     /// Enable Intel hybrid CPU workaround
     #[arg(long)]
@@ -317,6 +321,7 @@ fn main() {
                 .enable_speculative_store_bypass_misfeature,
             enable_indirect_branch_speculation_misfeature: cli
                 .enable_indirect_branch_speculation_misfeature,
+            enable_madviser: cli.madviser,
             #[cfg(target_arch = "x86_64")]
             enable_intel_hybrid_workaround: cli.enable_intel_hybrid_workaround,
 

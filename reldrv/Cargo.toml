@@ -35,7 +35,7 @@ cfg-if = "1.0.0"
 rand = "0.8.5"
 userfaultfd = { git = "https://github.com/mbyzhang/userfaultfd-rs.git", features = ["linux5_7"], rev = "00335e2ba375061232beadfe8b06ccb1a4da14d7", optional = true }
 pidfd_getfd = { version = "0.2.2", optional = true }
-pidfd = { version = "0.2.4", optional = true }
+pidfd = "0.2.4"
 strum = { version = "0.26.3", features = ["derive"] }
 
 [dev-dependencies]
@@ -45,4 +45,4 @@ dbg_hex = "0.2.0"
 [features]
 default = ["intel_cat"]
 intel_cat = []
-dpt_uffd = ["dep:userfaultfd", "dep:pidfd_getfd", "dep:pidfd"]
+dpt_uffd = ["dep:userfaultfd", "dep:pidfd_getfd"]

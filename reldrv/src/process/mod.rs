@@ -1,5 +1,6 @@
 pub mod detach;
 pub mod dirty_pages;
+pub mod madvise;
 pub mod memory;
 pub mod registers;
 pub mod siginfo;
@@ -11,6 +12,7 @@ use crate::error::{Error, Result};
 use lazy_init::Lazy;
 use lazy_static::lazy_static;
 use nix::unistd::gettid;
+use pidfd::PidFd;
 use registers::RegisterAccess;
 use std::ops::Deref;
 use std::{fmt::Debug, ops::DerefMut};
@@ -36,6 +38,7 @@ lazy_static! {
 pub struct Process {
     pub pid: Pid,
     procfs: Lazy<procfs::ProcResult<procfs::process::Process>>,
+    pidfd: Lazy<std::io::Result<PidFd>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -60,6 +63,7 @@ impl Process {
         Self {
             pid,
             procfs: Lazy::new(),
+            pidfd: Lazy::new(),
         }
     }
 
@@ -75,6 +79,16 @@ impl Process {
             .map_err(|_| Error::Other)?;
 
         Ok(p)
+    }
+
+    pub fn pidfd(&self) -> Result<&PidFd> {
+        let pidfd = self
+            .pidfd
+            .get_or_create(|| unsafe { PidFd::open(self.pid.as_raw(), 0) })
+            .as_ref()
+            .map_err(|_| Error::Other)?;
+
+        Ok(pidfd)
     }
 
     pub fn single_step(&self) -> Result<()> {
@@ -244,6 +258,7 @@ impl Clone for Process {
         Self {
             pid: self.pid,
             procfs: Lazy::new(),
+            pidfd: Lazy::new(),
         }
     }
 }
