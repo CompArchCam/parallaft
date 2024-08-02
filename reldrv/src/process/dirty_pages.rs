@@ -85,7 +85,7 @@ pub fn page_diff(
                         .zip(page2.iter())
                         .position(|(a, b)| a != b)
                         .unwrap()
-                        & !0x8;
+                        & !0x7;
 
                     let page1_word = &page1[mismatch_addr..mismatch_addr + 0x8];
                     let page2_word = &page2[mismatch_addr..mismatch_addr + 0x8];
