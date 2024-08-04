@@ -23,7 +23,7 @@ use crate::{
             symbolic_events::GenericHardwareEventCounterWithInterrupt, PerfCounter,
             PerfCounterWithInterrupt,
         },
-        process_id::InferiorRefMut,
+        process_id::{InferiorRefMut, Main},
     },
 };
 
@@ -255,15 +255,15 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
 impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
         if self.is_test {
-            self.start_if_auto(context.process)?;
+            self.start_if_auto(&main.process)?;
         }
 
         Ok(())

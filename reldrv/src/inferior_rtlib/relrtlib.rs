@@ -153,7 +153,8 @@ impl SignalHandler for RelRtLib {
             /* TRAP_PERF */
             {
                 info!("{} Trap: Perf", context.child);
-                self.schedule_checkpoint(context.check_coord).unwrap();
+                self.schedule_checkpoint(context.child.unwrap_main_mut(), context.check_coord)
+                    .unwrap();
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
                     single_step: false,
                 });
@@ -165,17 +166,15 @@ impl SignalHandler for RelRtLib {
 }
 
 impl ScheduleCheckpoint for RelRtLib {
-    fn schedule_checkpoint(&self, check_coord: &CheckCoordinator) -> Result<()> {
+    fn schedule_checkpoint(&self, main: &mut Main, _check_coord: &CheckCoordinator) -> Result<()> {
         let addr = self.counter_addr.read();
 
         if addr.is_none() {
             return Err(Error::InvalidState);
         }
 
-        let process = &check_coord.main;
-
-        let c = self.get_counter(process)?;
-        self.set_counter(&mut process.clone(), -1_i64 as u64)?;
+        let c = self.get_counter(&main.process)?;
+        self.set_counter(&mut main.process, -1_i64 as u64)?;
         *self.saved_counter_value.lock() = c;
 
         self.perf_counter.lock().as_mut().unwrap().disable()?;

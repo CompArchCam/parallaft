@@ -10,6 +10,7 @@ use crate::events::module_lifetime::ModuleLifetimeHook;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::process::Process;
 use crate::statistics_list;
+use crate::types::process_id::Main;
 use crate::{dispatcher::Module, error::Result};
 
 pub struct MemoryCollector {
@@ -37,7 +38,8 @@ impl MemoryCollector {
 impl ProcessLifetimeHook for MemoryCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -50,7 +52,7 @@ impl ProcessLifetimeHook for MemoryCollector {
             while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(self.interval) {
                 // TODO: join handle
                 let segments = context.check_coord.segments.read();
-                let mut pids = vec![context.check_coord.main.pid];
+                let mut pids = vec![context.check_coord.main_pid];
 
                 for segment in &segments.list {
                     if let Some(p) = segment.checker_status.lock().pid() {

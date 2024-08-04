@@ -14,6 +14,7 @@ use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::WaitStatus;
 
+use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo};
@@ -24,7 +25,7 @@ use crate::dispatcher::Dispatcher;
 use crate::error::{Error, Result, UnexpectedEventReason};
 use crate::events::hctx;
 use crate::events::module_lifetime::ModuleLifetimeHook;
-use crate::events::process_lifetime::{pctx, ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{pctx, ProcessLifetimeHook};
 use crate::events::syscall::{
     CustomSyscallHandler, StandardSyscallEntryCheckerHandlerExitAction,
     StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler, SyscallHandlerExitAction,
@@ -59,7 +60,7 @@ struct Worker {
 
 pub struct CheckCoordinator<'disp, 'modules, 'tracer> {
     pub segments: Arc<RwLock<SegmentChains>>,
-    pub main: Process, // TODO: remove this
+    pub main_pid: Pid,
     pub epoch: AtomicU32,
     options: CheckCoordinatorOptions,
     pub dispatcher: &'disp Dispatcher<'disp, 'modules>,
@@ -102,7 +103,7 @@ where
     ) -> Self {
         Self {
             segments: Arc::new(RwLock::new(SegmentChains::new())),
-            main,
+            main_pid: main.pid,
             epoch: AtomicU32::new(0),
             options,
             dispatcher,
@@ -129,13 +130,12 @@ where
         // Dispatch init
         match &mut child {
             Inferior::Main(main) => {
-                self.dispatcher
-                    .handle_main_init(pctx(&mut main.process, self, scope))?;
+                self.dispatcher.handle_main_init(main, pctx(self, scope))?;
                 wall_time_event = timing::Event::MainWall;
             }
             Inferior::Checker(checker) => {
                 self.dispatcher
-                    .handle_checker_init(pctx(&mut checker.process, self, scope))?;
+                    .handle_checker_init(checker, pctx(self, scope))?;
                 wall_time_event = timing::Event::CheckerWall;
             }
         }
@@ -249,21 +249,14 @@ where
                 //     return Ok(ExitReason::Crashed(Error));
                 // }
 
-                self.dispatcher.handle_main_fini(
-                    match exit_reason {
-                        ExitReason::NormalExit(ret) => ret,
-                        _ => -1,
-                    }, /* todo */
-                    pctx(&mut main.process, self, scope),
-                )?;
+                self.dispatcher
+                    .handle_main_fini(main, &exit_reason, pctx(self, scope))?;
             }
             Inferior::Checker(checker) => {
                 assert!(checker.segment.checker_status.lock().is_finished());
 
-                self.dispatcher.handle_checker_fini(
-                    None, /* todo */
-                    pctx(&mut checker.process, self, scope),
-                )?
+                self.dispatcher
+                    .handle_checker_fini(checker, pctx(self, scope))?
             }
         }
 
@@ -707,12 +700,7 @@ where
             park();
         }
 
-        self.dispatcher
-            .handle_all_fini(ProcessLifetimeHookContext {
-                process: &self.main,
-                check_coord: self,
-                scope,
-            })?; // TODO
+        self.dispatcher.handle_all_fini(pctx(self, scope))?;
 
         // Cancel all checkers
         self.segments.read().mark_all_filling_segments_as_crashed();

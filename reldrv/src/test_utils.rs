@@ -31,3 +31,10 @@ pub fn ptraced(f: impl FnOnce() -> i32) -> OwnedProcess {
         }
     }
 }
+
+pub fn init_logging() {
+    let _ = pretty_env_logger::formatted_builder()
+        .parse_default_env()
+        .is_test(true)
+        .try_init();
+}

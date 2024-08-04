@@ -7,6 +7,7 @@ use crate::{
     error::Result,
     events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     process::Process,
+    types::process_id::{Checker, Main},
 };
 
 pub struct AffinitySetter<'a> {
@@ -52,16 +53,16 @@ impl<'a> AffinitySetter<'a> {
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
-        context.process.set_cpu_affinity(self.main_cpu_set)?;
+        main.process.set_cpu_affinity(self.main_cpu_set)?;
 
         #[cfg(feature = "intel_cat")]
         if !self.main_cpu_set.is_empty()
@@ -107,14 +108,14 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        checker: &mut Checker,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        context.process.set_cpu_affinity(self.checker_cpu_set)?;
+        checker.process.set_cpu_affinity(self.checker_cpu_set)?;
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         Ok(())

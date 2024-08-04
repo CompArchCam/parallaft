@@ -8,6 +8,8 @@ use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::statistics::StatisticsProvider;
+use crate::types::exit_reason::ExitReason;
+use crate::types::process_id::Main;
 
 use super::StatisticValue;
 
@@ -158,14 +160,14 @@ impl PerfStatsCollector {
 impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        let process = context.process;
+        let process = &main.process;
         let mut group = self.counters.lock();
         let mut counters = self
             .counter_kinds
@@ -185,11 +187,11 @@ impl ProcessLifetimeHook for PerfStatsCollector {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        _exit_reason: &ExitReason,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {

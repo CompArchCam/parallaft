@@ -16,7 +16,11 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    types::{checker::CheckFailReason, process_id::Checker},
+    types::{
+        checker::CheckFailReason,
+        exit_reason::ExitReason,
+        process_id::{Checker, Main},
+    },
 };
 
 use super::{StatisticValue, StatisticsProvider};
@@ -214,15 +218,15 @@ impl StandardSyscallHandler for Tracer {
 impl ProcessLifetimeHook for Tracer {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        exit_reason: &ExitReason,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        *self.exit_status.lock() = Some(ret_val);
+        *self.exit_status.lock() = Some(exit_reason.exit_code());
         Ok(())
     }
 }

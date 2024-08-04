@@ -16,7 +16,7 @@ use crate::{
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
-    types::process_id::Main,
+    types::{exit_reason::ExitReason, process_id::Main},
 };
 use libfpt_rs::{FptFd, FptFlags, TRAP_FPT_WATERMARK_USER};
 use log::info;
@@ -43,11 +43,11 @@ impl CheckpointSizeLimiter {
 impl ProcessLifetimeHook for CheckpointSizeLimiter {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        _exit_reason: &ExitReason,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -83,7 +83,7 @@ impl SignalHandler for CheckpointSizeLimiter {
                 context
                     .check_coord
                     .dispatcher
-                    .schedule_checkpoint(context.check_coord)
+                    .schedule_checkpoint(context.child.unwrap_main_mut(), context.check_coord)
                     .unwrap();
 
                 return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
@@ -121,7 +121,7 @@ impl ScheduleCheckpointReady for CheckpointSizeLimiter {
         }
 
         let mut fd = FptFd::new(
-            check_coord.main.pid,
+            check_coord.main_pid,
             self.size_watermark * 2,
             FptFlags::EXCLUDE_NON_WRITABLE_VMA
                 | FptFlags::SIGTRAP_WATERMARK

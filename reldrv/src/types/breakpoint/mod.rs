@@ -12,6 +12,7 @@ pub struct BreakpointCharacteristics {
 }
 
 pub trait Breakpoint: Send + Sync {
+    fn addr(&self) -> usize;
     fn enable(&mut self, process: &mut Process) -> Result<()>;
     fn disable(&mut self, process: &mut Process) -> Result<()>;
     fn is_hit(&self, process: &Process) -> Result<bool>;

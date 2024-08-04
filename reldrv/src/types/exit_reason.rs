@@ -6,7 +6,7 @@ use super::checker::CheckFailReason;
 
 pub type ExitCode = i32;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExitReason {
     NormalExit(ExitCode),
     Signalled(Signal),

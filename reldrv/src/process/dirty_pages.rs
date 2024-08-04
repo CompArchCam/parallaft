@@ -91,8 +91,13 @@ pub fn page_diff(
                     let page2_word = &page2[mismatch_addr..mismatch_addr + 0x8];
 
                     info!(
-                        "{:02X?} != {:02X?} @ offset {:?}",
-                        page1_word, page2_word, mismatch_addr as *const u8
+                        "{:02X?} != {:02X?} @ offset {:#0x}",
+                        page1_word, page2_word, mismatch_addr
+                    );
+
+                    info!(
+                        "Mismatch address: {:#0x}",
+                        r.as_ptr() as usize + mismatch_addr
                     );
 
                     trace!("Page data 1:\n{:?}", page1.hex_dump());

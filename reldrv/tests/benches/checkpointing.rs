@@ -14,9 +14,13 @@ use reldrv::{
     error::Result,
     events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
     process::PAGESIZE,
-    types::perf_counter::{
-        symbolic_events::{expr::Target, GenericHardwareEventCounter},
-        PerfCounter,
+    types::{
+        exit_reason::ExitReason,
+        perf_counter::{
+            symbolic_events::{expr::Target, GenericHardwareEventCounter},
+            PerfCounter,
+        },
+        process_id::Main,
     },
     RelShellOptionsBuilder,
 };
@@ -47,10 +51,10 @@ impl CyclesCounter {
 impl ProcessLifetimeHook for CyclesCounter {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -73,11 +77,11 @@ impl ProcessLifetimeHook for CyclesCounter {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _ret_val: i32,
-        _context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        _main: &mut Main,
+        _exit_reason: &ExitReason,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {

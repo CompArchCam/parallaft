@@ -174,7 +174,8 @@ impl StandardSyscallHandler for DynamicSlicer<'_> {
 impl ProcessLifetimeHook for DynamicSlicer<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope + 'disp,
@@ -184,7 +185,7 @@ impl ProcessLifetimeHook for DynamicSlicer<'_> {
         *self.worker.lock() = Some(tx);
 
         let segments = context.check_coord.segments.clone();
-        let main_pid = context.process.pid;
+        let main_pid = main.process.pid;
 
         context.scope.spawn(move || {
             (|| -> Result<()> {

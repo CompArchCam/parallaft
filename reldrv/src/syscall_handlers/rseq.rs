@@ -11,6 +11,7 @@ use crate::{
         HandlerContext,
     },
     process::registers::RegisterAccess,
+    types::process_id::Main,
 };
 
 pub struct RseqHandler {}
@@ -60,17 +61,17 @@ impl StandardSyscallHandler for RseqHandler {
 impl ProcessLifetimeHook for RseqHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
-        let rseq_config = ptrace::get_rseq_configuration(context.process.pid).unwrap();
+        let rseq_config = ptrace::get_rseq_configuration(main.process.pid).unwrap();
 
         if rseq_config.rseq_abi_pointer != 0 {
-            let ret = context.process.syscall_direct(
+            let ret = main.process.syscall_direct(
                 syscalls::Sysno::rseq,
                 syscalls::syscall_args!(
                     rseq_config.rseq_abi_pointer as _,

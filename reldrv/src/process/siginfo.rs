@@ -16,6 +16,7 @@ impl Process {
 pub trait SigInfoExt {
     fn is_trap(&self) -> bool;
     fn is_trap_bp(&self) -> bool;
+    fn is_trap_hwbp(&self) -> bool;
     fn is_trap_trace(&self) -> bool;
     fn sigval(&self) -> Option<usize>;
 }
@@ -27,6 +28,10 @@ impl SigInfoExt for siginfo_t {
 
     fn is_trap_bp(&self) -> bool {
         self.is_trap() && self.si_code == 1 /* TRAP_BRKPT */
+    }
+
+    fn is_trap_hwbp(&self) -> bool {
+        self.is_trap() && self.si_code == 4 /* TRAP_HWBKPT */
     }
 
     fn is_trap_trace(&self) -> bool {

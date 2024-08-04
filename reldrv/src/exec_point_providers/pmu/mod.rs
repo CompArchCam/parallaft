@@ -196,7 +196,8 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
 impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -204,7 +205,7 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     {
         *self.main_branch_counter.lock() = Some(BranchCounter::new(
             self.branch_counter_type,
-            Target::Pid(context.process.pid),
+            Target::Pid(main.process.pid),
             true,
             self.main_cpu_set,
         )?);

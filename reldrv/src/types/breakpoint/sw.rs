@@ -34,6 +34,10 @@ impl SoftwareBreakpoint {
 }
 
 impl Breakpoint for SoftwareBreakpoint {
+    fn addr(&self) -> usize {
+        self.pc
+    }
+
     fn enable(&mut self, process: &mut Process) -> Result<()> {
         if let BreakpointState::Enabled(_) = self.state {
             return Ok(());

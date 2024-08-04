@@ -30,6 +30,7 @@ use cfg_if::cfg_if;
 use debug_utils::core_dumper::CoreDumper;
 use debug_utils::exec_point_dumper::ExecutionPointDumper;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
+use debug_utils::watchpoint::Watchpoint;
 use derivative::Derivative;
 use derive_builder::Builder;
 use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
@@ -227,6 +228,7 @@ pub struct RelShellOptions {
     // debug utils
     pub core_dump: bool,
     pub core_dump_dir: PathBuf,
+    pub watchpoint_addresses: Vec<usize>,
 
     // integration test
     pub is_test: bool,
@@ -450,6 +452,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     disp.register_module(ExecutionPointDumper);
     disp.register_module(InProtectionAsserter);
+    disp.register_module(Watchpoint::new(&options.watchpoint_addresses));
 
     if options.core_dump {
         disp.register_module(CoreDumper::new("gcore".into(), options.core_dump_dir));

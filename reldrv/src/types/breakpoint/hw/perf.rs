@@ -1,24 +1,31 @@
+use log::debug;
 use nix::unistd::Pid;
 use perf_event::SampleSkid;
 
 use crate::{
-    error::Result,
-    process::Process,
-    types::perf_counter::{
-        symbolic_events::expr::BasePerfCounterWithInterrupt, PerfCounter, PerfCounterWithInterrupt,
+    error::{Error, Result},
+    process::{siginfo::SigInfoExt, Process},
+    types::{
+        breakpoint::{Breakpoint, BreakpointCharacteristics},
+        perf_counter::{
+            symbolic_events::expr::BasePerfCounterWithInterrupt, PerfCounter,
+            PerfCounterWithInterrupt,
+        },
     },
 };
-
-use super::{Breakpoint, BreakpointCharacteristics};
 
 pub struct HardwareBreakpoint {
     counter: BasePerfCounterWithInterrupt,
 }
 
 impl HardwareBreakpoint {
-    pub fn new(pid: Pid, ip: usize) -> std::io::Result<Self> {
+    pub fn new(pid: Pid, addr: usize, size: usize, watch: bool) -> std::io::Result<Self> {
         let counter = BasePerfCounterWithInterrupt::new(
-            perf_event::events::Breakpoint::execute(ip as _),
+            if watch {
+                perf_event::events::Breakpoint::write(addr as _, size as _)
+            } else {
+                perf_event::events::Breakpoint::execute(addr as _)
+            },
             pid,
             true,
             1,

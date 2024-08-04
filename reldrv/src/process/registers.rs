@@ -425,7 +425,7 @@ pub trait RegisterAccess {
 }
 
 impl Process {
-    fn get_reg_set<T>(&self, which: i32) -> Result<T> {
+    pub fn get_reg_set<T>(&self, which: i32) -> Result<T> {
         let mut regs = MaybeUninit::<T>::uninit();
 
         let mut iov = libc::iovec {
@@ -448,10 +448,10 @@ impl Process {
         Ok(unsafe { regs.assume_init() })
     }
 
-    fn set_reg_set<T>(&self, which: i32, regs: &T) -> Result<()> {
+    pub fn set_reg_set_with_len<T>(&self, which: i32, regs: &T, len: usize) -> Result<()> {
         let mut iov = libc::iovec {
             iov_base: regs as *const _ as *mut _,
-            iov_len: core::mem::size_of::<T>(),
+            iov_len: len.min(core::mem::size_of::<T>()),
         };
 
         unsafe {
@@ -465,6 +465,10 @@ impl Process {
         };
 
         Ok(())
+    }
+
+    pub fn set_reg_set<T>(&self, which: i32, regs: &T) -> Result<()> {
+        self.set_reg_set_with_len(which, regs, usize::MAX)
     }
 }
 

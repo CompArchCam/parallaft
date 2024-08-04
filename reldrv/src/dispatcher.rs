@@ -35,6 +35,7 @@ use crate::{
         chains::SegmentChains,
         checker::CheckFailReason,
         execution_point::ExecutionPoint,
+        exit_reason::ExitReason,
         process_id::{Checker, InferiorId, InferiorRefMut, Main},
         segment::Segment,
         segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
@@ -242,10 +243,10 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        main: &mut Main,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -253,15 +254,32 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
             .read()
             .process_lifetime_hooks
             .iter()
-            .try_for_each(|h| h.handle_main_init(context))
+            .try_for_each(|h| h.handle_main_init(main, context))
+    }
+
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        main: &mut Main,
+        exit_reason: &ExitReason,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.subscribers
+            .read()
+            .process_lifetime_hooks
+            .iter()
+            .try_for_each(|h| h.handle_main_fini(main, exit_reason, context))
     }
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        checker: &mut Checker,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -269,16 +287,15 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
             .read()
             .process_lifetime_hooks
             .iter()
-            .try_for_each(|h| h.handle_checker_init(context))
+            .try_for_each(|h| h.handle_checker_init(checker, context))
     }
 
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
-        nr_dirty_pages: Option<usize>,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        checker: &mut Checker,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -286,15 +303,14 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
             .read()
             .process_lifetime_hooks
             .iter()
-            .try_for_each(|h| h.handle_checker_fini(nr_dirty_pages, context))
+            .try_for_each(|h| h.handle_checker_fini(checker, context))
     }
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
+        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
-        's: 'scope,
         's: 'disp,
         'disp: 'scope,
     {
@@ -303,23 +319,6 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
             .process_lifetime_hooks
             .iter()
             .try_for_each(|h| h.handle_all_fini(context))
-    }
-
-    fn handle_main_fini<'s, 'scope, 'disp>(
-        &'s self,
-        ret_val: i32,
-        context: ProcessLifetimeHookContext<'_, 'disp, 'scope, '_, '_, '_>,
-    ) -> Result<()>
-    where
-        's: 'scope,
-        's: 'disp,
-        'disp: 'scope,
-    {
-        self.subscribers
-            .read()
-            .process_lifetime_hooks
-            .iter()
-            .try_for_each(|h| h.handle_main_fini(ret_val, context))
     }
 }
 
@@ -538,7 +537,7 @@ impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
 }
 
 impl<'a, 'm> ScheduleCheckpoint for Dispatcher<'a, 'm> {
-    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, check_coord: &CheckCoordinator));
+    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, main: &mut Main, check_coord: &CheckCoordinator));
 }
 
 impl<'a, 'm> ScheduleCheckpointReady for Dispatcher<'a, 'm> {

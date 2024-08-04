@@ -206,6 +206,10 @@ struct CliArgs {
     #[arg(long, default_value = ".")]
     core_dump_dir: PathBuf,
 
+    /// Addresses to register write watchpoints on
+    #[arg(long, value_parser=maybe_hex::<usize>)]
+    watchpoint_address: Vec<usize>,
+
     command: String,
     args: Vec<String>,
 }
@@ -332,6 +336,7 @@ fn main() {
 
             core_dump: cli.core_dump,
             core_dump_dir: cli.core_dump_dir,
+            watchpoint_addresses: cli.watchpoint_address,
 
             is_test: false,
             extra_modules: Vec::new(),
