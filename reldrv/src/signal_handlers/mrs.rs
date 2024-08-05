@@ -1,10 +1,6 @@
-use std::{
-    arch::asm,
-    collections::HashMap,
-    fmt::{Display, Formatter},
-};
+use std::{arch::asm, collections::HashMap};
 
-use log::{debug, info};
+use log::{debug, error, info};
 use nix::sys::signal::Signal;
 use parking_lot::RwLock;
 
@@ -23,7 +19,7 @@ use crate::{
         siginfo::SigInfoExt,
     },
     signal_handlers::handle_nondeterministic_instruction,
-    types::segment_record::saved_trap_event::{SavedTrapEvent, SystemReg},
+    types::segment_record::saved_trap_event::{MrsInstruction, SavedTrapEvent, SystemReg},
 };
 
 pub unsafe fn mrs(sys_reg: SystemReg) -> u64 {
@@ -41,18 +37,6 @@ pub unsafe fn mrs(sys_reg: SystemReg) -> u64 {
     }
 
     value
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MrsInstruction {
-    pub rt: Register,
-    pub sys_reg: SystemReg,
-}
-
-impl Display for MrsInstruction {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "mrs {}, {:?}", self.rt, self.sys_reg)
-    }
 }
 
 fn bitmask(start: u8, end: u8) -> u64 {
@@ -144,11 +128,12 @@ impl SignalHandler for MrsHandler {
             let mrs_result = handle_nondeterministic_instruction(
                 &context.child,
                 || unsafe { mrs(mrs_insn.sys_reg) },
-                |value| SavedTrapEvent::Mrs(mrs_insn.rt, mrs_insn.sys_reg, value),
+                |value| SavedTrapEvent::Mrs(*mrs_insn, value),
                 |event| {
                     #[allow(irrefutable_let_patterns)]
-                    if let SavedTrapEvent::Mrs(rt, sys_reg, value) = event {
-                        if mrs_insn.rt != rt || mrs_insn.sys_reg != sys_reg {
+                    if let SavedTrapEvent::Mrs(mrs_insn_got, value) = event {
+                        if mrs_insn_got != *mrs_insn {
+                            error!("MRS: expecting {}, got {}", mrs_insn, mrs_insn_got);
                             return Err(Error::UnexpectedEvent(
                                 UnexpectedEventReason::IncorrectValue,
                             ));
@@ -156,6 +141,8 @@ impl SignalHandler for MrsHandler {
 
                         Ok(value)
                     } else {
+                        error!("MRS: expecting Mrs, got {:?}", event);
+
                         Err(Error::UnexpectedEvent(
                             UnexpectedEventReason::IncorrectValue,
                         ))
