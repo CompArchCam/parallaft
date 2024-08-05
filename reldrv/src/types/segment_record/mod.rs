@@ -222,9 +222,7 @@ impl SegmentRecord {
             .get(state.event_pos)
             .unwrap()
             .get_syscall()
-            .ok_or(Error::UnexpectedEvent(
-                UnexpectedEventReason::IncorrectTypeOrArguments,
-            ))
+            .ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))
             .map(|syscall| syscall.clone())
     }
 
@@ -236,9 +234,7 @@ impl SegmentRecord {
             .get(state.event_pos)
             .unwrap()
             .get_incomplete_syscall()
-            .ok_or(Error::UnexpectedEvent(
-                UnexpectedEventReason::IncorrectTypeOrArguments,
-            ))
+            .ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))
             .map(|incomplete_syscall| incomplete_syscall.clone())
     }
 
@@ -259,9 +255,7 @@ impl SegmentRecord {
 
         let event = state.event_log.get(state.event_pos).unwrap();
 
-        let ret = f(event).ok_or(Error::UnexpectedEvent(
-            UnexpectedEventReason::IncorrectTypeOrArguments,
-        ))?;
+        let ret = f(event).ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))?;
 
         state.event_pos += 1;
 

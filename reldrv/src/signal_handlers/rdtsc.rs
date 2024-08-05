@@ -59,7 +59,7 @@ impl SignalHandler for RdtscHandler {
                             Ok(tsc)
                         } else {
                             Err(Error::UnexpectedEvent(
-                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                                UnexpectedEventReason::IncorrectValue,
                             ))
                         }
                     },
@@ -88,7 +88,7 @@ impl SignalHandler for RdtscHandler {
                             Ok((tsc, aux))
                         } else {
                             Err(Error::UnexpectedEvent(
-                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                                UnexpectedEventReason::IncorrectValue,
                             ))
                         }
                     },

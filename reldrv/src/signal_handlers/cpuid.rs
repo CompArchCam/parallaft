@@ -189,13 +189,13 @@ impl SignalHandler for CpuidHandler {
                 if let SavedTrapEvent::Cpuid(leaf, subleaf, cpuid_saved) = event {
                     if regs.cpuid_leaf_subleaf() != (leaf, subleaf) {
                         return Err(Error::UnexpectedEvent(
-                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                            UnexpectedEventReason::IncorrectValue,
                         ));
                     }
                     Ok(cpuid_saved)
                 } else {
                     Err(Error::UnexpectedEvent(
-                        UnexpectedEventReason::IncorrectTypeOrArguments,
+                        UnexpectedEventReason::IncorrectValue,
                     ))
                 }
             },

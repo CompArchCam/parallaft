@@ -150,14 +150,14 @@ impl SignalHandler for MrsHandler {
                     if let SavedTrapEvent::Mrs(rt, sys_reg, value) = event {
                         if mrs_insn.rt != rt || mrs_insn.sys_reg != sys_reg {
                             return Err(Error::UnexpectedEvent(
-                                UnexpectedEventReason::IncorrectTypeOrArguments,
+                                UnexpectedEventReason::IncorrectValue,
                             ));
                         }
 
                         Ok(value)
                     } else {
                         Err(Error::UnexpectedEvent(
-                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                            UnexpectedEventReason::IncorrectValue,
                         ))
                     }
                 },

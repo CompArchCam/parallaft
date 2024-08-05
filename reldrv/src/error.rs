@@ -9,8 +9,11 @@ pub enum UnexpectedEventReason {
     /// Application made an excess syscall/trap (possibly due to skidding).
     Excess,
 
-    /// Application made a syscall/trap with unexpected type (sysno) or arguments.
-    IncorrectTypeOrArguments,
+    /// Application made a syscall/trap with unexpected value (e.g. sysno and syscall arguments).
+    IncorrectValue,
+
+    /// Application made a event with unexpected type (e.g. got a signal but expecting a syscall).
+    IncorrectType,
 
     /// A checker makes a syscall that has transitive access to memory that diverges from the main.
     IncorrectMemory,

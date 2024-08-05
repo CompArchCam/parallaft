@@ -178,7 +178,7 @@ impl StandardSyscallHandler for MmapHandler {
                     if saved_syscall.syscall != syscall {
                         error!("Mmap syscall mismatch");
                         return Err(Error::UnexpectedEvent(
-                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                            UnexpectedEventReason::IncorrectValue,
                         ));
                     }
 
@@ -208,7 +208,7 @@ impl StandardSyscallHandler for MmapHandler {
                 if saved_syscall.syscall != syscall {
                     info!("Mremap syscall mismatch");
                     return Err(Error::UnexpectedEvent(
-                        UnexpectedEventReason::IncorrectTypeOrArguments,
+                        UnexpectedEventReason::IncorrectValue,
                     ));
                 }
 
@@ -247,7 +247,7 @@ impl StandardSyscallHandler for MmapHandler {
                     );
 
                     return Err(Error::UnexpectedEvent(
-                        UnexpectedEventReason::IncorrectTypeOrArguments,
+                        UnexpectedEventReason::IncorrectValue,
                     ));
                 }
 

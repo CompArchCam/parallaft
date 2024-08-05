@@ -72,7 +72,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
                 );
 
                 return Err(Error::UnexpectedEvent(
-                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                    UnexpectedEventReason::IncorrectValue,
                 ));
             }
 

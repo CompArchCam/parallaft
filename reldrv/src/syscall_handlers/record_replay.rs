@@ -120,7 +120,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                 );
 
                 return Err(Error::UnexpectedEvent(
-                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                    UnexpectedEventReason::IncorrectValue,
                 ));
             }
 
@@ -146,7 +146,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                 );
 
                 return Err(Error::UnexpectedEvent(
-                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                    UnexpectedEventReason::IncorrectValue,
                 ));
             }
 

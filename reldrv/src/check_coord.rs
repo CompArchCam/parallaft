@@ -1047,8 +1047,9 @@ where
                     let result = checker.segment.record.pop_manual_checkpoint_request()?;
                     assert!(result.is_last_event);
                     if result.value.is_finishing != is_finishing {
+                        error!("{checker} Unexpected checkpoint request");
                         return Err(Error::UnexpectedEvent(
-                            UnexpectedEventReason::IncorrectTypeOrArguments,
+                            UnexpectedEventReason::IncorrectValue,
                         ));
                     }
                     self.take_checker_checkpoint(checker)?;

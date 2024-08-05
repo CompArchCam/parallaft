@@ -431,7 +431,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                             if !result.value.do_eq(&exec_point) {
                                 error!("{checker} Execution point is not equal ({exec_point:?} != {:?})", result.value);
                                 return Err(Error::UnexpectedEvent(
-                                    UnexpectedEventReason::IncorrectTypeOrArguments,
+                                    UnexpectedEventReason::IncorrectValue,
                                 ));
                             }
 
