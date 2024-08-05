@@ -1,4 +1,6 @@
 pub mod comparator;
+pub mod insn_patching;
+pub mod memory;
 pub mod module_lifetime;
 pub mod process_lifetime;
 pub mod segment;

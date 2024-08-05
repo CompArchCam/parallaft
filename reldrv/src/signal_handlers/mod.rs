@@ -1,16 +1,22 @@
-#[cfg(target_arch = "x86_64")]
-pub mod cpuid;
-
-#[cfg(target_arch = "x86_64")]
-pub mod rdtsc;
-
 pub mod begin_protection;
 pub mod slice_segment;
+
+use cfg_if::cfg_if;
 
 use crate::error::Result;
 use crate::types::process_id::InferiorRefMut;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
 use crate::types::segment_record::WithIsLastEvent;
+
+cfg_if! {
+    if #[cfg(target_arch = "x86_64")] {
+        pub mod cpuid;
+        pub mod rdtsc;
+    }
+    else if #[cfg(target_arch = "aarch64")] {
+        pub mod mrs;
+    }
+}
 
 pub fn handle_nondeterministic_instruction<R>(
     child: &InferiorRefMut,

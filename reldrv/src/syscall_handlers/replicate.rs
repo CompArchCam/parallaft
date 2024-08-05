@@ -47,7 +47,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         Ok(match syscall {
             #[cfg(target_arch = "x86_64")]
             Syscall::ArchPrctl(_) => action(),
-            Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => action(),
+            Syscall::Brk(_) => action(),
             _ => StandardSyscallEntryMainHandlerExitAction::NextHandler,
         })
     }
@@ -82,7 +82,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         match syscall {
             #[cfg(target_arch = "x86_64")]
             Syscall::ArchPrctl(_) => action(),
-            Syscall::Brk(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => action(),
+            Syscall::Brk(_) => action(),
             _ => Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler),
         }
     }

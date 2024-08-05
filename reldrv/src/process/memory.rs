@@ -14,7 +14,7 @@ pub type RawInstruction = u128;
 #[cfg(target_arch = "aarch64")]
 pub type RawInstruction = u32;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub struct Instruction {
     pub value: RawInstruction,
 
@@ -64,7 +64,7 @@ pub mod instructions {
     pub const NOP: Instruction = Instruction::new(0xd503201f); /* nop */
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ReplacedInstruction {
     addr: usize,
     old_word: usize,

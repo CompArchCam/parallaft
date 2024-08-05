@@ -2,12 +2,13 @@ use crate::error::Result;
 
 use nix::libc::{self, user_regs_struct};
 use std::{
+    fmt::Display,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 use syscalls::{SyscallArgs, Sysno};
 
-use super::Process;
+use super::{memory::Instruction, Process};
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
@@ -39,6 +40,38 @@ cfg_if::cfg_if! {
                 const VIF = bit(19);
                 const VIP = bit(20);
                 const ID = bit(21);
+            }
+        }
+    }
+    else if #[cfg(target_arch = "aarch64")] {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Register {
+            X(u8),
+            SP,
+        }
+
+        impl Register {
+            pub fn into_raw(self) -> u8 {
+                match self {
+                    Register::X(x) => x,
+                    Register::SP => 31,
+                }
+            }
+
+            pub fn from_raw(raw: u8) -> Self {
+                match raw {
+                    31 => Register::SP,
+                    x => Register::X(x),
+                }
+            }
+        }
+
+        impl Display for Register {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                match self {
+                    Register::X(x) => write!(f, "x{}", x),
+                    Register::SP => write!(f, "sp"),
+                }
             }
         }
     }
@@ -403,6 +436,20 @@ impl Registers {
     pub fn strip_overflow_flag(mut self) -> Registers {
         self.eflags &= !(1 << 11);
         self
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn set(mut self, reg: Register, val: u64) -> Registers {
+        match reg {
+            Register::X(x) => self.regs[x as usize] = val,
+            Register::SP => self.sp = val,
+        }
+
+        self
+    }
+
+    pub fn with_instruction_skipped_unchecked(self, instruction: Instruction) -> Registers {
+        self.with_offsetted_ip(instruction.length() as _)
     }
 }
 

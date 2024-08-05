@@ -42,6 +42,7 @@ use dispatcher::Module;
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
+use helpers::insn_patcher::InstructionPatcher;
 use helpers::madviser::Madviser;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -49,6 +50,7 @@ use nix::unistd::{getpid, Pid};
 
 use log::info;
 use signal_handlers::begin_protection::BeginProtectionHandler;
+use signal_handlers::mrs::MrsHandler;
 use signal_handlers::slice_segment::SliceSegmentHandler;
 use slicers::dynamic::DynamicSlicer;
 use slicers::entire_program::EntireProgramSlicer;
@@ -158,6 +160,10 @@ pub struct RelShellOptions {
     /// Don't trap CPUID instructions on x86_64
     #[cfg(target_arch = "x86_64")]
     pub no_cpuid_trap: bool,
+
+    /// Don't trap MRS instructions on AArch64
+    #[cfg(target_arch = "aarch64")]
+    pub no_mrs_trap: bool,
 
     /// Check coordinator flags
     pub check_coord_flags: CheckCoordinatorOptions,
@@ -287,18 +293,29 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     }
 
     // Non-deterministic instruction handlers
-    #[cfg(target_arch = "x86_64")]
-    if !options.no_rdtsc_trap {
-        disp.register_module(RdtscHandler::new());
+
+    let mut insn_patcher = InstructionPatcher::new();
+
+    cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            if !options.no_rdtsc_trap {
+                disp.register_module(RdtscHandler::new());
+            }
+
+            let mut cpuid_handler = None;
+
+            if !options.no_cpuid_trap {
+                cpuid_handler = Some(disp.register_module(CpuidHandler::new()));
+            }
+        }
+        else if #[cfg(target_arch = "aarch64")] {
+            if !options.no_mrs_trap {
+                disp.register_module(MrsHandler::new(&mut insn_patcher));
+            }
+        }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    let mut cpuid_handler = None;
-
-    #[cfg(target_arch = "x86_64")]
-    if !options.no_cpuid_trap {
-        cpuid_handler = Some(disp.register_module(CpuidHandler::new()));
-    }
+    disp.register_module(insn_patcher);
 
     // Execution point providers
     if options.exec_point_replay {
@@ -331,7 +348,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     disp.register_module(CloneHandler::new());
     disp.register_module(ExecveHandler::new());
     disp.register_module(ExitHandler::new());
-    disp.register_module(MmapHandler::new());
+    disp.register_module(MmapHandler::new(options.is_test));
     disp.register_module(ReplicatedSyscallHandler::new());
     disp.register_module(RecordReplaySyscallHandler::new());
 

@@ -247,6 +247,10 @@ impl<'a> InferiorRefMut<'a> {
         }
     }
 
+    pub fn role(&self) -> InferiorRole {
+        self.into()
+    }
+
     pub fn segment(&self) -> Option<Arc<Segment>> {
         match self {
             InferiorRefMut::Main(main) => main.segment.clone(),
@@ -260,6 +264,21 @@ impl Display for InferiorRefMut<'_> {
         match self {
             Self::Main(main) => main.fmt(f),
             Self::Checker(checker) => checker.fmt(f),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum InferiorRole {
+    Main,
+    Checker(Arc<Segment>),
+}
+
+impl From<&InferiorRefMut<'_>> for InferiorRole {
+    fn from(value: &InferiorRefMut) -> Self {
+        match value {
+            InferiorRefMut::Main(_) => InferiorRole::Main,
+            InferiorRefMut::Checker(checker) => InferiorRole::Checker(checker.segment.clone()),
         }
     }
 }

@@ -107,6 +107,11 @@ struct CliArgs {
     #[arg(long)]
     dont_trap_cpuid: bool,
 
+    #[cfg(target_arch = "aarch64")]
+    /// Don't trap mrs instructions.
+    #[arg(long)]
+    dont_trap_mrs: bool,
+
     /// File to dump stats to.
     #[arg(long)]
     stats_output: Option<PathBuf>,
@@ -276,6 +281,8 @@ fn main() {
             no_cpuid_trap: cli.dont_trap_cpuid,
             #[cfg(target_arch = "x86_64")]
             no_rdtsc_trap: cli.dont_trap_rdtsc,
+            #[cfg(target_arch = "aarch64")]
+            no_mrs_trap: cli.dont_trap_mrs,
             dump_stats: {
                 if let Some(path) = cli.stats_output {
                     Some(StatsOutput::File(path))

@@ -4,10 +4,18 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::{
-        syscall::{StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler},
+        hctx,
+        memory::MemoryEventHandler,
+        syscall::{
+            StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
+            SyscallHandlerExitAction,
+        },
         HandlerContext,
     },
+    types::memory_map::MemoryMap,
 };
+
+use super::is_execve_ok;
 
 pub struct ExecveHandler {}
 
@@ -36,6 +44,29 @@ impl StandardSyscallHandler for ExecveHandler {
         }
 
         Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
+    }
+
+    fn handle_standard_syscall_exit(
+        &self,
+        ret_val: isize,
+        syscall: &Syscall,
+        context: HandlerContext,
+    ) -> Result<SyscallHandlerExitAction> {
+        if is_execve_ok(syscall, ret_val) {
+            context.check_coord.dispatcher.handle_memory_map_removed(
+                &MemoryMap::all(),
+                hctx(context.child, context.check_coord, context.scope),
+            )?;
+
+            for map in context.process().procfs()?.maps()? {
+                context.check_coord.dispatcher.handle_memory_map_created(
+                    &map.into(),
+                    hctx(context.child, context.check_coord, context.scope),
+                )?;
+            }
+        }
+
+        Ok(SyscallHandlerExitAction::NextHandler)
     }
 }
 

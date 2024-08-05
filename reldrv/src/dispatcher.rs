@@ -15,6 +15,8 @@ use crate::{
     events::{
         comparator::{RegisterComparator, RegisterComparsionResult},
         hctx,
+        insn_patching::InstructionPatchingEventHandler,
+        memory::MemoryEventHandler,
         module_lifetime::ModuleLifetimeHook,
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
@@ -27,6 +29,7 @@ use crate::{
         HandlerContext,
     },
     exec_point_providers::ExecutionPointProvider,
+    helpers::insn_patcher::Patch,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{dirty_pages::IgnoredPagesProvider, registers::Registers},
     statistics::{StatisticValue, StatisticsProvider},
@@ -36,6 +39,7 @@ use crate::{
         checker::CheckFailReason,
         execution_point::ExecutionPoint,
         exit_reason::ExitReason,
+        memory_map::MemoryMap,
         process_id::{Checker, InferiorId, InferiorRefMut, Main},
         segment::Segment,
         segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
@@ -78,6 +82,8 @@ pub struct Subscribers<'a> {
     register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
     module_lifetime_hooks: Vec<&'a dyn ModuleLifetimeHook>,
     exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
+    memory_event_handlers: Vec<&'a dyn MemoryEventHandler>,
+    instruction_patching_events_handlers: Vec<&'a dyn InstructionPatchingEventHandler>,
 }
 
 impl<'a> Default for Subscribers<'a> {
@@ -104,6 +110,8 @@ impl<'a> Subscribers<'a> {
             register_comparators: Vec::new(),
             module_lifetime_hooks: Vec::new(),
             exec_point_provider: None,
+            memory_event_handlers: Vec::new(),
+            instruction_patching_events_handlers: Vec::new(),
         }
     }
 
@@ -180,6 +188,17 @@ impl<'a> Subscribers<'a> {
 
     pub fn set_execution_point_provider(&mut self, provider: &'a dyn ExecutionPointProvider) {
         self.exec_point_provider = Some(provider);
+    }
+
+    pub fn install_memory_event_handler(&mut self, handler: &'a dyn MemoryEventHandler) {
+        self.memory_event_handlers.push(handler)
+    }
+
+    pub fn install_instruction_patching_events_handler(
+        &mut self,
+        handler: &'a dyn InstructionPatchingEventHandler,
+    ) {
+        self.instruction_patching_events_handlers.push(handler)
     }
 }
 
@@ -648,6 +667,64 @@ impl ExecutionPointProvider for Dispatcher<'_, '_> {
             child: &mut InferiorRefMut,
         ) -> Result<Arc<dyn ExecutionPoint>>
     );
+}
+
+impl MemoryEventHandler for Dispatcher<'_, '_> {
+    fn handle_memory_map_created(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().memory_event_handlers {
+            handler.handle_memory_map_created(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_memory_map_removed(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().memory_event_handlers {
+            handler.handle_memory_map_removed(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_memory_map_updated(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().memory_event_handlers {
+            handler.handle_memory_map_updated(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
+    fn handle_instruction_patched(&self, patch: &Patch, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().instruction_patching_events_handlers {
+            handler
+                .handle_instruction_patched(patch, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
+        }
+
+        Ok(())
+    }
+
+    fn should_instruction_patched(&self, patch: &Patch, ctx: HandlerContext) -> bool {
+        self.subscribers
+            .read()
+            .instruction_patching_events_handlers
+            .iter()
+            .any(|h| {
+                h.should_instruction_patched(patch, hctx(ctx.child, ctx.check_coord, ctx.scope))
+            })
+    }
+
+    fn handle_instruction_patch_removed(&self, patch: &Patch, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().instruction_patching_events_handlers {
+            handler.handle_instruction_patch_removed(
+                patch,
+                hctx(ctx.child, ctx.check_coord, ctx.scope),
+            )?;
+        }
+
+        Ok(())
+    }
 }
 
 unsafe impl Sync for Dispatcher<'_, '_> {}
