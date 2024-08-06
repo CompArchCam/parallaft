@@ -323,7 +323,6 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         let exec_point_provider =
             disp.register_module(PerfCounterBasedExecutionPointProvider::new(
                 &options.main_cpu_set,
-                &options.checker_cpu_set,
                 options.exec_point_replay_branch_type,
                 options.exec_point_replay_checker_never_use_branch_count_overflow,
                 options.is_test,
@@ -485,6 +484,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         options.check_coord_flags,
         &disp,
         tracer,
+        options.checker_cpu_set.clone(),
     );
 
     info!("Shell PID: {}", getpid());

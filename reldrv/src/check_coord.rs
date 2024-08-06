@@ -68,6 +68,7 @@ pub struct CheckCoordinator<'disp, 'modules, 'tracer> {
     main_thread: Thread,
     aborting: AtomicBool,
     tracer: &'tracer Tracer,
+    checker_cpu_set: Vec<usize>,
 }
 
 #[derive(Debug, Default, Clone, Builder)]
@@ -100,6 +101,7 @@ where
         options: CheckCoordinatorOptions,
         dispatcher: &'disp Dispatcher<'disp, 'modules>,
         tracer: &'tracer Tracer,
+        checker_cpu_set: Vec<usize>,
     ) -> Self {
         Self {
             segments: Arc::new(RwLock::new(SegmentChains::new())),
@@ -111,6 +113,7 @@ where
             main_thread: std::thread::current(),
             aborting: AtomicBool::new(false),
             tracer,
+            checker_cpu_set,
         }
     }
 
@@ -553,7 +556,7 @@ where
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
-        let checker_process = segment.start_checker()?;
+        let checker_process = segment.start_checker(self.checker_cpu_set.clone())?;
         checker_forking_tracer.end();
 
         segment.record.wait_for_initial_event()?;

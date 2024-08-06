@@ -146,9 +146,11 @@ impl Segment {
     }
 
     // Locks: record -> checker
-    pub fn start_checker(&self) -> Result<OwnedProcess> {
+    pub fn start_checker(&self, checker_cpu_set: Vec<usize>) -> Result<OwnedProcess> {
         // self.record.rewind(self)?; // TODO:
-        self.checker_status.lock().start(&self.checkpoint_start)
+        self.checker_status
+            .lock()
+            .start(&self.checkpoint_start, checker_cpu_set)
     }
 
     fn get_main_dirty_page_addresses_once(

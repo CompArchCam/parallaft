@@ -20,7 +20,10 @@ pub enum CheckFailReason {
 #[derive(Debug)]
 pub enum CheckerStatus {
     NotReady,
-    Executing(Pid),
+    Executing {
+        pid: Pid,
+        cpu_set: Vec<usize>,
+    },
     Checked {
         result: Option<CheckFailReason>,
         dirty_page_addresses: Arc<DirtyPageAddressesWithFlags>,
@@ -40,17 +43,24 @@ impl CheckerStatus {
         };
     }
 
-    pub fn start(&mut self, from_checkpoint: &Checkpoint) -> Result<OwnedProcess> {
+    pub fn start(
+        &mut self,
+        from_checkpoint: &Checkpoint,
+        cpu_set: Vec<usize>,
+    ) -> Result<OwnedProcess> {
         let mut ref_process = from_checkpoint.process.lock();
         let checker_process = ref_process.borrow_with(|p| p.fork(true, true))??;
-        *self = CheckerStatus::Executing(checker_process.pid);
+        *self = CheckerStatus::Executing {
+            pid: checker_process.pid,
+            cpu_set,
+        };
 
         Ok(checker_process)
     }
 
     pub fn pid(&self) -> Option<Pid> {
         match self {
-            CheckerStatus::Executing(pid) => Some(*pid),
+            CheckerStatus::Executing { pid, .. } => Some(*pid),
             _ => None,
         }
     }
@@ -62,5 +72,12 @@ impl CheckerStatus {
             self,
             CheckerStatus::Checked { .. } | CheckerStatus::Crashed(..)
         )
+    }
+
+    pub fn cpu_set(&self) -> Option<&[usize]> {
+        match self {
+            CheckerStatus::Executing { cpu_set, .. } => Some(cpu_set),
+            _ => None,
+        }
     }
 }

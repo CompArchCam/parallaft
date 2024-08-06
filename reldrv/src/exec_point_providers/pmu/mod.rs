@@ -35,7 +35,6 @@ use crate::{
         breakpoint::{breakpoint, Breakpoint},
         execution_point::ExecutionPoint,
         perf_counter::{
-            cpu_info::CpuModel,
             symbolic_events::{
                 expr::{lookup_cpu_model_and_pmu_name_from_cpu_set, Target},
                 BranchCounter, BranchCounterWithInterrupt, BranchType,
@@ -91,10 +90,8 @@ pub struct PerfCounterBasedExecutionPointProvider<'a> {
     segment_info_map: Mutex<HashMap<SegmentId, Arc<Mutex<SegmentInfo>>>>,
     main_branch_counter: Mutex<Option<BranchCounter>>,
     main_cpu_set: &'a [usize],
-    checker_cpu_set: &'a [usize],
     #[cfg(target_arch = "x86_64")]
     main_cpu_model: CpuModel,
-    checker_cpu_model: CpuModel,
     is_test: bool,
     checkpoint_count: AtomicU64,
     branch_counter_type: BranchType,
@@ -106,7 +103,6 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
 
     pub fn new(
         main_cpu_set: &'a [usize],
-        checker_cpu_set: &'a [usize],
         branch_counter_type: BranchType,
         checker_never_use_branch_count_overflow: bool,
         is_test: bool,
@@ -115,12 +111,8 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             main_branch_counter: Mutex::new(None),
             segment_info_map: Mutex::new(HashMap::new()),
             main_cpu_set,
-            checker_cpu_set,
             #[cfg(target_arch = "x86_64")]
             main_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(main_cpu_set)
-                .unwrap()
-                .0,
-            checker_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(checker_cpu_set)
                 .unwrap()
                 .0,
             is_test,
@@ -175,12 +167,17 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
         let mut segment_info = segment_info_map.get(&checker.segment.nr).unwrap().lock();
 
+        let checker_status = checker.segment.checker_status.lock();
+        let checker_cpu_set = checker_status.cpu_set().unwrap();
+
         segment_info.checker_branch_counter = Some(BranchCounter::new(
             self.branch_counter_type,
             Target::Pid(checker.process.pid),
             true,
-            self.checker_cpu_set,
+            checker_cpu_set,
         )?);
+
+        drop(checker_status);
 
         self.activate_first_exec_point_in_queue(checker, &mut segment_info)?;
 
@@ -238,8 +235,14 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
 
             let initial_state;
 
+            let checker_status = checker.segment.checker_status.lock();
+            let checker_cpu_set = checker_status.cpu_set().unwrap();
+            let checker_cpu_model = lookup_cpu_model_and_pmu_name_from_cpu_set(checker_cpu_set)
+                .unwrap()
+                .0;
+
             if exec_point.branch_counter - branch_count_curr
-                <= self.checker_cpu_model.max_skid() + self.checker_cpu_model.min_irq_period()
+                <= checker_cpu_model.max_skid() + checker_cpu_model.min_irq_period()
                 || self.checker_never_use_branch_count_overflow
             {
                 debug!("{checker} ... using breakpoint");
@@ -255,14 +258,16 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
                         self.branch_counter_type,
                         checker.process.pid,
                         true,
-                        self.checker_cpu_set,
+                        checker_cpu_set,
                         exec_point.branch_counter
                             - branch_count_curr
-                            - self.checker_cpu_model.max_skid(),
+                            - checker_cpu_model.max_skid(),
                         None,
                     )?,
                 };
             }
+
+            drop(checker_status);
 
             segment_info.active_exec_point = Some((exec_point, initial_state));
         }
