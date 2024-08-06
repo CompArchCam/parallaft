@@ -93,7 +93,6 @@ syscall_list! {
         lstat => Lstat,
         #[cfg(not(target_arch = "aarch64"))]
         poll => Poll,
-        #[cfg(not(target_arch = "aarch64"))]
         lseek => Lseek,
         mmap => Mmap,
         mprotect => Mprotect,
@@ -630,8 +629,6 @@ typed_syscall! {
     }
 }
 
-// Lseek not available in aarch64
-#[cfg(not(target_arch = "aarch64"))]
 typed_syscall! {
     #[may_read_specified_only]
     #[may_write_specified_only]
