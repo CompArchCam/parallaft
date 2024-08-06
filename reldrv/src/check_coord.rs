@@ -45,7 +45,7 @@ use crate::types::checker::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
 use crate::types::custom_sysno::CustomSysno;
 use crate::types::exit_reason::ExitReason;
-use crate::types::process_id::{Checker, Inferior, Main};
+use crate::types::process_id::{Checker, Inferior, InferiorRole, Main};
 use crate::types::segment::{Segment, SegmentId, SegmentStatus};
 use crate::types::segment_record::manual_checkpoint::ManualCheckpointRequest;
 use crate::types::segment_record::saved_memory::SavedMemory;
@@ -627,15 +627,17 @@ where
 
                     let abort;
 
+                    let checker_id = InferiorRole::Checker(new_segment.clone());
+
                     match ret {
                         Err(_) => {
-                            error!("Checker worker panicked");
+                            error!("{checker_id} Panicked");
                             *new_segment.checker_status.lock() =
                                 CheckerStatus::Crashed(Error::Panic);
                             abort = true;
                         }
                         Ok(Err(e)) => {
-                            error!("Checker worker failed with error: {e:?}");
+                            error!("{checker_id} Failed: {e:?}");
                             *new_segment.checker_status.lock() = CheckerStatus::Crashed(e);
                             abort = true;
                         }
@@ -643,7 +645,7 @@ where
                             let mut checker_status = new_segment.checker_status.lock();
 
                             if !checker_status.is_finished() {
-                                info!("Checker not marked finished, assuming it is cancelled");
+                                info!("{checker_id} Checker not marked as finished, assuming it is cancelled");
                                 *checker_status = CheckerStatus::Crashed(Error::Cancelled);
                             }
 

@@ -282,3 +282,12 @@ impl From<&InferiorRefMut<'_>> for InferiorRole {
         }
     }
 }
+
+impl Display for InferiorRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InferiorRole::Main => write!(f, "[M     ?]"),
+            InferiorRole::Checker(segment) => write!(f, "[C{:>6}]", segment.nr),
+        }
+    }
+}
