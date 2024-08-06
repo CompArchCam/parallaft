@@ -368,7 +368,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             disp.register_module(EntireProgramSlicer::new());
         }
         SlicerType::Dynamic => {
-            disp.register_module(DynamicSlicer::new(&options.main_cpu_set));
+            disp.register_module(DynamicSlicer::new(
+                &options.main_cpu_set,
+                options.max_nr_live_segments,
+            ));
         }
         SlicerType::Null => (),
     };

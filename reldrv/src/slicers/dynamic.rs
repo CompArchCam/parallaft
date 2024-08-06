@@ -9,7 +9,7 @@ use std::{
 
 use log::debug;
 use nix::unistd::Pid;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use perf_event::events::Hardware;
 use reverie_syscalls::Syscall;
 use try_insert_ext::OptionInsertExt;
@@ -31,6 +31,7 @@ use crate::{
     syscall_handlers::is_execve_ok,
     types::{
         // perf_counter::{self, linux::LinuxPerfCounter, pmu_type::PmuType, PerfCounter},
+        chains::SegmentChains,
         perf_counter::{
             symbolic_events::{expr::Target, GenericHardwareEventCounter},
             PerfCounter,
@@ -69,6 +70,7 @@ impl Default for DynamicSlicerParams {
 }
 
 pub struct DynamicSlicer<'a> {
+    max_nr_live_segments: usize,
     params: DynamicSlicerParams,
     worker: Mutex<Option<Sender<()>>>,
     main_cycles_counter: Mutex<Option<GenericHardwareEventCounter>>,
@@ -77,8 +79,9 @@ pub struct DynamicSlicer<'a> {
 }
 
 impl<'a> DynamicSlicer<'a> {
-    pub fn new(main_cpu_set: &'a [usize]) -> Self {
+    pub fn new(main_cpu_set: &'a [usize], max_nr_live_segments: usize) -> Self {
         Self {
+            max_nr_live_segments,
             params: DynamicSlicerParams::default(),
             worker: Mutex::new(None),
             main_cycles_counter: Mutex::new(None),
@@ -87,7 +90,11 @@ impl<'a> DynamicSlicer<'a> {
         }
     }
 
-    fn should_slice_segment(&self, main_pid: Pid) -> Result<bool> {
+    fn should_slice_segment(
+        &self,
+        segments: &RwLock<SegmentChains>,
+        main_pid: Pid,
+    ) -> Result<bool> {
         let main_cycles = self.main_cycles_counter.lock().as_mut().unwrap().read()?;
 
         if let Some(max_cycles) = self.params.max_cycles_in_segment {
@@ -105,6 +112,19 @@ impl<'a> DynamicSlicer<'a> {
                 debug!(
                     "Deferring slicing segment due to too few cycles executed ({} < {})",
                     main_cycles, min_cycles
+                );
+                return Ok(false);
+            }
+        }
+
+        if self.max_nr_live_segments > 0 {
+            let nr_live_segments = segments.read().nr_live_segments();
+            let would_stall = nr_live_segments >= self.max_nr_live_segments;
+
+            if would_stall {
+                debug!(
+                    "Deferring slicing segment due to too many live segments ({} >= {})",
+                    nr_live_segments, self.max_nr_live_segments
                 );
                 return Ok(false);
             }
@@ -195,7 +215,7 @@ impl ProcessLifetimeHook for DynamicSlicer<'_> {
                     if let Some(segment) = segments.read().main_segment() {
                         if (segment.nr > self.epoch.load(std::sync::atomic::Ordering::SeqCst)
                             || segment.nr == 0)
-                            && self.should_slice_segment(main_pid)?
+                            && self.should_slice_segment(&segments, main_pid)?
                         {
                             self.epoch
                                 .store(segment.nr, std::sync::atomic::Ordering::SeqCst);
