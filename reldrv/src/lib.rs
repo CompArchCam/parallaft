@@ -59,6 +59,7 @@ use slicers::{ReferenceType, SlicerType};
 use statistics::perf::CounterKind;
 
 use clap::ValueEnum;
+use throttlers::nr_checkers::NrCheckersBasedThrottler;
 use types::exit_reason::ExitReason;
 use types::perf_counter::symbolic_events::BranchType;
 
@@ -440,6 +441,10 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     disp.register_module(MemoryBasedThrottler::new(options.memory_overhead_watermark));
     disp.register_module(NrSegmentsBasedThrottler::new(options.max_nr_live_segments));
     disp.register_module(CheckpointSyncThrottler::new());
+
+    if options.checker_cpu_set.len() > 0 {
+        disp.register_module(NrCheckersBasedThrottler::new(options.checker_cpu_set.len()));
+    }
 
     // Dirty page trackers
     match options.dirty_page_tracker {
