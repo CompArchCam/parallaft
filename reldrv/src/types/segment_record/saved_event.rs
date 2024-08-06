@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::types::execution_point::ExecutionPoint;
+use crate::{
+    error::{Error, Result, UnexpectedEventReason},
+    types::execution_point::ExecutionPoint,
+};
 
 use super::{
     manual_checkpoint::ManualCheckpointRequest,
@@ -55,48 +58,59 @@ impl From<ManualCheckpointRequest> for SavedEvent {
     }
 }
 
-impl SavedEvent {
-    pub fn get_syscall(&self) -> Option<Arc<SavedSyscall>> {
-        match self {
-            SavedEvent::Syscall(syscall) => Some(syscall.clone()),
-            _ => None,
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum SavedEventType {
+    Syscall,
+    IncompleteSyscall,
+    TrapEvent,
+    Signal,
+    ExecutionPoint,
+    ManualCheckpointRequest,
+}
+
+impl From<&SavedEvent> for SavedEventType {
+    fn from(event: &SavedEvent) -> Self {
+        match event {
+            SavedEvent::Syscall(_) => SavedEventType::Syscall,
+            SavedEvent::IncompleteSyscall(_) => SavedEventType::IncompleteSyscall,
+            SavedEvent::TrapEvent(_) => SavedEventType::TrapEvent,
+            SavedEvent::Signal(_) => SavedEventType::Signal,
+            SavedEvent::ExecutionPoint(_) => SavedEventType::ExecutionPoint,
+            SavedEvent::ManualCheckpointRequest(_) => SavedEventType::ManualCheckpointRequest,
         }
     }
+}
 
-    pub fn get_incomplete_syscall(&self) -> Option<Arc<SavedIncompleteSyscall>> {
-        match self {
-            SavedEvent::IncompleteSyscall(incomplete_syscall) => Some(incomplete_syscall.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_trap_event(&self) -> Option<Arc<SavedTrapEvent>> {
-        match self {
-            SavedEvent::TrapEvent(trap_event) => Some(trap_event.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_signal(&self) -> Option<Arc<SavedSignal>> {
-        match self {
-            SavedEvent::Signal(signal) => Some(signal.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_execution_point(&self) -> Option<Arc<dyn ExecutionPoint>> {
-        match self {
-            SavedEvent::ExecutionPoint(execution_point) => Some(execution_point.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_manual_checkpoint_request(&self) -> Option<ManualCheckpointRequest> {
-        match self {
-            SavedEvent::ManualCheckpointRequest(manual_checkpoint_request) => {
-                Some(*manual_checkpoint_request)
+macro_rules! impl_getter {
+    ($name:ident, $variant:ident, $return_type:ty) => {
+        pub fn $name(&self) -> Result<$return_type> {
+            match self {
+                SavedEvent::$variant(value) => Ok(value.clone()),
+                _ => Err(Error::UnexpectedEvent(
+                    UnexpectedEventReason::IncorrectType {
+                        expected: SavedEventType::$variant,
+                        got: self.clone(),
+                    },
+                )),
             }
-            _ => None,
         }
-    }
+    };
+    () => {};
+}
+
+impl SavedEvent {
+    impl_getter!(get_syscall, Syscall, Arc<SavedSyscall>);
+    impl_getter!(
+        get_incomplete_syscall,
+        IncompleteSyscall,
+        Arc<SavedIncompleteSyscall>
+    );
+    impl_getter!(get_trap_event, TrapEvent, Arc<SavedTrapEvent>);
+    impl_getter!(get_signal, Signal, Arc<SavedSignal>);
+    impl_getter!(get_execution_point, ExecutionPoint, Arc<dyn ExecutionPoint>);
+    impl_getter!(
+        get_manual_checkpoint_request,
+        ManualCheckpointRequest,
+        ManualCheckpointRequest
+    );
 }

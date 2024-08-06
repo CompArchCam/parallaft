@@ -217,13 +217,7 @@ impl SegmentRecord {
     pub fn get_syscall(&self) -> Result<Arc<SavedSyscall>> {
         let state = self.wait_until_event_available()?;
 
-        state
-            .event_log
-            .get(state.event_pos)
-            .unwrap()
-            .get_syscall()
-            .ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))
-            .map(|syscall| syscall.clone())
+        state.event_log.get(state.event_pos).unwrap().get_syscall()
     }
 
     pub fn get_incomplete_syscall(&self) -> Result<Arc<SavedIncompleteSyscall>> {
@@ -234,8 +228,6 @@ impl SegmentRecord {
             .get(state.event_pos)
             .unwrap()
             .get_incomplete_syscall()
-            .ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))
-            .map(|incomplete_syscall| incomplete_syscall.clone())
     }
 
     pub fn get_last_incomplete_syscall(&self) -> Option<Arc<SavedIncompleteSyscall>> {
@@ -244,18 +236,18 @@ impl SegmentRecord {
         state
             .event_log
             .last()
-            .and_then(|event| event.get_incomplete_syscall())
+            .and_then(|event| event.get_incomplete_syscall().ok())
     }
 
     fn pop_event_with<T>(
         &self,
-        f: impl FnOnce(&SavedEvent) -> Option<T>,
+        f: impl FnOnce(&SavedEvent) -> Result<T>,
     ) -> Result<WithIsLastEvent<T>> {
         let mut state = self.wait_until_event_available()?;
 
         let event = state.event_log.get(state.event_pos).unwrap();
 
-        let ret = f(event).ok_or(Error::UnexpectedEvent(UnexpectedEventReason::IncorrectType))?;
+        let ret = f(event)?;
 
         state.event_pos += 1;
 

@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use procfs::ProcError;
 
-use crate::types::perf_counter::symbolic_events::expr::PmuError;
+use crate::types::{
+    perf_counter::symbolic_events::expr::PmuError,
+    segment_record::saved_event::{SavedEvent, SavedEventType},
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum UnexpectedEventReason {
     /// Application made an excess syscall/trap (possibly due to skidding).
     Excess,
@@ -13,7 +16,10 @@ pub enum UnexpectedEventReason {
     IncorrectValue,
 
     /// Application made a event with unexpected type (e.g. got a signal but expecting a syscall).
-    IncorrectType,
+    IncorrectType {
+        expected: SavedEventType,
+        got: SavedEvent,
+    },
 
     /// A checker makes a syscall that has transitive access to memory that diverges from the main.
     IncorrectMemory,
