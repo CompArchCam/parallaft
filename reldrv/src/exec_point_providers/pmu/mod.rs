@@ -226,8 +226,6 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
         }
 
         if let Some(exec_point) = segment_info.upcoming_exec_points.pop_front() {
-            debug!("{checker} Set up exec point {exec_point:?}");
-
             let branch_count_curr = segment_info
                 .checker_branch_counter
                 .as_mut()
@@ -235,6 +233,8 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
                 .unwrap_or(Ok(0))?;
 
             assert!(exec_point.branch_counter >= branch_count_curr);
+
+            debug!("{checker} Set up exec point {exec_point:?}, current branch count = {branch_count_curr}");
 
             let initial_state;
 
