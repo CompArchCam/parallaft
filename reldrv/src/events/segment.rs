@@ -14,7 +14,7 @@ use crate::{
 /// Events overview WITHOUT intra-segment parallelism, i.e. the checker will
 /// only start execution after the main fully completes the segment.
 ///
-
+/// ```text
 ///            created      ready          completed     checked     removed
 ///               |   wait    | checker exec.  | state cmp. |           |   
 /// Checker       0 --------- x -------------- 1' --------- x    ...    x
@@ -23,13 +23,12 @@ use crate::{
 /// Main  ---  0 ------------ 1 ---------- 2    ...
 ///            ^              ^
 /// checkpoint_created_pre  filled & chain_closed
-///
-
+/// ```
 ///
 /// Events overview WITH intra-segment parallelism, i.e. the checker will start
 /// execution as soon as the segment is created.
 ///
-
+/// ```text
 ///       created & ready      completed     checked     removed
 ///               | checker exec.  | state cmp. |           |   
 /// Checker       0 -------------- 1' --------- x    ...    x
@@ -38,8 +37,7 @@ use crate::{
 /// Main  ---  0 ------------ 1 ---------- 2    ...
 ///            ^              ^
 /// checkpoint_created_pre  filled & chain_closed
-///
-
+/// ```
 pub trait SegmentEventHandler {
     /// Called when a checkpoint is about to be created. At this point,
     /// `main.segment` contains the last segment, if there is one.
