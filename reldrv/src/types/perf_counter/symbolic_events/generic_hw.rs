@@ -4,7 +4,9 @@ use perf_event::SampleSkid;
 use crate::{
     error::Result,
     impl_perf_counter, impl_perf_counter_with_interrupt,
-    types::perf_counter::{raw_events::Hardware, PerfCounter, PerfCounterWithInterrupt},
+    types::perf_counter::{
+        cpu_info::pmu::PMUS, raw_events::Hardware, PerfCounter, PerfCounterWithInterrupt,
+    },
 };
 
 use super::{
@@ -17,12 +19,25 @@ pub struct GenericHardwareEventCounter {
 }
 
 impl GenericHardwareEventCounter {
-    pub fn new(event: Hardware, target: Target, pinned: bool, cpu_set: &[usize]) -> Result<Self> {
-        let (_, pmu) = lookup_cpu_model_and_pmu_name_from_cpu_set(cpu_set)?;
+    pub fn new(
+        event: Hardware,
+        target: Target,
+        pinned: bool,
+        cpu_set: Option<&[usize]>,
+    ) -> Result<Self> {
+        if let Some(cpu_set) = cpu_set {
+            let (_, pmu) = lookup_cpu_model_and_pmu_name_from_cpu_set(cpu_set)?;
 
-        Ok(Self {
-            counter: Expr::Hardware(event).build(pmu, target, pinned)?,
-        })
+            Ok(Self {
+                counter: Expr::Hardware(event).build(pmu, target, pinned)?,
+            })
+        } else {
+            let pmus = PMUS.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+
+            Ok(Self {
+                counter: Expr::Hardware(event).build_multiple_pmus(pmus, target, pinned)?,
+            })
+        }
     }
 }
 

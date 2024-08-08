@@ -2,6 +2,7 @@ mod cpu_model;
 pub mod pmu;
 
 pub use cpu_model::CpuModel;
+use pmu::PMUS;
 
 use std::{collections::HashMap, path::PathBuf};
 
@@ -14,7 +15,7 @@ pub struct CpuInfo {
 }
 
 pub fn detect_all_cpu_info() -> HashMap<usize, CpuInfo> {
-    let pmus = pmu::list_pmus().unwrap();
+    let pmus = &*PMUS;
     let mut cpu_info = HashMap::new();
 
     for cpu in 0..sysconf(SysconfVar::_NPROCESSORS_CONF).unwrap().unwrap() as usize {

@@ -1,15 +1,20 @@
 use std::{fs, path::PathBuf};
 
 use itertools::Itertools;
+use lazy_static::lazy_static;
 
 use crate::{error::Result, types::perf_counter::EVENT_SOURCE_DEVICES_ROOT};
+
+lazy_static! {
+    pub static ref PMUS: Vec<Pmu> = list_pmus().expect("Failed to get PMU list");
+}
 
 pub struct Pmu {
     pub name: PathBuf,
     pub cpus: Vec<usize>,
 }
 
-pub fn list_pmus() -> Result<Vec<Pmu>> {
+fn list_pmus() -> Result<Vec<Pmu>> {
     let mut pmus = Vec::new();
 
     for dir in fs::read_dir(EVENT_SOURCE_DEVICES_ROOT)? {

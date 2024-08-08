@@ -6,7 +6,7 @@ use reldrv::{
     dispatcher::Module,
     error::Result,
     events::{module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler, HandlerContext},
-    types::{perf_counter::cpu_info::pmu::list_pmus, process_id::InferiorRefMut},
+    types::{perf_counter::cpu_info::pmu::PMUS, process_id::InferiorRefMut},
     RelShellOptionsBuilder,
 };
 
@@ -93,7 +93,7 @@ impl Module for MigrationHelper {
 #[test]
 #[ignore = "requires heterogeneous pmc"]
 fn test_pmc_migration() -> Result<()> {
-    let cpusets: Vec<Vec<usize>> = list_pmus()?.into_iter().map(|p| p.cpus).collect();
+    let cpusets: Vec<Vec<usize>> = PMUS.iter().map(|p| p.cpus.clone()).collect();
 
     assert!(cpusets.len() >= 2, "not enough pmus, needs 2+ pmus");
 

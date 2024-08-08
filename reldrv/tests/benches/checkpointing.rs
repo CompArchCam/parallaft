@@ -67,7 +67,7 @@ impl ProcessLifetimeHook for CyclesCounter {
                     event,
                     Target::Cpu(self.cpu_affinity),
                     false,
-                    &[self.cpu_affinity],
+                    Some(&[self.cpu_affinity]),
                 )?,
             );
         }

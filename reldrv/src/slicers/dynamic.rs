@@ -69,23 +69,21 @@ impl Default for DynamicSlicerParams {
     }
 }
 
-pub struct DynamicSlicer<'a> {
+pub struct DynamicSlicer {
     max_nr_live_segments: usize,
     params: DynamicSlicerParams,
     worker: Mutex<Option<Sender<()>>>,
     main_cycles_counter: Mutex<Option<GenericHardwareEventCounter>>,
-    main_cpu_set: &'a [usize],
     epoch: AtomicU32,
 }
 
-impl<'a> DynamicSlicer<'a> {
-    pub fn new(main_cpu_set: &'a [usize], max_nr_live_segments: usize) -> Self {
+impl DynamicSlicer {
+    pub fn new(max_nr_live_segments: usize) -> Self {
         Self {
             max_nr_live_segments,
             params: DynamicSlicerParams::default(),
             worker: Mutex::new(None),
             main_cycles_counter: Mutex::new(None),
-            main_cpu_set,
             epoch: AtomicU32::new(0),
         }
     }
@@ -157,7 +155,7 @@ impl<'a> DynamicSlicer<'a> {
     }
 }
 
-impl SegmentEventHandler for DynamicSlicer<'_> {
+impl SegmentEventHandler for DynamicSlicer {
     fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
         self.main_cycles_counter
             .lock()
@@ -166,7 +164,7 @@ impl SegmentEventHandler for DynamicSlicer<'_> {
                     Hardware::CPU_CYCLES,
                     Target::Pid(main.process.pid),
                     false,
-                    self.main_cpu_set,
+                    None,
                 )
             })?
             .reset()?;
@@ -175,7 +173,7 @@ impl SegmentEventHandler for DynamicSlicer<'_> {
     }
 }
 
-impl StandardSyscallHandler for DynamicSlicer<'_> {
+impl StandardSyscallHandler for DynamicSlicer {
     fn handle_standard_syscall_exit(
         &self,
         ret_val: isize,
@@ -191,7 +189,7 @@ impl StandardSyscallHandler for DynamicSlicer<'_> {
     }
 }
 
-impl ProcessLifetimeHook for DynamicSlicer<'_> {
+impl ProcessLifetimeHook for DynamicSlicer {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main,
@@ -231,7 +229,7 @@ impl ProcessLifetimeHook for DynamicSlicer<'_> {
     }
 }
 
-impl ModuleLifetimeHook for DynamicSlicer<'_> {
+impl ModuleLifetimeHook for DynamicSlicer {
     fn fini<'s, 'scope, 'env>(&'s self, _scope: &'scope Scope<'scope, 'env>) -> Result<()>
     where
         's: 'scope,
@@ -246,7 +244,7 @@ impl ModuleLifetimeHook for DynamicSlicer<'_> {
     }
 }
 
-impl Module for DynamicSlicer<'_> {
+impl Module for DynamicSlicer {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,

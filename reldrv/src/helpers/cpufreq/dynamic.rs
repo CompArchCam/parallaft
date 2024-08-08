@@ -30,7 +30,6 @@ use crate::{
 };
 
 pub struct DynamicCpuFreqScaler<'a> {
-    main_cpu_set: &'a [usize],
     checker_cpu_set: &'a [usize],
     segment_info_map: Mutex<HashMap<SegmentId, SegmentInfo>>,
     main_instruction_counter: Mutex<Option<GenericHardwareEventCounter>>,
@@ -79,12 +78,8 @@ impl State {
 }
 
 impl DynamicCpuFreqScaler<'_> {
-    pub fn new<'a>(
-        main_cpu_set: &'a [usize],
-        checker_cpu_set: &'a [usize],
-    ) -> DynamicCpuFreqScaler<'a> {
+    pub fn new<'a>(checker_cpu_set: &'a [usize]) -> DynamicCpuFreqScaler<'a> {
         DynamicCpuFreqScaler {
-            main_cpu_set,
             checker_cpu_set,
             freq_step_khz: 50_000, /* 50MHz */
             segment_info_map: Mutex::new(HashMap::new()),
@@ -318,7 +313,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
                 Hardware::INSTRUCTIONS,
                 Target::Pid(main.process.pid),
                 true,
-                self.main_cpu_set,
+                None,
             )
         })?;
 
@@ -365,14 +360,14 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
             Hardware::INSTRUCTIONS,
             Target::Pid(checker.process.pid),
             true,
-            self.checker_cpu_set,
+            None,
         )?);
 
         segment_info.checker_cycle_counter = Some(GenericHardwareEventCounter::new(
             Hardware::CPU_CYCLES,
             Target::Pid(checker.process.pid),
             true,
-            self.checker_cpu_set,
+            None,
         )?);
 
         Ok(())

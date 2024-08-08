@@ -1,3 +1,4 @@
+mod add;
 mod base;
 mod sub;
 
@@ -7,6 +8,7 @@ use std::{
     path::PathBuf,
 };
 
+use add::AddPerfCounter;
 pub use base::{BasePerfCounter, BasePerfCounterWithInterrupt};
 use itertools::Itertools;
 use nix::unistd::Pid;
@@ -67,6 +69,25 @@ impl Expr {
                 Box::new(SubstractPerfCounter(lhs, rhs))
             }
         })
+    }
+
+    pub fn build_multiple_pmus(
+        self,
+        pmus: Vec<impl Into<PathBuf>>,
+        target: Target,
+        pinned: bool,
+    ) -> std::io::Result<Box<dyn PerfCounter>> {
+        let exprs: Vec<Box<dyn PerfCounter>> = pmus
+            .into_iter()
+            .map(|p| self.clone().build(p, target, pinned))
+            .try_collect()?;
+
+        let result = exprs
+            .into_iter()
+            .reduce(|lhs, rhs| Box::new(AddPerfCounter(lhs, rhs)))
+            .expect("Must have at least one PMU");
+
+        Ok(result)
     }
 
     pub fn build_with_interrupt(

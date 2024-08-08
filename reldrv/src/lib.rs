@@ -368,10 +368,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             disp.register_module(EntireProgramSlicer::new());
         }
         SlicerType::Dynamic => {
-            disp.register_module(DynamicSlicer::new(
-                &options.main_cpu_set,
-                options.max_nr_live_segments,
-            ));
+            disp.register_module(DynamicSlicer::new(options.max_nr_live_segments));
         }
         SlicerType::Null => (),
     };
@@ -402,10 +399,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             ));
         }
         CpuFreqScalerType::Dynamic => {
-            disp.register_module(DynamicCpuFreqScaler::new(
-                &options.main_cpu_set,
-                &options.checker_cpu_set,
-            ));
+            disp.register_module(DynamicCpuFreqScaler::new(&options.checker_cpu_set));
         }
     }
 
