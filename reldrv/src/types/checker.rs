@@ -80,4 +80,14 @@ impl CheckerStatus {
             _ => None,
         }
     }
+
+    pub fn set_cpu_set(&mut self, new_cpu_set: Vec<usize>) -> Result<()> {
+        match self {
+            CheckerStatus::Executing { cpu_set, .. } => {
+                *cpu_set = new_cpu_set;
+                Ok(())
+            }
+            _ => Err(Error::InvalidState),
+        }
+    }
 }

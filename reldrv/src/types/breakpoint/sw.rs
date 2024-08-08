@@ -84,6 +84,12 @@ impl Breakpoint for SoftwareBreakpoint {
     }
 }
 
+impl Drop for SoftwareBreakpoint {
+    fn drop(&mut self) {
+        assert!(matches!(self.state, BreakpointState::Disabled));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dbg_hex::dbg_hex;

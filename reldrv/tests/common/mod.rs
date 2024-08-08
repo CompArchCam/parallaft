@@ -1,5 +1,7 @@
+pub mod custom_sysno;
 pub mod relrt;
 
+use custom_sysno::TestCustomSysno;
 use nix::{
     libc,
     sys::signal::{raise, Signal},
@@ -40,6 +42,14 @@ pub fn checkpoint_sync() {
 
 pub fn assert_in_protection() {
     unsafe { libc::syscall(CustomSysno::AssertInProtection as _) };
+}
+
+pub fn migrate_checker() {
+    unsafe { libc::syscall(TestCustomSysno::MigrateChecker as _) };
+}
+
+pub fn take_exec_point() {
+    unsafe { libc::syscall(TestCustomSysno::TakeExecPoint as _) };
 }
 
 #[must_use]

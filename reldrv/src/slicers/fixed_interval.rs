@@ -239,7 +239,9 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
 
             *state = Some(next_state);
 
-            let ret = context.check_coord.push_curr_exec_point_to_event_log(main);
+            let ret = context
+                .check_coord
+                .push_curr_exec_point_to_event_log(main, true);
 
             match ret {
                 Ok(()) => return Ok(SignalHandlerExitAction::Checkpoint),

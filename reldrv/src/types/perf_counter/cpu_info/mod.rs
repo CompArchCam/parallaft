@@ -1,5 +1,5 @@
 mod cpu_model;
-mod pmu;
+pub mod pmu;
 
 pub use cpu_model::CpuModel;
 

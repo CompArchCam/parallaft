@@ -28,7 +28,9 @@ impl SignalHandler for SliceSegmentHandler {
     {
         if let InferiorRefMut::Main(main) = context.child {
             if main.process.get_sigval()? == Some(Self::SIGVAL_DO_SLICE_SEGMENT) {
-                let ret = context.check_coord.push_curr_exec_point_to_event_log(main);
+                let ret = context
+                    .check_coord
+                    .push_curr_exec_point_to_event_log(main, true);
 
                 match ret {
                     Ok(_) => return Ok(SignalHandlerExitAction::Checkpoint),

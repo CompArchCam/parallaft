@@ -24,6 +24,7 @@ use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
 use crate::error::{Error, Result, UnexpectedEventReason};
 use crate::events::hctx;
+use crate::events::migration::MigrationHandler;
 use crate::events::module_lifetime::ModuleLifetimeHook;
 use crate::events::process_lifetime::{pctx, ProcessLifetimeHook};
 use crate::events::syscall::{
@@ -58,7 +59,7 @@ struct Worker {
     thread: Thread,
 }
 
-pub struct CheckCoordinator<'disp, 'modules, 'tracer> {
+pub struct CheckCoordinator<'disp, 'modules, 'tracer: 'disp> {
     pub segments: Arc<RwLock<SegmentChains>>,
     pub main_pid: Pid,
     pub epoch: AtomicU32,
@@ -92,10 +93,7 @@ enum SyscallType {
     Custom(usize, SyscallArgs),
 }
 
-impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer>
-where
-    'modules: 'disp,
-{
+impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     pub fn new(
         main: Process,
         options: CheckCoordinatorOptions,
@@ -1146,17 +1144,44 @@ where
         Ok(())
     }
 
-    pub fn push_curr_exec_point_to_event_log(&self, main: &mut Main) -> Result<()> {
+    pub fn push_curr_exec_point_to_event_log(
+        &self,
+        main: &mut Main,
+        is_finishing: bool,
+    ) -> Result<()> {
         if let Some(segment) = main.segment.as_ref().cloned() {
             let exec_point = self
                 .dispatcher
                 .get_current_execution_point(&mut main.into())?;
 
             debug!("{main} New execution point: {exec_point:?}");
-            segment.record.push_event(exec_point, true, &segment)?;
+            segment
+                .record
+                .push_event(exec_point, is_finishing, &segment)?;
         } else {
             return Err(Error::InvalidState);
         }
+
+        Ok(())
+    }
+
+    pub fn migrate_checker<'s, 'scope, 'env>(
+        &'s self,
+        new_cpu_set: Vec<usize>,
+        checker: &mut Checker,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> Result<()>
+    where
+        's: 'scope + 'disp,
+    {
+        checker
+            .segment
+            .checker_status
+            .lock()
+            .set_cpu_set(new_cpu_set)?;
+
+        self.dispatcher
+            .handle_checker_migration(hctx(&mut checker.into(), self, scope))?;
 
         Ok(())
     }

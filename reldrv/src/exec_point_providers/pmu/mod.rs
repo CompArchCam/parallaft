@@ -10,10 +10,11 @@ use std::{
     },
 };
 
+use derivative::Derivative;
 use exec_point::BranchCounterBasedExecutionPoint;
 use log::{debug, error};
 
-use nix::sys::signal::Signal;
+use nix::{sys::signal::Signal, unistd::Pid};
 use parking_lot::Mutex;
 use reverie_syscalls::Syscall;
 
@@ -21,6 +22,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
     events::{
+        migration::MigrationHandler,
         module_lifetime::ModuleLifetimeHook,
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
@@ -28,7 +30,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::{memory::instructions, registers::RegisterAccess, siginfo::SigInfoExt},
+    process::{memory::instructions, registers::RegisterAccess, siginfo::SigInfoExt, Process},
     statistics::StatisticsProvider,
     statistics_list,
     types::{
@@ -51,18 +53,57 @@ use crate::signal_handlers::cpuid::{self, CpuidOverride};
 
 use super::ExecutionPointProvider;
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct SegmentInfo {
+    branch_type: BranchType,
+    branch_count_offset: u64,
+    #[derivative(Debug = "ignore")]
     checker_branch_counter: Option<BranchCounter>,
     active_exec_point: Option<(BranchCounterBasedExecutionPoint, ExecutionPointReplayState)>,
     upcoming_exec_points: LinkedList<BranchCounterBasedExecutionPoint>,
 }
 
-impl Debug for SegmentInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SegmentInfo")
-            .field("state", &self.active_exec_point)
-            .field("upcoming_exec_points", &self.upcoming_exec_points)
-            .finish()
+impl SegmentInfo {
+    pub fn current_branch_count(&mut self) -> std::io::Result<u64> {
+        let pmc = self
+            .checker_branch_counter
+            .as_mut()
+            .map_or(Ok(0), |x| x.read())?;
+
+        Ok(pmc + self.branch_count_offset)
+    }
+
+    pub fn init_or_migrate_branch_counter(&mut self, pid: Pid, cpu_set: &[usize]) -> Result<()> {
+        let new_counter = BranchCounter::new(self.branch_type, Target::Pid(pid), true, cpu_set)?;
+
+        if let Some(mut old_counter) = self.checker_branch_counter.replace(new_counter) {
+            self.branch_count_offset += old_counter.read()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn migrate(&mut self, checker_process: &mut Process, new_cpu_set: &[usize]) -> Result<()> {
+        self.init_or_migrate_branch_counter(checker_process.pid, new_cpu_set)?;
+
+        if let Some((exec_point, state)) = self.active_exec_point.as_mut() {
+            if let ExecutionPointReplayState::CountingBranches { .. } = state {
+                *state = ExecutionPointReplayState::setup(
+                    exec_point,
+                    self.checker_branch_counter
+                        .as_mut()
+                        .map_or(Ok(0), |x| x.read())?
+                        + self.branch_count_offset,
+                    new_cpu_set,
+                    checker_process,
+                    self.branch_type,
+                    false,
+                )?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -83,6 +124,46 @@ impl Debug for ExecutionPointReplayState {
             Self::CountingBranches { .. } => write!(f, "CountingBranches"),
             Self::Stepping { .. } => write!(f, "Stepping"),
         }
+    }
+}
+
+impl ExecutionPointReplayState {
+    pub fn setup(
+        exec_point: &BranchCounterBasedExecutionPoint,
+        branch_count_curr: u64,
+        cpu_set: &[usize],
+        checker_process: &mut Process,
+        branch_type: BranchType,
+        checker_never_use_branch_count_overflow: bool,
+    ) -> Result<ExecutionPointReplayState> {
+        let state;
+        let checker_cpu_model = lookup_cpu_model_and_pmu_name_from_cpu_set(cpu_set)
+            .unwrap()
+            .0;
+
+        if exec_point.branch_count - branch_count_curr
+            <= checker_cpu_model.max_skid() + checker_cpu_model.min_irq_period()
+            || checker_never_use_branch_count_overflow
+        {
+            state = ExecutionPointReplayState::Stepping {
+                breakpoint: breakpoint(checker_process, exec_point.instruction_pointer)?,
+                breakpoint_suspended: false,
+                single_stepping: false,
+            };
+        } else {
+            state = ExecutionPointReplayState::CountingBranches {
+                branch_irq: BranchCounterWithInterrupt::new(
+                    branch_type,
+                    checker_process.pid,
+                    true,
+                    cpu_set,
+                    exec_point.branch_count - branch_count_curr - checker_cpu_model.max_skid(),
+                    None,
+                )?,
+            };
+        }
+
+        Ok(state)
     }
 }
 
@@ -153,9 +234,11 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         self.segment_info_map.lock().insert(
             main.segment.as_ref().unwrap().nr,
             Arc::new(Mutex::new(SegmentInfo {
+                branch_count_offset: 0,
                 checker_branch_counter: None,
                 active_exec_point: None,
                 upcoming_exec_points: LinkedList::new(),
+                branch_type: self.branch_counter_type,
             })),
         );
 
@@ -170,12 +253,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         let checker_status = checker.segment.checker_status.lock();
         let checker_cpu_set = checker_status.cpu_set().unwrap();
 
-        segment_info.checker_branch_counter = Some(BranchCounter::new(
-            self.branch_counter_type,
-            Target::Pid(checker.process.pid),
-            true,
-            checker_cpu_set,
-        )?);
+        segment_info.init_or_migrate_branch_counter(checker.process.pid, checker_cpu_set)?;
 
         drop(checker_status);
 
@@ -223,53 +301,21 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
         }
 
         if let Some(exec_point) = segment_info.upcoming_exec_points.pop_front() {
-            let branch_count_curr = segment_info
-                .checker_branch_counter
-                .as_mut()
-                .map(|x| x.read())
-                .unwrap_or(Ok(0))?;
+            let branch_count_curr = segment_info.current_branch_count()?;
+            assert!(exec_point.branch_count >= branch_count_curr);
 
-            assert!(exec_point.branch_counter >= branch_count_curr);
+            let replay_state = ExecutionPointReplayState::setup(
+                &exec_point,
+                branch_count_curr,
+                checker.segment.checker_status.lock().cpu_set().unwrap(),
+                &mut checker.process,
+                self.branch_counter_type,
+                self.checker_never_use_branch_count_overflow,
+            )?;
 
-            debug!("{checker} Set up exec point {exec_point:?}, current branch count = {branch_count_curr}");
+            debug!("{checker} Set up exec point {exec_point:?}, current branch count = {branch_count_curr}, replay state = {replay_state:?}");
 
-            let initial_state;
-
-            let checker_status = checker.segment.checker_status.lock();
-            let checker_cpu_set = checker_status.cpu_set().unwrap();
-            let checker_cpu_model = lookup_cpu_model_and_pmu_name_from_cpu_set(checker_cpu_set)
-                .unwrap()
-                .0;
-
-            if exec_point.branch_counter - branch_count_curr
-                <= checker_cpu_model.max_skid() + checker_cpu_model.min_irq_period()
-                || self.checker_never_use_branch_count_overflow
-            {
-                debug!("{checker} ... using breakpoint");
-                initial_state = ExecutionPointReplayState::Stepping {
-                    breakpoint: breakpoint(&mut checker.process, exec_point.instruction_pointer)?,
-                    breakpoint_suspended: false,
-                    single_stepping: false,
-                };
-            } else {
-                debug!("{checker} ... using branch count overflow interrupt");
-                initial_state = ExecutionPointReplayState::CountingBranches {
-                    branch_irq: BranchCounterWithInterrupt::new(
-                        self.branch_counter_type,
-                        checker.process.pid,
-                        true,
-                        checker_cpu_set,
-                        exec_point.branch_counter
-                            - branch_count_curr
-                            - checker_cpu_model.max_skid(),
-                        None,
-                    )?,
-                };
-            }
-
-            drop(checker_status);
-
-            segment_info.active_exec_point = Some((exec_point, initial_state));
+            segment_info.active_exec_point = Some((exec_point, replay_state));
         }
         Ok(())
     }
@@ -353,13 +399,9 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                         exec_point.instruction_pointer
                                     );
 
-                                    let branch_count_curr = segment_info
-                                        .checker_branch_counter
-                                        .as_mut()
-                                        .unwrap()
-                                        .read()?;
+                                    let branch_count_curr = segment_info.current_branch_count()?;
 
-                                    let branch_count_target = exec_point.branch_counter;
+                                    let branch_count_target = exec_point.branch_count;
 
                                     debug!("{checker} Current branch count = {branch_count_curr}, target count = {branch_count_target}");
 
@@ -399,6 +441,8 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                             }
                                         }
                                         std::cmp::Ordering::Equal => {
+                                            breakpoint.disable(&mut checker.process)?;
+
                                             debug!(
                                                 "{checker} Reached execution point {exec_point:?}"
                                             );
@@ -406,6 +450,8 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                             replay_done = true;
                                         }
                                         std::cmp::Ordering::Greater => {
+                                            breakpoint.disable(&mut checker.process)?;
+
                                             unreachable!("Unexpected skid");
                                         }
                                     }
@@ -520,7 +566,7 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
                 let segment_info_map = self.segment_info_map.lock();
 
                 Ok(Arc::new(BranchCounterBasedExecutionPoint {
-                    branch_counter: branches_executed,
+                    branch_count: branches_executed,
                     instruction_pointer: main.process.read_registers()?.ip(),
                     ty: self.branch_counter_type,
                     segment_info: segment_info_map
@@ -534,10 +580,10 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
                 let segment_info_arc = segment_info_map.get(&checker.segment.nr).unwrap();
                 let mut segment_info = segment_info_arc.lock();
 
-                let branch_counter = segment_info.checker_branch_counter.as_mut().unwrap();
+                let branch_count = segment_info.current_branch_count()?;
 
                 Ok(Arc::new(BranchCounterBasedExecutionPoint {
-                    branch_counter: branch_counter.read()?,
+                    branch_count,
                     instruction_pointer: checker.process.read_registers()?.ip(),
                     ty: self.branch_counter_type,
                     segment_info: segment_info_arc.clone(),
@@ -563,6 +609,23 @@ impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     }
 }
 
+impl MigrationHandler for PerfCounterBasedExecutionPointProvider<'_> {
+    fn handle_checker_migration(&self, context: HandlerContext) -> Result<()> {
+        let segment_info_map = self.segment_info_map.lock();
+        let checker = context.child.unwrap_checker_mut();
+        let segment_info = segment_info_map.get(&checker.segment.nr).unwrap();
+        let mut segment_info = segment_info.lock();
+        let checker_status = checker.segment.checker_status.lock();
+        let new_cpu_set = checker_status.cpu_set().unwrap();
+
+        segment_info.migrate(&mut checker.process, new_cpu_set)?;
+        debug!("{checker} Migrating to CPU set: {new_cpu_set:?}");
+        debug!("{checker} Current state: {segment_info:?}");
+
+        Ok(())
+    }
+}
+
 impl Module for PerfCounterBasedExecutionPointProvider<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -575,5 +638,6 @@ impl Module for PerfCounterBasedExecutionPointProvider<'_> {
         subs.install_module_lifetime_hook(self);
         subs.install_process_lifetime_hook(self);
         subs.install_standard_syscall_handler(self);
+        subs.install_migration_handler(self);
     }
 }

@@ -4,19 +4,14 @@ use log::info;
 use reldrv::{
     dispatcher::Module,
     error::Result,
-    events::{
-        module_lifetime::ModuleLifetimeHook,
-        syscall::{StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler},
-        HandlerContext,
-    },
+    events::{module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler, HandlerContext},
     exec_point_providers::{
         pmu::exec_point::BranchCounterBasedExecutionPoint, ExecutionPointProvider,
     },
     RelShellOptionsBuilder,
 };
-use reverie_syscalls::Syscall;
 
-use crate::common::trace_w_options;
+use crate::common::{custom_sysno::TestCustomSysno, trace_w_options};
 
 #[derive(Debug, Clone, Copy)]
 enum TestMode {
@@ -47,13 +42,18 @@ impl PmcTester {
     }
 }
 
-impl StandardSyscallHandler for PmcTester {
-    fn handle_standard_syscall_entry_main(
+impl CustomSyscallHandler for PmcTester {
+    fn handle_custom_syscall_entry(
         &self,
-        syscall: &Syscall,
+        sysno: usize,
+        _args: syscalls::SyscallArgs,
         context: HandlerContext,
-    ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
-        if let Syscall::Getpid(_) = syscall {
+    ) -> Result<reldrv::events::syscall::SyscallHandlerExitAction> {
+        if TestCustomSysno::from_repr(sysno) == Some(TestCustomSysno::TestPmc) {
+            if context.child.is_checker() {
+                return Ok(reldrv::events::syscall::SyscallHandlerExitAction::ContinueInferior);
+            }
+
             let exec_point = context
                 .check_coord
                 .dispatcher
@@ -81,15 +81,17 @@ impl StandardSyscallHandler for PmcTester {
                 }
             }
 
-            if count_expected != branch_exec_point.branch_counter {
+            if count_expected != branch_exec_point.branch_count {
                 panic!(
                     "Unexpected branch count {} != {}",
-                    branch_exec_point.branch_counter, count_expected
+                    branch_exec_point.branch_count, count_expected
                 );
             }
+
+            return Ok(reldrv::events::syscall::SyscallHandlerExitAction::ContinueInferior);
         }
 
-        Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
+        Ok(reldrv::events::syscall::SyscallHandlerExitAction::NextHandler)
     }
 }
 
@@ -116,7 +118,7 @@ impl Module for PmcTester {
     where
         's: 'd,
     {
-        subs.install_standard_syscall_handler(self);
+        subs.install_custom_syscall_handler(self);
     }
 }
 
@@ -132,7 +134,7 @@ fn pmc_monotonicity() {
                     syscall
                     mov rdx, 100
                 2:
-                    mov rax, 39     # SYS_getpid
+                    mov rax, {sysno_test_pmc}
                     syscall
                     dec rdx
                     jnz 2b
@@ -140,6 +142,7 @@ fn pmc_monotonicity() {
                     mov rax, 0xff78 # checkpoint_fini
                     syscall
                     ",
+                    sysno_test_pmc = in(reg) TestCustomSysno::TestPmc as u32,
                     out("rdx") _,
                     out("rcx") _,
                     out("r11") _,
@@ -155,7 +158,7 @@ fn pmc_monotonicity() {
                     svc #0
                     mov x9, 100
                 2:
-                    mov w8, 172    // getpid
+                    mov w8, {sysno_test_pmc:w}
                     svc #0
                     subs x9, x9, 1
                     cbnz x9, 2b
@@ -163,6 +166,7 @@ fn pmc_monotonicity() {
                     mov w8, 0xff78 // checkpoint_fini
                     svc #0
                     ",
+                    sysno_test_pmc = in(reg) TestCustomSysno::TestPmc as u32,
                     out("w9") _,
                     out("w8") _,
                     out("x0") _,
@@ -198,7 +202,7 @@ fn pmc_consistency() {
                     mov rdx, 100
                     jmp 2f
                 2:
-                    mov rax, 39     # SYS_getpid
+                    mov rax, {sysno_test_pmc}
                     syscall
                     mov rax, 0xff77 # checkpoint_take
                     syscall
@@ -208,6 +212,7 @@ fn pmc_consistency() {
                     mov rax, 0xff78 # checkpoint_fini
                     syscall
                     ",
+                    sysno_test_pmc = in(reg) TestCustomSysno::TestPmc as u32,
                     out("rdx") _,
                     out("rcx") _,
                     out("r11") _,
@@ -224,7 +229,7 @@ fn pmc_consistency() {
                     mov x9, 100
                     b 2f
                 2:
-                    mov w8, 172    // getpid
+                    mov w8, {sysno_test_pmc:w}
                     svc #0
                     mov w8, 0xff77 // checkpoint_take
                     svc #0
@@ -234,6 +239,7 @@ fn pmc_consistency() {
                     mov w8, 0xff78 // checkpoint_fini
                     svc #0
                     ",
+                    sysno_test_pmc = in(reg) TestCustomSysno::TestPmc as u32,
                     out("w9") _,
                     out("w8") _,
                     out("x0") _,

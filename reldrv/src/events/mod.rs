@@ -1,6 +1,7 @@
 pub mod comparator;
 pub mod insn_patching;
 pub mod memory;
+pub mod migration;
 pub mod module_lifetime;
 pub mod process_lifetime;
 pub mod segment;
@@ -13,7 +14,7 @@ use crate::{
     check_coord::CheckCoordinator, process::OwnedProcess, types::process_id::InferiorRefMut,
 };
 
-pub struct HandlerContext<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer> {
+pub struct HandlerContext<'ido, 'id, 'disp: 'scope, 'scope, 'env, 'modules, 'tracer> {
     pub child: &'ido mut InferiorRefMut<'id>,
     pub check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     pub scope: &'scope Scope<'scope, 'env>,

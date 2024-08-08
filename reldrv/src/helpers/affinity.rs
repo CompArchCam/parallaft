@@ -5,7 +5,11 @@ use log::info;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    events::{
+        migration::MigrationHandler,
+        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        HandlerContext,
+    },
     process::Process,
     types::process_id::{Checker, Main},
 };
@@ -122,11 +126,24 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     }
 }
 
+impl MigrationHandler for AffinitySetter<'_> {
+    fn handle_checker_migration(&self, context: HandlerContext) -> Result<()> {
+        let checker_status = context.child.unwrap_checker().segment.checker_status.lock();
+        let new_cpu_set = checker_status.cpu_set().unwrap();
+
+        Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
+        context.process().set_cpu_affinity(new_cpu_set)?;
+
+        Ok(())
+    }
+}
+
 impl Module for AffinitySetter<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
         's: 'd,
     {
         subs.install_process_lifetime_hook(self);
+        subs.install_migration_handler(self);
     }
 }

@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-pub struct ProcessLifetimeHookContext<'disp, 'scope, 'env, 'modules, 'tracer> {
+pub struct ProcessLifetimeHookContext<'disp: 'scope, 'scope, 'env, 'modules, 'tracer> {
     pub check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     pub scope: &'scope Scope<'scope, 'env>,
 }

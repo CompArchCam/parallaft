@@ -17,6 +17,7 @@ use crate::{
         hctx,
         insn_patching::InstructionPatchingEventHandler,
         memory::MemoryEventHandler,
+        migration::MigrationHandler,
         module_lifetime::ModuleLifetimeHook,
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
@@ -84,6 +85,7 @@ pub struct Subscribers<'a> {
     exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
     memory_event_handlers: Vec<&'a dyn MemoryEventHandler>,
     instruction_patching_events_handlers: Vec<&'a dyn InstructionPatchingEventHandler>,
+    migration_handlers: Vec<&'a dyn MigrationHandler>,
 }
 
 impl<'a> Default for Subscribers<'a> {
@@ -112,6 +114,7 @@ impl<'a> Subscribers<'a> {
             exec_point_provider: None,
             memory_event_handlers: Vec::new(),
             instruction_patching_events_handlers: Vec::new(),
+            migration_handlers: Vec::new(),
         }
     }
 
@@ -199,6 +202,10 @@ impl<'a> Subscribers<'a> {
         handler: &'a dyn InstructionPatchingEventHandler,
     ) {
         self.instruction_patching_events_handlers.push(handler)
+    }
+
+    pub fn install_migration_handler(&mut self, handler: &'a dyn MigrationHandler) {
+        self.migration_handlers.push(handler)
     }
 }
 
@@ -721,6 +728,16 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
                 patch,
                 hctx(ctx.child, ctx.check_coord, ctx.scope),
             )?;
+        }
+
+        Ok(())
+    }
+}
+
+impl MigrationHandler for Dispatcher<'_, '_> {
+    fn handle_checker_migration(&self, ctx: HandlerContext) -> Result<()> {
+        for handler in &self.subscribers.read().migration_handlers {
+            handler.handle_checker_migration(hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }
 
         Ok(())
