@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         mpsc::{channel, RecvTimeoutError, Sender},
         Arc,
@@ -10,6 +10,7 @@ use std::{
 use derivative::Derivative;
 use itertools::Itertools;
 use log::debug;
+use nix::sys::signal::Signal;
 use parking_lot::Mutex;
 use perf_event::events::Hardware;
 use try_insert_ext::OptionInsertExt;
@@ -18,21 +19,29 @@ use super::{cpuinfo::CpuInfo, utils::set_cpufreq_max_freq};
 use crate::{
     dispatcher::Module,
     error::Result,
-    events::{module_lifetime::ModuleLifetimeHook, segment::SegmentEventHandler},
+    events::{
+        module_lifetime::ModuleLifetimeHook,
+        segment::SegmentEventHandler,
+        signal::{SignalHandler, SignalHandlerExitAction},
+        HandlerContext,
+    },
+    process::Process,
     types::{
         perf_counter::{
             symbolic_events::{expr::Target, GenericHardwareEventCounter},
             PerfCounter,
         },
-        process_id::{Checker, Main},
+        process_id::{Checker, InferiorRefMut, Main},
         segment::{Segment, SegmentId, SegmentStatus},
     },
 };
 
 pub struct DynamicCpuFreqScaler<'a> {
     checker_cpu_set: &'a [usize],
-    segment_info_map: Mutex<HashMap<SegmentId, SegmentInfo>>,
+    checker_emerg_cpu_set: &'a [usize],
+    segment_info_map: Mutex<BTreeMap<SegmentId, SegmentInfo>>,
     main_instruction_counter: Mutex<Option<GenericHardwareEventCounter>>,
+    main_cycles_counter: Mutex<Option<GenericHardwareEventCounter>>,
     main_start_time: Mutex<Option<Instant>>,
     adjustment_period: Duration,
     worker: Mutex<Option<Sender<()>>>,
@@ -40,6 +49,7 @@ pub struct DynamicCpuFreqScaler<'a> {
     cpu_info_map: Mutex<HashMap<usize, CpuInfo>>,
     freq_step_khz: u64,
     eps: f64,
+    no_freq_change: bool,
 }
 
 #[derive(Derivative)]
@@ -47,6 +57,7 @@ pub struct DynamicCpuFreqScaler<'a> {
 struct SegmentInfo {
     segment: Arc<Segment>,
     main_instructions: u64,
+    main_cycles: u64,
     main_start_time: Instant,
     main_end_time: Option<Instant>,
     #[derivative(Debug = "ignore")]
@@ -56,6 +67,7 @@ struct SegmentInfo {
     checker_cycle_counter: Option<GenericHardwareEventCounter>,
     checker_cycles: u64,
     checker_done: bool,
+    checker_on_emerg: bool,
 }
 
 #[derive(Debug)]
@@ -78,18 +90,27 @@ impl State {
 }
 
 impl DynamicCpuFreqScaler<'_> {
-    pub fn new<'a>(checker_cpu_set: &'a [usize]) -> DynamicCpuFreqScaler<'a> {
+    const SIGVAL_MIGRATE_CHECKER: usize = 0x787170ccb54c5460;
+
+    pub fn new<'a>(
+        checker_cpu_set: &'a [usize],
+        checker_emerg_cpu_set: &'a [usize], // Big cores that can be used in case checkers cannot meet deadlines
+        no_freq_change: bool,               // If true, the frequency will not be changed
+    ) -> DynamicCpuFreqScaler<'a> {
         DynamicCpuFreqScaler {
             checker_cpu_set,
+            checker_emerg_cpu_set,
             freq_step_khz: 50_000, /* 50MHz */
-            segment_info_map: Mutex::new(HashMap::new()),
+            segment_info_map: Mutex::new(BTreeMap::new()),
             main_instruction_counter: Mutex::new(None),
+            main_cycles_counter: Mutex::new(None),
             adjustment_period: Duration::from_secs_f32(0.5),
             worker: Mutex::new(None),
             state: Mutex::new(State::new()),
             cpu_info_map: Mutex::new(HashMap::new()),
             main_start_time: Mutex::new(None),
             eps: 0.0,
+            no_freq_change,
         }
     }
 
@@ -108,6 +129,8 @@ impl DynamicCpuFreqScaler<'_> {
                 .as_mut()
                 .unwrap()
                 .read()?;
+
+            segment_info.main_cycles = self.main_cycles_counter.lock().as_mut().unwrap().read()?;
         }
 
         if let Some(counter) = &mut segment_info.checker_instruction_counter {
@@ -123,7 +146,7 @@ impl DynamicCpuFreqScaler<'_> {
 
     fn update_all_counts(
         &self,
-        segment_info_map: &mut HashMap<SegmentId, SegmentInfo>,
+        segment_info_map: &mut BTreeMap<SegmentId, SegmentInfo>,
     ) -> Result<()> {
         for segment_info in segment_info_map.values_mut() {
             self.update_counts(segment_info)?;
@@ -171,6 +194,29 @@ impl DynamicCpuFreqScaler<'_> {
         Ok(freq.clamp(freq_min as _, freq_max as _))
     }
 
+    fn try_migrate(
+        &self,
+        segment_info: &mut SegmentInfo,
+        nr_checkers_on_emerg: &mut usize,
+    ) -> Result<bool> {
+        if *nr_checkers_on_emerg >= self.checker_emerg_cpu_set.len() {
+            debug!(
+                "Segment {}: all big cores are busy, not migrating",
+                segment_info.segment.nr
+            );
+            Ok(false)
+        } else {
+            debug!("Segment {}: migrating to big core", segment_info.segment.nr);
+
+            Process::new(segment_info.segment.checker_status.lock().pid().unwrap())
+                .sigqueue(Self::SIGVAL_MIGRATE_CHECKER)?;
+
+            segment_info.checker_on_emerg = true;
+            *nr_checkers_on_emerg += 1;
+            Ok(true)
+        }
+    }
+
     fn do_adjustment(&self) -> Result<()> {
         let now = Instant::now();
         let mut state = self.state.lock();
@@ -203,11 +249,12 @@ impl DynamicCpuFreqScaler<'_> {
                 .status
                 .lock();
 
-            if !matches!(&*segment_status, SegmentStatus::Filling { .. })
-                || matches!(
-                    &*segment_status,
-                    SegmentStatus::Filling { blocked: true, .. }
-                )
+            if !self.no_freq_change
+                && (!matches!(&*segment_status, SegmentStatus::Filling { .. })
+                    || matches!(
+                        &*segment_status,
+                        SegmentStatus::Filling { blocked: true, .. }
+                    ))
             {
                 debug!("Boosting to max frequency because the main is waiting");
                 state.cur_freq_khz = self.set_freq(f64::MAX)?;
@@ -219,10 +266,15 @@ impl DynamicCpuFreqScaler<'_> {
             // let mut total_time_remaining = Duration::ZERO;
             // let mut total_instructions_remaining = 0;
 
+            let mut nr_checkers_on_emerg = segment_info_map
+                .values()
+                .filter(|x| x.checker_on_emerg && !x.checker_done)
+                .count();
+
             let mut max_needed_freq: f64 = 0.0;
 
-            for segment_info in segment_info_map.values() {
-                if segment_info.checker_done {
+            for segment_info in segment_info_map.values_mut() {
+                if segment_info.checker_done || segment_info.checker_on_emerg {
                     continue;
                 }
 
@@ -277,10 +329,45 @@ impl DynamicCpuFreqScaler<'_> {
                         segment_info.segment.nr, needed_freq
                     );
 
+                    if self.checker_emerg_cpu_set.len() > 0 {
+                        let main_ipc =
+                            segment_info.main_instructions as f64 / segment_info.main_cycles as f64;
+
+                        debug!(
+                            "Segment {}: main IPC: {}",
+                            segment_info.segment.nr, main_ipc
+                        );
+
+                        let needed_freq_by_big_core = instructions_remaining as f64
+                            / main_ipc
+                            / time_remaining.as_secs_f64()
+                            / 1000.0;
+
+                        if needed_freq_by_big_core
+                            > self
+                                .cpu_info_map
+                                .lock()
+                                .get(&self.checker_emerg_cpu_set[0])
+                                .unwrap()
+                                .freq_max_khz as f64
+                        {
+                            if self.try_migrate(segment_info, &mut nr_checkers_on_emerg)? {
+                                continue;
+                            }
+                        }
+                    }
+
                     max_needed_freq = max_needed_freq.max(needed_freq);
                 } else {
-                    debug!("Missed deadlines, boosting frequency to max");
-                    max_needed_freq = f64::MAX;
+                    debug!("Missed deadlines, boosting frequency to max or migrating to big core");
+
+                    if self.checker_emerg_cpu_set.len() > 0 {
+                        if self.try_migrate(segment_info, &mut nr_checkers_on_emerg)? {
+                            continue;
+                        }
+                    } else {
+                        max_needed_freq = f64::MAX;
+                    }
                 }
 
                 // TODO: this may be negative in the future
@@ -292,8 +379,11 @@ impl DynamicCpuFreqScaler<'_> {
                 .count();
 
             debug!("Number of live checkers: {nr_live_checkers}");
-            state.cur_freq_khz = self.set_freq(max_needed_freq)?;
-            debug!("Final checker freq: {} kHz", state.cur_freq_khz);
+
+            if !self.no_freq_change {
+                state.cur_freq_khz = self.set_freq(max_needed_freq)?;
+                debug!("Final checker freq: {} kHz", state.cur_freq_khz);
+            }
         }
 
         state.last_main_instructions = total_main_instructions;
@@ -306,9 +396,9 @@ impl DynamicCpuFreqScaler<'_> {
 
 impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
     fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
-        let mut counter_option = self.main_instruction_counter.lock();
+        let mut instructions_counter_option = self.main_instruction_counter.lock();
 
-        let counter = counter_option.get_or_try_insert_with(|| {
+        let instructions_counter = instructions_counter_option.get_or_try_insert_with(|| {
             GenericHardwareEventCounter::new(
                 Hardware::INSTRUCTIONS,
                 Target::Pid(main.process.pid),
@@ -317,9 +407,24 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
             )
         })?;
 
-        let instruction_count = counter.read()?;
-        counter.reset()?;
-        drop(counter_option);
+        let instruction_count = instructions_counter.read()?;
+        instructions_counter.reset()?;
+        drop(instructions_counter_option);
+
+        let mut cycles_counter_option = self.main_cycles_counter.lock();
+
+        let cycles_counter = cycles_counter_option.get_or_try_insert_with(|| {
+            GenericHardwareEventCounter::new(
+                Hardware::CPU_CYCLES,
+                Target::Pid(main.process.pid),
+                true,
+                None,
+            )
+        })?;
+
+        let cycle_count = cycles_counter.read()?;
+        cycles_counter.reset()?;
+        drop(cycles_counter_option);
 
         *self.main_start_time.lock() = Some(Instant::now());
 
@@ -327,6 +432,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
             let mut map = self.segment_info_map.lock();
             let segment_info = map.get_mut(&segment.nr).unwrap();
             segment_info.main_instructions = instruction_count;
+            segment_info.main_cycles = cycle_count;
             segment_info.main_end_time = Some(Instant::now());
         }
 
@@ -339,6 +445,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
             SegmentInfo {
                 segment: main.segment.as_ref().unwrap().clone(),
                 main_instructions: 0,
+                main_cycles: 0,
                 main_start_time: self.main_start_time.lock().take().unwrap(),
                 checker_instruction_counter: None,
                 checker_instructions: 0,
@@ -346,6 +453,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
                 checker_cycles: 0,
                 main_end_time: None,
                 checker_done: false,
+                checker_on_emerg: false,
             },
         );
 
@@ -403,6 +511,7 @@ impl ModuleLifetimeHook for DynamicCpuFreqScaler<'_> {
         *self.cpu_info_map.lock() = self
             .checker_cpu_set
             .iter()
+            .chain(self.checker_emerg_cpu_set.iter())
             .map(|x| CpuInfo::get(*x).map(|v| (*x, v)))
             .try_collect()?;
 
@@ -437,6 +546,34 @@ impl ModuleLifetimeHook for DynamicCpuFreqScaler<'_> {
     }
 }
 
+impl SignalHandler for DynamicCpuFreqScaler<'_> {
+    fn handle_signal<'s, 'disp, 'scope, 'env>(
+        &'s self,
+        _signal: Signal,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+    ) -> Result<SignalHandlerExitAction>
+    where
+        'disp: 'scope,
+    {
+        if let InferiorRefMut::Checker(checker) = context.child {
+            if checker.process.get_sigval()? == Some(Self::SIGVAL_MIGRATE_CHECKER) {
+                debug!("{checker} Migrating to emergency CPU set");
+
+                context.check_coord.migrate_checker(
+                    self.checker_emerg_cpu_set.into(),
+                    checker,
+                    context.scope,
+                )?;
+
+                return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                    single_step: false,
+                });
+            }
+        }
+        Ok(SignalHandlerExitAction::NextHandler)
+    }
+}
+
 impl Module for DynamicCpuFreqScaler<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut crate::dispatcher::Subscribers<'d>)
     where
@@ -444,5 +581,6 @@ impl Module for DynamicCpuFreqScaler<'_> {
     {
         subs.install_segment_event_handler(self);
         subs.install_module_lifetime_hook(self);
+        subs.install_signal_handler(self);
     }
 }

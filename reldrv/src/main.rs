@@ -42,6 +42,10 @@ struct CliArgs {
     #[arg(short, long, use_value_delimiter = true)]
     checker_cpu_set: Vec<usize>,
 
+    /// Emergency CPU set used by checkers if checkers cannot keep up
+    #[arg(long, use_value_delimiter = true)]
+    checker_emerg_cpu_set: Vec<usize>,
+
     /// Shell CPU set
     #[arg(short, long, use_value_delimiter = true)]
     shell_cpu_set: Vec<usize>,
@@ -64,6 +68,10 @@ struct CliArgs {
     /// CPU frequency scaler to use.
     #[arg(long, default_value = "null")]
     cpu_freq_scaler: CpuFreqScalerTypeCli,
+
+    /// Disallow frequency change (while allowing checkers to be migrated to emergency CPU set, if configured) when dynamic CPU frequency scaler is used.
+    #[arg(long)]
+    no_freq_change: bool,
 
     /// When `cpu_freq_scaler` is set to "fixed", the CPU freqeuncy governor to use. Possible values: userspace:<freq_in_khz>, ondemand, ondemand:<max_freq_in_khz>. Requires `--checker-cpu-set` set.
     #[arg(long)]
@@ -304,12 +312,14 @@ fn main() {
             memory_overhead_watermark: cli.max_memory_overhead,
             main_cpu_set: cli.main_cpu_set,
             checker_cpu_set: cli.checker_cpu_set,
+            checker_emerg_cpu_set: cli.checker_emerg_cpu_set,
             shell_cpu_set: cli.shell_cpu_set,
             cpu_freq_scaler_type: match cli.cpu_freq_scaler {
                 CpuFreqScalerTypeCli::Null => CpuFreqScalerType::Null,
                 CpuFreqScalerTypeCli::Fixed => CpuFreqScalerType::Fixed(cli.checker_cpu_freq_governor.expect("You must set `--checker-cpu-freq-governor` when you use fixed CPU frequency scaler")),
                 CpuFreqScalerTypeCli::Dynamic => CpuFreqScalerType::Dynamic,
             },
+            dynamic_cpu_freq_scaler_no_freq_change: cli.no_freq_change,
             checkpoint_size_watermark: cli.checkpoint_size_watermark,
             cache_masks: cli.main_cache_mask.and_then(|main_cache_mask| {
                 cli.checker_cache_mask.and_then(|checker_cache_mask| {

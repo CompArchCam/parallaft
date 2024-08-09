@@ -181,12 +181,14 @@ pub struct RelShellOptions {
     // affinity setter plugin options
     pub main_cpu_set: Vec<usize>,
     pub checker_cpu_set: Vec<usize>,
+    pub checker_emerg_cpu_set: Vec<usize>,
     pub shell_cpu_set: Vec<usize>,
     #[cfg(feature = "intel_cat")]
     pub cache_masks: Option<(u32, u32, u32)>,
 
     // cpufreq setter plugin options
     pub cpu_freq_scaler_type: CpuFreqScalerType,
+    pub dynamic_cpu_freq_scaler_no_freq_change: bool,
 
     // checkpoint size limiter plugin options
     pub checkpoint_size_watermark: usize,
@@ -399,7 +401,11 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
             ));
         }
         CpuFreqScalerType::Dynamic => {
-            disp.register_module(DynamicCpuFreqScaler::new(&options.checker_cpu_set));
+            disp.register_module(DynamicCpuFreqScaler::new(
+                &options.checker_cpu_set,
+                &options.checker_emerg_cpu_set,
+                options.dynamic_cpu_freq_scaler_no_freq_change,
+            ));
         }
     }
 
@@ -439,7 +445,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     disp.register_module(CheckpointSyncThrottler::new());
 
     if options.checker_cpu_set.len() > 0 {
-        disp.register_module(NrCheckersBasedThrottler::new(options.checker_cpu_set.len()));
+        disp.register_module(NrCheckersBasedThrottler::new(&options.checker_cpu_set));
     }
 
     // Dirty page trackers
