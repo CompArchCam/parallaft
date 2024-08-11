@@ -15,6 +15,7 @@ pub mod statistics;
 pub mod syscall_handlers;
 pub mod throttlers;
 pub mod types;
+pub mod utils;
 
 #[cfg(test)]
 mod test_utils;

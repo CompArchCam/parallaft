@@ -1,12 +1,17 @@
+use std::ffi::c_int;
+
 use super::{registers::RegisterAccess, Process, PAGEMASK};
+
 use nix::{
     errno::Errno,
     sys::{
+        mman::{MapFlags, ProtFlags},
         ptrace,
         uio::{process_vm_readv, process_vm_writev, RemoteIoVec},
     },
 };
 pub use reverie_syscalls::{Addr, MemoryAccess};
+use syscalls::{syscall_args, Sysno};
 
 #[cfg(target_arch = "x86_64")]
 pub type RawInstruction = u128;
@@ -199,6 +204,42 @@ impl Process {
     ) -> crate::error::Result<()> {
         self.write_registers(self.read_registers()?.with_ip(ctx.old_ip))?;
         self.instr_restore(ctx.replaced_insn)?;
+
+        Ok(())
+    }
+
+    pub fn mmap(
+        &self,
+        addr: usize,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> crate::error::Result<usize> {
+        let result = self.syscall_direct(
+            Sysno::mmap,
+            syscall_args!(
+                addr,
+                len,
+                prot.bits() as _,
+                flags.bits() as _,
+                -1 as c_int as _,
+                0
+            ),
+            true,
+            true,
+            false,
+        )?;
+
+        let addr = Errno::result(result).map(|r| r as usize)?;
+
+        Ok(addr)
+    }
+
+    pub fn munmap(&self, addr: usize, len: usize) -> crate::error::Result<()> {
+        let result =
+            self.syscall_direct(Sysno::munmap, syscall_args!(addr, len), true, true, false)?;
+
+        Errno::result(result)?;
 
         Ok(())
     }

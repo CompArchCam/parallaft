@@ -451,6 +451,42 @@ impl Registers {
     pub fn with_instruction_skipped_unchecked(self, instruction: Instruction) -> Registers {
         self.with_offsetted_ip(instruction.length() as _)
     }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn with_sp(mut self, sp: usize) -> Registers {
+        self.sp = sp as _;
+        self
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_sp(mut self, sp: usize) -> Registers {
+        self.rsp = sp as _;
+        self
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn with_arg0(mut self, arg: usize) -> Registers {
+        self.regs[0] = arg as _;
+        self
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn with_arg1(mut self, arg: usize) -> Registers {
+        self.regs[1] = arg as _;
+        self
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_arg0(mut self, arg: usize) -> Registers {
+        self.rdi = arg as _;
+        self
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_arg1(mut self, arg: usize) -> Registers {
+        self.rsi = arg as _;
+        self
+    }
 }
 
 pub trait RegisterAccess {
