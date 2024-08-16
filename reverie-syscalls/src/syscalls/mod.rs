@@ -2888,8 +2888,11 @@ impl From<Creat> for Openat {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Mkdirat {
         dirfd: i32,
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         mode: Mode,
     }
@@ -3029,8 +3032,11 @@ impl From<Lstat> for Fstatat {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Unlinkat {
         dirfd: i32,
+        #[path_ptr_may_read]
         path: Option<PathPtr>,
         flags: AtFlags,
     }
