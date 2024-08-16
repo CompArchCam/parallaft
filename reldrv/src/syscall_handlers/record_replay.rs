@@ -4,7 +4,7 @@ use log::error;
 use nix::sys::uio::RemoteIoVec;
 use reverie_syscalls::{
     may_rw::{SyscallMayRead, SyscallMayWrite},
-    Syscall,
+    Syscall, SyscallInfo,
 };
 
 use crate::{
@@ -84,9 +84,10 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
             }
             _ => {
                 // otherwise, take a full checkpoint right before the syscall and another right after the syscall
-                return Err(Error::NotSupported(
-                    "Handling syscall with unknown memory effects is not yet supported".to_string(),
-                ));
+                return Err(Error::NotSupported(format!(
+                    "Handling syscall {} with unknown memory effects is not yet supported",
+                    syscall.number()
+                )));
                 // Ok(
                 //     StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                 //         SavedIncompleteSyscall {
