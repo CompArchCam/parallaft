@@ -1549,8 +1549,11 @@ typed_syscall! {
 }
 
 typed_syscall! {
+    #[may_read_specified_only]
+    #[may_write_specified_only]
     pub struct Getrusage {
         who: i32,
+        #[object_may_written]
         usage: Option<AddrMut<libc::rusage>>,
     }
 }
