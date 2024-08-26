@@ -5,7 +5,6 @@ use parking_lot::Mutex;
 
 use crate::{
     error::Result,
-    process::Process,
     types::{
         execution_point::ExecutionPoint, perf_counter::symbolic_events::BranchType,
         segment::Segment,
@@ -50,8 +49,8 @@ impl ExecutionPoint for BranchCounterBasedExecutionPoint {
         segment_info.upcoming_exec_points.push_back(self.clone());
 
         if segment_info.active_exec_point.is_none() {
-            if let Some(pid) = segment.checker_status.lock().pid() {
-                Process::new(pid).sigqueue(
+            if let Some(process) = segment.checker_status.lock().process() {
+                process.sigqueue(
                     PerfCounterBasedExecutionPointProvider::SIGVAL_CHECKER_PREPARE_EXEC_POINT,
                 )?;
             }

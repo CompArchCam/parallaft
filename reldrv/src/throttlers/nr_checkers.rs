@@ -7,6 +7,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::{migration::MigrationHandler, segment::SegmentEventHandler, HandlerContext},
+    process::state::{Running, Stopped},
     types::{
         checker::CheckFailReason,
         process_id::{Checker, Main},
@@ -31,13 +32,13 @@ impl<'a> NrCheckersBasedThrottler<'a> {
 }
 
 impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
-    fn handle_segment_created(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         let mut live_checkers = self.live_checkers.lock();
         live_checkers.insert(main.segment.as_ref().unwrap().nr);
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker) -> crate::error::Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> crate::error::Result<()> {
         let mut live_checkers = self.live_checkers.lock();
 
         let mut printed = false;
@@ -65,7 +66,7 @@ impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
 
     fn handle_segment_checked(
         &self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,
     ) -> Result<()> {
         self.live_checkers.lock().remove(&checker.segment.nr);
@@ -81,7 +82,7 @@ impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
 }
 
 impl MigrationHandler for NrCheckersBasedThrottler<'_> {
-    fn handle_checker_migration(&self, _ctx: HandlerContext) -> Result<()> {
+    fn handle_checker_migration(&self, _ctx: HandlerContext<Stopped>) -> Result<()> {
         self.cvar.notify_all();
         Ok(())
     }

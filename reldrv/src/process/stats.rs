@@ -1,6 +1,6 @@
 use procfs::process::Stat;
 
-use super::{Process, PAGESIZE};
+use super::{state::ProcessState, Process, PAGESIZE};
 use crate::error::Result;
 
 #[derive(Debug, Clone, Copy)]
@@ -12,7 +12,7 @@ pub struct MemoryStats {
     pub rss_pages: usize,
 }
 
-impl Process {
+impl<S: ProcessState> Process<S> {
     pub fn stats(&self) -> Result<Stat> {
         let ret = self.procfs()?.stat()?;
         Ok(ret)

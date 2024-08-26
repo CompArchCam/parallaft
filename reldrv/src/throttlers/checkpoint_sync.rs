@@ -11,6 +11,7 @@ use crate::{
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    process::state::{Running, Stopped},
     types::{chains::SegmentChains, custom_sysno::CustomSysno, process_id::Main},
 };
 
@@ -35,7 +36,7 @@ impl CheckpointSyncThrottler {
 impl Throttler for CheckpointSyncThrottler {
     fn should_throttle(
         &self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _segments: &SegmentChains,
         _check_coord: &CheckCoordinator,
     ) -> bool {
@@ -44,7 +45,7 @@ impl Throttler for CheckpointSyncThrottler {
 
     fn should_unthrottle(
         &self,
-        _main: &mut Main,
+        _main: &mut Main<Running>,
         segments: &SegmentChains,
         _check_coord: &CheckCoordinator,
     ) -> bool {
@@ -63,7 +64,7 @@ impl CustomSyscallHandler for CheckpointSyncThrottler {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> crate::error::Result<SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) != Some(CustomSysno::CheckpointSync) {
             return Ok(SyscallHandlerExitAction::NextHandler);

@@ -8,7 +8,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::segment::SegmentEventHandler,
-    process::detach::ProcessDetachExt,
+    process::state::Stopped,
     types::{checker::CheckFailReason, process_id::Checker},
 };
 
@@ -43,12 +43,14 @@ impl CoreDumper {
 impl SegmentEventHandler for CoreDumper {
     fn handle_segment_checked(
         &self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
     ) -> Result<()> {
         if check_fail_reason.is_some() {
             info!("Creating core dump");
-            let p = checker.process.fork(true, true)?.detach()?;
+            let child = checker.try_map_process_inplace(|p| p.fork(true, true))?;
+
+            let p = child.detach()?;
             dump_process(
                 &self.gcore_bin,
                 p.pid,
@@ -68,13 +70,13 @@ impl SegmentEventHandler for CoreDumper {
                 let p = ref_end.process.lock();
                 dump_process(
                     &self.gcore_bin,
-                    p.pid,
+                    p.as_ref().unwrap().pid,
                     &path!(self.output_dir / format!("ckpt_end_{}.core", checker.segment.nr)),
                 )?;
                 drop(p);
             }
 
-            let exe = checker.process.procfs()?.exe()?;
+            let exe = checker.process().procfs()?.exe()?;
             match symlink(&exe, &path!(self.output_dir / "exe")) {
                 Ok(_) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),

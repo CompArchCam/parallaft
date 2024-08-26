@@ -14,7 +14,10 @@ use crate::{
         syscall::{CustomSyscallHandler, StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::Process,
+    process::{
+        state::{ProcessState, Stopped},
+        Process,
+    },
     signal_handlers::begin_protection::main_begin_protection_req,
     syscall_handlers::is_execve_ok,
     types::{
@@ -88,7 +91,7 @@ impl<'a> FixedIntervalSlicer<'a> {
         )
     }
 
-    fn start_if_auto(&self, process: &Process) -> Result<()> {
+    fn start_if_auto<S: ProcessState>(&self, process: &Process<S>) -> Result<()> {
         if self.auto_start {
             self.start(process)?;
         }
@@ -96,7 +99,7 @@ impl<'a> FixedIntervalSlicer<'a> {
         Ok(())
     }
 
-    fn start(&self, process: &Process) -> Result<()> {
+    fn start<S: ProcessState>(&self, process: &Process<S>) -> Result<()> {
         let mut state = self.state.lock();
         if state.is_some() {
             debug!("Automatic slicing is already started, ignoring start request");
@@ -114,7 +117,7 @@ impl<'a> FixedIntervalSlicer<'a> {
                 self.interval, self.reference
             );
 
-            main_begin_protection_req(process.pid)?;
+            main_begin_protection_req(process)?;
 
             *state = Some(State::Normal(
                 self.get_perf_counter_interrupt(self.interval, process.pid)?,
@@ -130,7 +133,7 @@ impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
@@ -146,7 +149,7 @@ impl CustomSyscallHandler for FixedIntervalSlicer<'_> {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match CustomSysno::from_repr(sysno) {
             Some(CustomSysno::SlicingStart) => {
@@ -185,7 +188,7 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -199,7 +202,7 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
 
             let next_state;
 
-            let sig_info = main.process.get_siginfo()?;
+            let sig_info = main.process().get_siginfo()?;
 
             match state.take() {
                 Some(State::Skipping(mut perf_counter)) => {
@@ -217,7 +220,7 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
                     perf_counter.disable()?;
 
                     next_state = State::Normal(
-                        self.get_perf_counter_interrupt(self.interval, main.process.pid)?,
+                        self.get_perf_counter_interrupt(self.interval, main.process().pid)?,
                     );
                 }
                 Some(State::Normal(mut perf_counter)) => {
@@ -257,7 +260,7 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
 impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -265,7 +268,7 @@ impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
         'disp: 'scope,
     {
         if self.is_test {
-            self.start_if_auto(&main.process)?;
+            self.start_if_auto(&main.process())?;
         }
 
         Ok(())

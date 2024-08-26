@@ -2,7 +2,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::segment::SegmentEventHandler,
-    process::{dirty_pages::PageFlag, Process},
+    process::{dirty_pages::PageFlag, state::Stopped},
     types::process_id::{Checker, InferiorId, Main},
 };
 
@@ -34,11 +34,15 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 .unwrap()
                 .process
                 .lock()
+                .as_ref()
+                .unwrap()
                 .get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?,
-            InferiorId::Checker(segment) => {
-                let pid = segment.checker_status.lock().pid().unwrap();
-                Process::new(pid).get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?
-            }
+            InferiorId::Checker(segment) => segment
+                .checker_status
+                .lock()
+                .process()
+                .unwrap()
+                .get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?,
         };
 
         Ok(DirtyPageAddressesWithFlags {
@@ -51,17 +55,17 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
 }
 
 impl SegmentEventHandler for SoftDirtyPageTracker {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
         if !self.dont_clear_soft_dirty {
-            main.process.clear_dirty_page_bits()?;
+            main.process_mut().clear_dirty_page_bits()?;
         }
 
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         if !self.dont_clear_soft_dirty {
-            checker.process.clear_dirty_page_bits()?;
+            checker.process_mut().clear_dirty_page_bits()?;
         }
 
         Ok(())

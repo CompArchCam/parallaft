@@ -10,7 +10,7 @@ use crate::{
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         HandlerContext,
     },
-    process::Process,
+    process::{state::Stopped, Process},
     types::process_id::{Checker, Main},
 };
 
@@ -57,7 +57,7 @@ impl<'a> AffinitySetter<'a> {
 impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -66,7 +66,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     {
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
-        main.process.set_cpu_affinity(self.main_cpu_set)?;
+        main.process_mut().set_cpu_affinity(self.main_cpu_set)?;
 
         #[cfg(feature = "intel_cat")]
         if !self.main_cpu_set.is_empty()
@@ -112,14 +112,16 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
-        checker.process.set_cpu_affinity(self.checker_cpu_set)?;
+        checker
+            .process_mut()
+            .set_cpu_affinity(self.checker_cpu_set)?;
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         Ok(())
@@ -127,12 +129,18 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
 }
 
 impl MigrationHandler for AffinitySetter<'_> {
-    fn handle_checker_migration(&self, context: HandlerContext) -> Result<()> {
-        let checker_status = context.child.unwrap_checker().segment.checker_status.lock();
+    fn handle_checker_migration(&self, context: HandlerContext<Stopped>) -> Result<()> {
+        let checker = context.child.unwrap_checker_mut();
+
+        let checker_status = checker.segment.checker_status.lock();
         let new_cpu_set = checker_status.cpu_set().unwrap();
 
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
-        context.process().set_cpu_affinity(new_cpu_set)?;
+        checker
+            .process
+            .as_mut()
+            .unwrap()
+            .set_cpu_affinity(new_cpu_set)?;
 
         Ok(())
     }

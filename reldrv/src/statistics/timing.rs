@@ -16,6 +16,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    process::state::Stopped,
     types::{
         checker::CheckFailReason,
         exit_reason::ExitReason,
@@ -189,7 +190,7 @@ impl StandardSyscallHandler for Tracer {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if !context.child.is_main() {
             return Ok(SyscallHandlerExitAction::NextHandler);
@@ -218,7 +219,7 @@ impl StandardSyscallHandler for Tracer {
 impl ProcessLifetimeHook for Tracer {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         exit_reason: &ExitReason,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
@@ -234,11 +235,11 @@ impl ProcessLifetimeHook for Tracer {
 impl SegmentEventHandler for Tracer {
     fn handle_segment_checked(
         &self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,
     ) -> Result<()> {
         let ticks_per_second = procfs::ticks_per_second();
-        let stats = checker.process.stats()?;
+        let stats = checker.process().stats()?;
 
         self.add(
             Event::CheckerUser,

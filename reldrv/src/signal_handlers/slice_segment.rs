@@ -1,4 +1,4 @@
-use nix::{sys::signal::Signal, unistd::Pid};
+use nix::sys::signal::Signal;
 
 use crate::{
     dispatcher::{Module, Subscribers},
@@ -7,7 +7,10 @@ use crate::{
         signal::{SignalHandler, SignalHandlerExitAction},
         HandlerContext,
     },
-    process::Process,
+    process::{
+        state::{ProcessState, Stopped},
+        Process,
+    },
     types::process_id::InferiorRefMut,
 };
 
@@ -21,13 +24,13 @@ impl SignalHandler for SliceSegmentHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
         if let InferiorRefMut::Main(main) = context.child {
-            if main.process.get_sigval()? == Some(Self::SIGVAL_DO_SLICE_SEGMENT) {
+            if main.process().get_sigval()? == Some(Self::SIGVAL_DO_SLICE_SEGMENT) {
                 let ret = context
                     .check_coord
                     .push_curr_exec_point_to_event_log(main, true);
@@ -55,6 +58,6 @@ impl Module for SliceSegmentHandler {
     }
 }
 
-pub fn main_enqueue_slice_segment_req(main_pid: Pid) -> Result<()> {
-    Process::new(main_pid).sigqueue(SliceSegmentHandler::SIGVAL_DO_SLICE_SEGMENT)
+pub fn main_enqueue_slice_segment_req<S: ProcessState>(main: &Process<S>) -> Result<()> {
+    main.sigqueue(SliceSegmentHandler::SIGVAL_DO_SLICE_SEGMENT)
 }

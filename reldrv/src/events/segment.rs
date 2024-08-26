@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     error::Result,
+    process::state::{Running, Stopped},
     types::{
         checker::CheckFailReason,
         process_id::{Checker, Main},
@@ -43,14 +44,14 @@ pub trait SegmentEventHandler {
     /// `main.segment` contains the last segment, if there is one.
     /// # States
     /// main: ptrace-stopped
-    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
         Ok(())
     }
 
     /// Called when a segment is created, after `handle_checkpoint_created_pre`.
     /// # States
     /// main: running
-    fn handle_segment_created(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         Ok(())
     }
 
@@ -58,7 +59,7 @@ pub trait SegmentEventHandler {
     /// execution of the main inferior will no longer be error-checked.
     /// # States
     /// main: running
-    fn handle_segment_chain_closed(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_chain_closed(&self, main: &mut Main<Running>) -> Result<()> {
         Ok(())
     }
 
@@ -66,14 +67,14 @@ pub trait SegmentEventHandler {
     /// that the segment recorded is filled.
     /// # States
     /// main: running
-    fn handle_segment_filled(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_filled(&self, main: &mut Main<Running>) -> Result<()> {
         Ok(())
     }
 
     /// Called when the current segment is ready to be executed by the checker.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         Ok(())
     }
 
@@ -81,7 +82,7 @@ pub trait SegmentEventHandler {
     /// but is not yet checked.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_completed(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         Ok(())
     }
 
@@ -91,7 +92,7 @@ pub trait SegmentEventHandler {
     /// checker: ptrace-stopped
     fn handle_segment_checked(
         &self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
     ) -> Result<()> {
         Ok(())

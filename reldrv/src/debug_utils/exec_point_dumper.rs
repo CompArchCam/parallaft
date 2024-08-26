@@ -9,6 +9,7 @@ use crate::{
         HandlerContext,
     },
     exec_point_providers::ExecutionPointProvider,
+    process::state::Stopped,
     types::custom_sysno::CustomSysno,
 };
 
@@ -21,7 +22,7 @@ impl CustomSyscallHandler for ExecutionPointDumper {
         &self,
         sysno: usize,
         _args: SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) == Some(CustomSysno::DumpExecPoint) {
             if context.child.segment().is_some() {

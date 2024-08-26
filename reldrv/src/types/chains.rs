@@ -3,9 +3,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use log::debug;
-use nix::unistd::Pid;
 
 use crate::error::Result;
+use crate::process::state::Unowned;
+use crate::process::Process;
 use crate::types::checker::CheckerStatus;
 
 use super::checkpoint::Checkpoint;
@@ -78,7 +79,7 @@ impl SegmentChains {
         &mut self,
         checkpoint: Checkpoint,
         is_finishing: bool,
-        main_pid: Pid,
+        main: Process<Unowned>,
         enable_async_events: bool,
     ) -> AddCheckpointResult {
         let checkpoint = Arc::new(checkpoint);
@@ -98,7 +99,7 @@ impl SegmentChains {
         }
 
         if !is_finishing {
-            let segment = Segment::new(checkpoint, self.next_id, main_pid, enable_async_events);
+            let segment = Segment::new(checkpoint, self.next_id, main, enable_async_events);
             self.next_id += 1;
             self.in_chain = true;
 

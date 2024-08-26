@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn compile_shellcode(out_dir: &str, name: &'static str) {
+    let source_filename = format!("remote/{}.c", name);
     let intermediate_filename = format!("{}/{}.elf", out_dir, name);
     let output_filename = format!("{}/{}.bin", out_dir, name);
 
@@ -15,12 +16,11 @@ fn compile_shellcode(out_dir: &str, name: &'static str) {
         .arg("-nostdlib")
         .arg("-fomit-frame-pointer")
         .arg("-fpie")
-        // .arg("-r")
         .arg("-z")
         .arg("noexecstack")
         .arg("-T")
         .arg("remote/pack.lds.S")
-        .arg("remote/hasher.c")
+        .arg(&source_filename)
         .arg("remote/arch/aarch64/entry.s")
         .arg("remote/arch/aarch64/syscall.s")
         .status()

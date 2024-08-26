@@ -2,18 +2,15 @@ use log::error;
 use reverie_syscalls::Syscall;
 
 use crate::{
-    dispatcher::{Module, Subscribers},
-    error::{Error, Result, UnexpectedEventReason},
-    events::{
+    dispatcher::{Module, Subscribers}, error::{Error, Result, UnexpectedEventReason}, events::{
         syscall::{
             StandardSyscallEntryCheckerHandlerExitAction,
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
         },
         HandlerContext,
-    },
-    types::segment_record::saved_syscall::{
+    }, process::state::Stopped, types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
-    },
+    }
 };
 
 pub struct ReplicatedSyscallHandler {}
@@ -34,7 +31,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext,
+        _context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let action = || {
             StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
@@ -55,7 +52,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let action = || {
             let saved_syscall = context

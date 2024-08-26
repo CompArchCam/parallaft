@@ -12,6 +12,7 @@ use clap::{Parser, ValueEnum};
 use clap_num::maybe_hex;
 use git_version::git_version;
 
+use reldrv::comparators::memory::MemoryComparatorType;
 use reldrv::helpers::cpufreq::{CpuFreqGovernor, CpuFreqScalerType};
 use reldrv::slicers::{ReferenceType, SlicerType};
 use reldrv::types::exit_reason::ExitReason;
@@ -81,9 +82,13 @@ struct CliArgs {
     #[arg(long)]
     poll_waitpid: bool,
 
-    /// Don't compare dirty memory between the checker and the reference.
+    /// Don't compare state between the checker and the reference.
     #[arg(long)]
-    no_mem_check: bool,
+    no_state_cmp: bool,
+
+    /// Memory comparator to use.
+    #[arg(long, default_value = "hasher")]
+    memory_comparator: MemoryComparatorType,
 
     /// Don't run the checker process. Just fork, and kill it until the next checkpoint.
     #[arg(long)]
@@ -301,7 +306,7 @@ fn main() {
                 }
             },
             check_coord_flags: CheckCoordinatorOptions {
-                no_state_cmp: cli.no_mem_check,
+                no_state_cmp: cli.no_state_cmp,
                 no_checker_exec: cli.dont_run_checker,
                 no_fork: cli.dont_fork,
                 ignore_miscmp: cli.ignore_check_errors,
@@ -354,6 +359,8 @@ fn main() {
             core_dump: cli.core_dump,
             core_dump_dir: cli.core_dump_dir,
             watchpoint_addresses: cli.watchpoint_address,
+
+            memory_comparator: cli.memory_comparator,
 
             is_test: false,
             extra_modules: Vec::new(),

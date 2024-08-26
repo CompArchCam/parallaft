@@ -4,7 +4,10 @@ use crate::{
     check_coord::CheckCoordinator,
     dirty_page_trackers::DirtyPageAddressTracker,
     dispatcher::{Module, Subscribers},
-    process::PAGESIZE,
+    process::{
+        state::{Running, Stopped},
+        PAGESIZE,
+    },
     types::{chains::SegmentChains, process_id::Main},
 };
 
@@ -33,7 +36,7 @@ impl MemoryBasedThrottler {
 impl Throttler for MemoryBasedThrottler {
     fn should_throttle(
         &self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         segments: &SegmentChains,
         check_coord: &CheckCoordinator,
     ) -> bool {
@@ -56,7 +59,7 @@ impl Throttler for MemoryBasedThrottler {
 
     fn should_unthrottle(
         &self,
-        _main: &mut Main,
+        _main: &mut Main<Running>,
         segments: &SegmentChains,
         _check_coord: &CheckCoordinator,
     ) -> bool {

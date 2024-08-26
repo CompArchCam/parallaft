@@ -10,7 +10,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::registers::RegisterAccess,
+    process::{registers::RegisterAccess, state::Stopped},
     types::process_id::Main,
 };
 
@@ -32,9 +32,9 @@ impl StandardSyscallHandler for RseqHandler {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        mut context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
-        let process = context.process();
+        let process = context.process_mut();
 
         Ok(match syscall {
             Syscall::Rseq(_) => {
@@ -49,7 +49,7 @@ impl StandardSyscallHandler for RseqHandler {
         &self,
         _ret_val: isize,
         syscall: &Syscall,
-        _context: HandlerContext,
+        _context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(match syscall {
             Syscall::Rseq(_) => SyscallHandlerExitAction::ContinueInferior,
@@ -61,28 +61,31 @@ impl StandardSyscallHandler for RseqHandler {
 impl ProcessLifetimeHook for RseqHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
-        let rseq_config = ptrace::get_rseq_configuration(main.process.pid).unwrap();
+        let rseq_config = ptrace::get_rseq_configuration(main.process().pid).unwrap();
 
         if rseq_config.rseq_abi_pointer != 0 {
-            let ret = main.process.syscall_direct(
-                syscalls::Sysno::rseq,
-                syscalls::syscall_args!(
-                    rseq_config.rseq_abi_pointer as _,
-                    rseq_config.rseq_abi_size as _,
-                    1,
-                    rseq_config.signature as _
-                ),
-                true,
-                false,
-                true,
-            )?;
+            let ret = main.try_map_process_inplace(|p| {
+                p.syscall_direct(
+                    syscalls::Sysno::rseq,
+                    syscalls::syscall_args!(
+                        rseq_config.rseq_abi_pointer as _,
+                        rseq_config.rseq_abi_size as _,
+                        1,
+                        rseq_config.signature as _
+                    ),
+                    true,
+                    false,
+                    true,
+                )
+            })?;
+
             assert_eq!(ret, 0);
             info!("Rseq unregistered");
         }

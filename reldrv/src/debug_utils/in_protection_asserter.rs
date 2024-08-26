@@ -1,5 +1,6 @@
 use crate::{
-    dispatcher::Module, events::syscall::CustomSyscallHandler, types::custom_sysno::CustomSysno,
+    dispatcher::Module, events::syscall::CustomSyscallHandler, process::state::Stopped,
+    types::custom_sysno::CustomSysno,
 };
 
 pub struct InProtectionAsserter;
@@ -9,7 +10,7 @@ impl CustomSyscallHandler for InProtectionAsserter {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: crate::events::HandlerContext,
+        context: crate::events::HandlerContext<Stopped>,
     ) -> crate::error::Result<crate::events::syscall::SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) == Some(CustomSysno::AssertInProtection) {
             assert!(

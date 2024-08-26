@@ -1,6 +1,10 @@
 use std::ffi::c_int;
 
-use super::{registers::RegisterAccess, Process, PAGEMASK};
+use super::{
+    registers::RegisterAccess,
+    state::{Stopped, WithProcess},
+    Process, PAGEMASK,
+};
 
 use nix::{
     errno::Errno,
@@ -81,7 +85,7 @@ pub struct ReplacedInstructionWithOldIp {
     replaced_insn: ReplacedInstruction,
 }
 
-impl MemoryAccess for Process {
+impl MemoryAccess for Process<Stopped> {
     fn read_vectored(
         &self,
         read_from: &[std::io::IoSlice],
@@ -95,14 +99,8 @@ impl MemoryAccess for Process {
             })
             .collect();
 
-        process_vm_readv(self.pid, write_to, &remote_iov).map_err(|e| match e {
-            Errno::EFAULT => reverie_syscalls::Errno::EFAULT,
-            Errno::EINVAL => reverie_syscalls::Errno::EINVAL,
-            Errno::ENOMEM => reverie_syscalls::Errno::ENOMEM,
-            Errno::EPERM => reverie_syscalls::Errno::EPERM,
-            Errno::ESRCH => reverie_syscalls::Errno::ESRCH,
-            _ => reverie_syscalls::Errno::ENODATA,
-        })
+        process_vm_readv(self.pid, write_to, &remote_iov)
+            .map_err(|e| reverie_syscalls::Errno::new(e as _))
     }
 
     fn write_vectored(
@@ -118,18 +116,12 @@ impl MemoryAccess for Process {
             })
             .collect();
 
-        process_vm_writev(self.pid, read_from, &remote_iov).map_err(|e| match e {
-            Errno::EFAULT => reverie_syscalls::Errno::EFAULT,
-            Errno::EINVAL => reverie_syscalls::Errno::EINVAL,
-            Errno::ENOMEM => reverie_syscalls::Errno::ENOMEM,
-            Errno::EPERM => reverie_syscalls::Errno::EPERM,
-            Errno::ESRCH => reverie_syscalls::Errno::ESRCH,
-            _ => reverie_syscalls::Errno::ENODATA,
-        })
+        process_vm_writev(self.pid, read_from, &remote_iov)
+            .map_err(|e| reverie_syscalls::Errno::new(e as _))
     }
 }
 
-impl Process {
+impl Process<Stopped> {
     #[cfg(target_arch = "x86_64")]
     pub fn instr_at(&self, addr: usize, len: usize) -> Instruction {
         let val: usize = self.read_value(Addr::from_raw(addr).unwrap()).unwrap();
@@ -150,7 +142,7 @@ impl Process {
     }
 
     pub fn instr_inject(
-        &self,
+        &mut self,
         instr: Instruction,
         addr: usize,
     ) -> crate::error::Result<ReplacedInstruction> {
@@ -167,7 +159,7 @@ impl Process {
     }
 
     pub fn instr_inject_and_jump(
-        &self,
+        &mut self,
         instr: Instruction,
         keep_ip: bool,
     ) -> crate::error::Result<ReplacedInstructionWithOldIp> {
@@ -193,13 +185,13 @@ impl Process {
         })
     }
 
-    pub fn instr_restore(&self, ctx: ReplacedInstruction) -> crate::error::Result<()> {
+    pub fn instr_restore(&mut self, ctx: ReplacedInstruction) -> crate::error::Result<()> {
         unsafe { ptrace::write(self.pid, ctx.addr as *mut _, ctx.old_word as *mut _)? };
         Ok(())
     }
 
     pub fn instr_restore_and_jump_back(
-        &self,
+        &mut self,
         ctx: ReplacedInstructionWithOldIp,
     ) -> crate::error::Result<()> {
         self.write_registers(self.read_registers()?.with_ip(ctx.old_ip))?;
@@ -209,13 +201,13 @@ impl Process {
     }
 
     pub fn mmap(
-        &self,
+        self,
         addr: usize,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::error::Result<usize> {
-        let result = self.syscall_direct(
+    ) -> crate::error::Result<WithProcess<Stopped, Result<usize, Errno>>> {
+        let WithProcess(process, result) = self.syscall_direct(
             Sysno::mmap,
             syscall_args!(
                 addr,
@@ -230,18 +222,20 @@ impl Process {
             false,
         )?;
 
-        let addr = Errno::result(result).map(|r| r as usize)?;
+        let addr = Errno::result(result).map(|r| r as usize);
 
-        Ok(addr)
+        Ok(WithProcess(process, addr))
     }
 
-    pub fn munmap(&self, addr: usize, len: usize) -> crate::error::Result<()> {
-        let result =
+    pub fn munmap(
+        self,
+        addr: usize,
+        len: usize,
+    ) -> crate::error::Result<WithProcess<Stopped, Result<(), Errno>>> {
+        let WithProcess(process, result) =
             self.syscall_direct(Sysno::munmap, syscall_args!(addr, len), true, true, false)?;
 
-        Errno::result(result)?;
-
-        Ok(())
+        Ok(WithProcess(process, Errno::result(result).map(|_| ())))
     }
 }
 
@@ -256,20 +250,23 @@ mod tests {
         unistd::getpid,
     };
 
-    use crate::{error::Result, process::memory::instructions, test_utils::ptraced};
+    use crate::{
+        error::Result,
+        process::{memory::instructions, state::WithProcess},
+        test_utils::ptraced,
+    };
 
     use super::RegisterAccess;
 
     #[test]
     fn test_instr_at() -> Result<()> {
-        let process = ptraced(|| {
+        let mut process = ptraced(|| {
             getpid();
             0
         });
 
-        process.resume()?;
-
-        let status = process.waitpid()?;
+        let mut status;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert!(matches!(status, WaitStatus::PtraceSyscall(_)));
         assert!(matches!(
             ptrace::getsyscallinfo(process.pid)?.op,
@@ -285,37 +282,33 @@ mod tests {
             instructions::SYSCALL
         );
 
-        // program exit
-        ptrace::cont(process.pid, None).unwrap();
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        assert_eq!(
-            process.waitpid().unwrap(),
-            WaitStatus::Exited(process.pid, 0)
-        );
+        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
     }
 
     #[test]
     fn test_instr_inject_and_restore() -> Result<()> {
-        let process = ptraced(|| {
+        let mut process = ptraced(|| {
             raise(Signal::SIGSTOP).unwrap();
             0
         });
 
         // expect the SIGSTOP
-        ptrace::cont(process.pid, None)?;
-        let status = process.waitpid()?;
+        let mut status;
+
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
         assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGSTOP)));
 
         // inject a trap
         let mut regs = process.read_registers()?;
         let old_instr = process.instr_inject_and_jump(instructions::TRAP, false)?;
 
-        ptrace::cont(process.pid, None)?;
-
         // expect the trap
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+
         assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGTRAP)));
 
         // jump back
@@ -338,12 +331,9 @@ mod tests {
         assert_eq!(regs_now, regs);
 
         // program exit
-        ptrace::cont(process.pid, None).unwrap();
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        assert_eq!(
-            process.waitpid().unwrap(),
-            WaitStatus::Exited(process.pid, 0)
-        );
+        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
     }

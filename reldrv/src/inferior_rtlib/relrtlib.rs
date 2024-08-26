@@ -16,8 +16,12 @@ use crate::{
         HandlerContext,
     },
     inferior_rtlib::ScheduleCheckpointReady,
-    process::{dirty_pages::IgnoredPagesProvider, Process, PAGESIZE},
-    types::{checkpoint::CheckpointCaller, custom_sysno::CustomSysno, process_id::Main},
+    process::{
+        dirty_pages::IgnoredPagesProvider,
+        state::{Running, Stopped},
+        Process, PAGESIZE,
+    },
+    types::{custom_sysno::CustomSysno, process_id::Main},
 };
 
 use super::ScheduleCheckpoint;
@@ -39,7 +43,7 @@ impl RelRtLib {
         }
     }
 
-    pub fn get_counter(&self, process: &Process) -> Result<u64> {
+    pub fn get_counter(&self, process: &Process<Stopped>) -> Result<u64> {
         let ret = self
             .counter_addr
             .read()
@@ -49,7 +53,7 @@ impl RelRtLib {
         Ok(ret)
     }
 
-    pub fn set_counter(&self, process: &mut Process, val: u64) -> Result<()> {
+    pub fn set_counter(&self, process: &mut Process<Stopped>, val: u64) -> Result<()> {
         let addr = *self
             .counter_addr
             .read()
@@ -63,21 +67,20 @@ impl RelRtLib {
 }
 
 impl SegmentEventHandler for RelRtLib {
-    #[allow(unreachable_code)]
-    #[allow(unused_variables)]
-    fn handle_segment_filled(&self, main: &mut Main) -> Result<()> {
-        todo!();
-        let segment = main.segment.as_ref().unwrap();
-        let checkpoint = segment.checkpoint_end().unwrap();
-        let mut checker_process = Process::new(segment.checker_status.lock().pid().unwrap());
+    fn handle_segment_filled(&self, _main: &mut Main<Running>) -> Result<()> {
+        unimplemented!()
 
-        if checkpoint.caller == CheckpointCaller::Child {
-            let counter = *self.saved_counter_value.lock();
-            self.set_counter(&mut checker_process, (-(counter as i64) - 1) as u64)
-                .ok();
-        }
+        // let segment = main.segment.as_ref().unwrap();
+        // let checkpoint = segment.checkpoint_end().unwrap();
+        // let mut checker_process = Process::new(segment.checker_status.lock().pid().unwrap());
 
-        Ok(())
+        // if checkpoint.caller == CheckpointCaller::Child {
+        //     let counter = *self.saved_counter_value.lock();
+        //     self.set_counter(&mut checker_process, (-(counter as i64) - 1) as u64)
+        //         .ok();
+        // }
+
+        // Ok(())
     }
 }
 
@@ -86,7 +89,7 @@ impl CustomSyscallHandler for RelRtLib {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match CustomSysno::from_repr(sysno) {
             Some(CustomSysno::RelRtLibSetCounterAddr) => {
@@ -140,7 +143,7 @@ impl SignalHandler for RelRtLib {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -166,15 +169,19 @@ impl SignalHandler for RelRtLib {
 }
 
 impl ScheduleCheckpoint for RelRtLib {
-    fn schedule_checkpoint(&self, main: &mut Main, _check_coord: &CheckCoordinator) -> Result<()> {
+    fn schedule_checkpoint(
+        &self,
+        main: &mut Main<Stopped>,
+        _check_coord: &CheckCoordinator,
+    ) -> Result<()> {
         let addr = self.counter_addr.read();
 
         if addr.is_none() {
             return Err(Error::InvalidState);
         }
 
-        let c = self.get_counter(&main.process)?;
-        self.set_counter(&mut main.process, -1_i64 as u64)?;
+        let c = self.get_counter(main.process())?;
+        self.set_counter(main.process_mut(), -1_i64 as u64)?;
         *self.saved_counter_value.lock() = c;
 
         self.perf_counter.lock().as_mut().unwrap().disable()?;

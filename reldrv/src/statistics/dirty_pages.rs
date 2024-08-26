@@ -1,5 +1,6 @@
 use crate::dispatcher::Subscribers;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::process::state::Stopped;
 use crate::statistics_list;
 use crate::types::checker::CheckerStatus;
 use crate::types::process_id::Checker;
@@ -28,7 +29,7 @@ impl DirtyPageStatsCollector {
 impl ProcessLifetimeHook for DirtyPageStatsCollector {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where

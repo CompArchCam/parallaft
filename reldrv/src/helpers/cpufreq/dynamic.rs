@@ -25,7 +25,7 @@ use crate::{
         signal::{SignalHandler, SignalHandlerExitAction},
         HandlerContext,
     },
-    process::Process,
+    process::state::{Running, Stopped},
     types::{
         perf_counter::{
             symbolic_events::{expr::Target, GenericHardwareEventCounter},
@@ -208,7 +208,12 @@ impl DynamicCpuFreqScaler<'_> {
         } else {
             debug!("Segment {}: migrating to big core", segment_info.segment.nr);
 
-            Process::new(segment_info.segment.checker_status.lock().pid().unwrap())
+            segment_info
+                .segment
+                .checker_status
+                .lock()
+                .process()
+                .unwrap()
                 .sigqueue(Self::SIGVAL_MIGRATE_CHECKER)?;
 
             segment_info.checker_on_emerg = true;
@@ -395,13 +400,13 @@ impl DynamicCpuFreqScaler<'_> {
 }
 
 impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
         let mut instructions_counter_option = self.main_instruction_counter.lock();
 
         let instructions_counter = instructions_counter_option.get_or_try_insert_with(|| {
             GenericHardwareEventCounter::new(
                 Hardware::INSTRUCTIONS,
-                Target::Pid(main.process.pid),
+                Target::Pid(main.process().pid),
                 true,
                 None,
             )
@@ -416,7 +421,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         let cycles_counter = cycles_counter_option.get_or_try_insert_with(|| {
             GenericHardwareEventCounter::new(
                 Hardware::CPU_CYCLES,
-                Target::Pid(main.process.pid),
+                Target::Pid(main.process().pid),
                 true,
                 None,
             )
@@ -439,7 +444,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn handle_segment_created(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         self.segment_info_map.lock().insert(
             main.segment.as_ref().unwrap().nr,
             SegmentInfo {
@@ -460,20 +465,20 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         let mut segment_info_map = self.segment_info_map.lock();
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
 
         segment_info.checker_instruction_counter = Some(GenericHardwareEventCounter::new(
             Hardware::INSTRUCTIONS,
-            Target::Pid(checker.process.pid),
+            Target::Pid(checker.process().pid),
             true,
             None,
         )?);
 
         segment_info.checker_cycle_counter = Some(GenericHardwareEventCounter::new(
             Hardware::CPU_CYCLES,
-            Target::Pid(checker.process.pid),
+            Target::Pid(checker.process().pid),
             true,
             None,
         )?);
@@ -481,7 +486,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn handle_segment_completed(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         let mut segment_info_map = self.segment_info_map.lock();
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
 
@@ -550,13 +555,13 @@ impl SignalHandler for DynamicCpuFreqScaler<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
         if let InferiorRefMut::Checker(checker) = context.child {
-            if checker.process.get_sigval()? == Some(Self::SIGVAL_MIGRATE_CHECKER) {
+            if checker.process().get_sigval()? == Some(Self::SIGVAL_MIGRATE_CHECKER) {
                 debug!("{checker} Migrating to emergency CPU set");
 
                 context.check_coord.migrate_checker(

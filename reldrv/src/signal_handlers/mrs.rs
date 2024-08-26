@@ -17,6 +17,7 @@ use crate::{
         memory::instructions,
         registers::{Register, RegisterAccess},
         siginfo::SigInfoExt,
+        state::Stopped,
     },
     signal_handlers::handle_nondeterministic_instruction,
     types::segment_record::saved_trap_event::{MrsInstruction, SavedTrapEvent, SystemReg},
@@ -67,7 +68,7 @@ impl MrsHandler {
 }
 
 impl InstructionPatchingEventHandler for MrsHandler {
-    fn should_instruction_patched(&self, patch: &Patch, _ctx: HandlerContext) -> bool {
+    fn should_instruction_patched(&self, patch: &Patch, _ctx: HandlerContext<Stopped>) -> bool {
         if patch.pattern.owner != PatchOwner::Mrs {
             return false;
         }
@@ -76,7 +77,11 @@ impl InstructionPatchingEventHandler for MrsHandler {
         SystemReg::from_raw(sys_reg as _).is_some()
     }
 
-    fn handle_instruction_patched(&self, patch: &Patch, ctx: HandlerContext) -> Result<()> {
+    fn handle_instruction_patched(
+        &self,
+        patch: &Patch,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         if patch.pattern.owner != PatchOwner::Mrs {
             return Ok(());
         }
@@ -96,7 +101,11 @@ impl InstructionPatchingEventHandler for MrsHandler {
         Ok(())
     }
 
-    fn handle_instruction_patch_removed(&self, patch: &Patch, _ctx: HandlerContext) -> Result<()> {
+    fn handle_instruction_patch_removed(
+        &self,
+        patch: &Patch,
+        _ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         if patch.pattern.owner != PatchOwner::Mrs {
             return Ok(());
         }
@@ -112,7 +121,7 @@ impl SignalHandler for MrsHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

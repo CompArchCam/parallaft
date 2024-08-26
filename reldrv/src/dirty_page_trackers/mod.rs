@@ -7,7 +7,7 @@ pub mod uffd;
 
 use std::{fmt::Debug, ops::Range};
 
-use crate::{error::Result, process::Process, types::process_id::InferiorId};
+use crate::{error::Result, types::process_id::InferiorId};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DirtyPageAddressFlags {
@@ -46,12 +46,27 @@ pub trait DirtyPageAddressTracker {
     ) -> Result<DirtyPageAddressesWithFlags>;
 
     fn nr_dirty_pages(&self, inferior_id: InferiorId) -> Result<usize> {
-        let pid = match inferior_id {
-            InferiorId::Main(segment) => segment.unwrap().status.lock().pid().unwrap(),
-            InferiorId::Checker(segment) => segment.checker_status.lock().pid().unwrap(),
-        };
-
-        Ok(Process::new(pid).memory_stats()?.dirty_pages)
+        Ok(match inferior_id {
+            InferiorId::Main(segment) => {
+                segment
+                    .unwrap()
+                    .status
+                    .lock()
+                    .process()
+                    .unwrap()
+                    .memory_stats()?
+                    .dirty_pages
+            }
+            InferiorId::Checker(segment) => {
+                segment
+                    .checker_status
+                    .lock()
+                    .process()
+                    .unwrap()
+                    .memory_stats()?
+                    .dirty_pages
+            }
+        })
     }
 }
 

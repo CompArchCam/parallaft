@@ -3,6 +3,7 @@ use syscalls::SyscallArgs;
 
 use crate::{
     error::Result,
+    process::state::Stopped,
     types::segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
 };
 
@@ -48,7 +49,7 @@ pub trait StandardSyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         Ok(StandardSyscallEntryMainHandlerExitAction::NextHandler)
     }
@@ -57,7 +58,7 @@ pub trait StandardSyscallHandler {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -65,7 +66,7 @@ pub trait StandardSyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler)
     }
@@ -74,7 +75,7 @@ pub trait StandardSyscallHandler {
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -82,7 +83,7 @@ pub trait StandardSyscallHandler {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -91,7 +92,7 @@ pub trait StandardSyscallHandler {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -103,7 +104,7 @@ pub trait CustomSyscallHandler {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }
@@ -111,7 +112,7 @@ pub trait CustomSyscallHandler {
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(SyscallHandlerExitAction::NextHandler)
     }

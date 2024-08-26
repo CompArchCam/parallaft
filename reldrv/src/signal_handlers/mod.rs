@@ -4,6 +4,7 @@ pub mod slice_segment;
 use cfg_if::cfg_if;
 
 use crate::error::Result;
+use crate::process::state::Stopped;
 use crate::types::process_id::InferiorRefMut;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
 use crate::types::segment_record::WithIsLastEvent;
@@ -19,7 +20,7 @@ cfg_if! {
 }
 
 pub fn handle_nondeterministic_instruction<R>(
-    child: &InferiorRefMut,
+    child: &InferiorRefMut<Stopped>,
     run_instr: impl FnOnce() -> R,
     create_event: impl FnOnce(R) -> SavedTrapEvent,
     replay_event: impl FnOnce(SavedTrapEvent) -> Result<R>,

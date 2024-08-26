@@ -1,4 +1,3 @@
-use std::ops::Deref;
 
 use log::error;
 use nix::sys::uio::RemoteIoVec;
@@ -17,7 +16,7 @@ use crate::{
         },
         HandlerContext,
     },
-    process::registers::RegisterAccess,
+    process::{registers::RegisterAccess, state::Stopped},
     types::segment_record::{
         saved_memory::SavedMemory,
         saved_syscall::{
@@ -44,9 +43,9 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
-        let process = context.process().deref();
+        let process = context.process();
 
         let may_read = syscall.may_read(process).ok().map(|slices| {
             slices
@@ -104,13 +103,13 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
-        let checker = context.child.unwrap_checker();
+        let checker = context.child.unwrap_checker_mut();
 
         // Skip the syscall
         checker
-            .process
+            .process_mut()
             .modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
         if let Ok(saved_syscall) = checker.segment.record.get_syscall() {
@@ -131,7 +130,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                 }
                 SavedSyscallKind::WithMemoryEffects { mem_read, .. } => {
                     // compare memory read by the syscall
-                    if !mem_read.compare(checker.process.deref())? {
+                    if !mem_read.compare(checker.process())? {
                         return Err(Error::UnexpectedEvent(
                             UnexpectedEventReason::IncorrectMemory,
                         ));

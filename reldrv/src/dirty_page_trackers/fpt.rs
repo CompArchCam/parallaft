@@ -7,6 +7,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::segment::SegmentEventHandler,
+    process::state::Stopped,
     types::{
         process_id::{Checker, InferiorId, Main},
         segment::{Segment, SegmentId},
@@ -71,10 +72,10 @@ impl DirtyPageAddressTracker for FptDirtyPageTracker {
 }
 
 impl SegmentEventHandler for FptDirtyPageTracker {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
         let mut fd = self.fd_main.lock();
         let fd_mut = fd.get_or_insert_with(|| {
-            let mut fd_inner = FptFd::new(main.process.pid, FPT_BUFFER_SIZE, FPT_FLAGS, None)
+            let mut fd_inner = FptFd::new(main.process().pid, FPT_BUFFER_SIZE, FPT_FLAGS, None)
                 .expect("Failed to initialise FPT dirty page tracker");
             fd_inner.enable().unwrap();
             fd_inner
@@ -92,8 +93,8 @@ impl SegmentEventHandler for FptDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
-        let mut fd = FptFd::new(checker.process.pid, FPT_BUFFER_SIZE, FPT_FLAGS, None)
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+        let mut fd = FptFd::new(checker.process().pid, FPT_BUFFER_SIZE, FPT_FLAGS, None)
             .expect("FPT: failed to initialise FPT dirty page tracker");
 
         fd.enable()?;
@@ -104,7 +105,7 @@ impl SegmentEventHandler for FptDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_completed(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         let mut fd_map = self.fd_map.lock();
 
         let mut fd = fd_map

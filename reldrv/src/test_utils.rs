@@ -7,9 +7,9 @@ use nix::{
     unistd::{fork, ForkResult},
 };
 
-use crate::process::OwnedProcess;
+use crate::process::{state::Stopped, Process};
 
-pub fn ptraced(f: impl FnOnce() -> i32) -> OwnedProcess {
+pub fn ptraced(f: impl FnOnce() -> i32) -> Process<Stopped> {
     match unsafe { fork().unwrap() } {
         ForkResult::Parent { child } => {
             let wait_status = waitpid(child, Some(WaitPidFlag::WSTOPPED)).unwrap();
@@ -22,7 +22,7 @@ pub fn ptraced(f: impl FnOnce() -> i32) -> OwnedProcess {
                     | ptrace::Options::PTRACE_O_EXITKILL,
             )
             .unwrap();
-            OwnedProcess::new(child)
+            Process::new(child, Stopped)
         }
         ForkResult::Child => {
             raise(Signal::SIGSTOP).unwrap();

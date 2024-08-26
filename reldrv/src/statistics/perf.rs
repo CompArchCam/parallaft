@@ -7,6 +7,7 @@ use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, DynamicBuilder, H
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::process::state::Stopped;
 use crate::statistics::StatisticsProvider;
 use crate::types::exit_reason::ExitReason;
 use crate::types::process_id::Main;
@@ -160,14 +161,14 @@ impl PerfStatsCollector {
 impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
-        let process = &main.process;
+        let process = &main.process();
         let mut group = self.counters.lock();
         let mut counters = self
             .counter_kinds
@@ -187,7 +188,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>

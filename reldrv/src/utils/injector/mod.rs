@@ -4,7 +4,6 @@ use itertools::repeat_n;
 use log::debug;
 use nix::sys::{
     mman::{MapFlags, ProtFlags},
-    ptrace,
     wait::WaitStatus,
 };
 use reverie_syscalls::MemoryAccess;
@@ -12,11 +11,15 @@ use syscalls::Sysno;
 
 use crate::{
     error::Result,
-    process::{registers::RegisterAccess, Process, SyscallDir, PAGESIZE},
+    process::{
+        registers::RegisterAccess,
+        state::{Stopped, WithProcess},
+        Process, SyscallDir, PAGESIZE,
+    },
 };
 
 const STACK_SIZE: usize = 0x2000;
-const ALIGN: usize = 8;
+const ALIGN: usize = 16;
 
 fn allocate_buf(buf: &mut Vec<u8>, data: &[u8]) -> usize {
     let size = data.len();
@@ -49,7 +52,11 @@ fn allocate_zeros(buf: &mut Vec<u8>, size: usize) -> usize {
     start
 }
 
-pub unsafe fn inject_and_run<T, R>(binary: &[u8], arg: &T, process: &mut Process) -> Result<R> {
+pub unsafe fn inject_and_run<T, R>(
+    binary: &[u8],
+    arg: &T,
+    mut process: Process<Stopped>,
+) -> Result<WithProcess<Stopped, R>> {
     let mut buf = Vec::new();
 
     let bin_addr = allocate_buf(&mut buf, binary);
@@ -57,12 +64,16 @@ pub unsafe fn inject_and_run<T, R>(binary: &[u8], arg: &T, process: &mut Process
     let out_addr = allocate_zeros(&mut buf, size_of::<R>());
     let stack_addr = allocate_zeros(&mut buf, STACK_SIZE);
 
-    let base_addr = process.mmap(
+    let base_addr;
+    WithProcess(process, base_addr) = process.mmap(
         0,
         buf.len().next_multiple_of(*PAGESIZE),
         ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
         MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
     )?;
+    let base_addr = base_addr?;
+
+    let syscall_ctx = process.save_syscall_context()?;
 
     process.write_exact(base_addr.into(), &buf)?;
 
@@ -79,10 +90,11 @@ pub unsafe fn inject_and_run<T, R>(binary: &[u8], arg: &T, process: &mut Process
     process.write_registers(new_regs)?;
 
     debug!("Starting parasite");
-    process.resume()?;
+    let mut process_running = process.resume()?;
 
     loop {
-        let status = process.waitpid()?;
+        let status;
+        WithProcess(process, status) = process_running.waitpid()?.unwrap_stopped();
 
         match status {
             WaitStatus::PtraceSyscall(_) => {
@@ -92,8 +104,8 @@ pub unsafe fn inject_and_run<T, R>(binary: &[u8], arg: &T, process: &mut Process
                 if syscall_dir == SyscallDir::Entry && regs.sysno() == Some(Sysno::rt_sigreturn) {
                     debug!("Parasite finished");
                     process.modify_registers_with(|r| r.with_syscall_skipped())?;
-                    process.resume()?;
-                    let status = process.waitpid()?;
+                    let status;
+                    WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
                     assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
                     debug_assert_eq!(process.syscall_dir()?, SyscallDir::Exit);
                     break;
@@ -102,30 +114,36 @@ pub unsafe fn inject_and_run<T, R>(binary: &[u8], arg: &T, process: &mut Process
             WaitStatus::Exited(_, _) => panic!("Process exited unexpectedly"),
             WaitStatus::Signaled(_, sig, _) => panic!("Process unexpectedly signaled with {}", sig),
             WaitStatus::Stopped(_, sig) => {
-                ptrace::syscall(process.pid, sig)?;
+                process_running = process.resume_with_signal(sig)?;
                 continue;
             }
             _ => (),
         }
 
-        process.resume()?;
+        process_running = process.resume()?;
     }
+
+    process = process.restore_syscall_context(syscall_ctx)?;
 
     let out: R = process.read_value(base_addr + out_addr)?;
 
     process.write_registers(old_regs)?;
-    process.munmap(base_addr, buf.len().next_multiple_of(*PAGESIZE))?;
 
-    Ok(out)
+    let result;
+    WithProcess(process, result) =
+        process.munmap(base_addr, buf.len().next_multiple_of(*PAGESIZE))?;
+    result?;
+
+    Ok(WithProcess(process, out))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::test_utils::ptraced;
+    use crate::test_utils::{init_logging, ptraced};
 
-    use std::mem::size_of_val;
+    use std::{io::IoSlice, mem::size_of_val};
 
     #[test]
     #[cfg(target_arch = "aarch64")]
@@ -146,23 +164,27 @@ mod tests {
             slice::from_raw_parts(&binary as *const _ as *const u8, size_of_val(&binary))
         };
 
-        let result = unsafe { inject_and_run::<_, u64>(binary, &42_u64, &mut process)? };
+        let result;
+        WithProcess(process, result) =
+            unsafe { inject_and_run::<_, u64>(binary, &42_u64, process)? };
 
         assert_eq!(result, 43);
 
-        process.cont()?;
-        assert_eq!(process.waitpid()?, WaitStatus::Exited(process.pid, 0));
+        let status;
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
     }
 
     #[test]
     fn test_inject_and_run_hasher() -> crate::error::Result<()> {
+        init_logging();
+
         #[repr(C)]
         struct HasherArgs {
-            addresses: *const usize,
-            nr_pages: usize,
-            page_size: usize,
+            iovecs: *const IoSlice<'static>,
+            len: usize,
         }
 
         let mut process = ptraced(|| 0);
@@ -173,38 +195,44 @@ mod tests {
 
         let data: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 
-        let data_addr = process.mmap(
+        let data_addr;
+        WithProcess(process, data_addr) = process.mmap(
             0,
             data.len().next_multiple_of(*PAGESIZE),
             ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
             MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
         )?;
+        let data_addr = data_addr?;
 
-        process.write_value(data_addr, &data)?;
+        process.write_values(data_addr.into(), &data)?;
 
-        let addresses = [data_addr, data_addr, data_addr];
+        let addresses =
+            [IoSlice::new(unsafe { slice::from_raw_parts(data_addr as *const u8, data.len()) }); 3];
 
-        let addresses_addr = process.mmap(
+        let addresses_addr;
+        WithProcess(process, addresses_addr) = process.mmap(
             0,
-            addresses.len().next_multiple_of(*PAGESIZE),
+            (addresses.len() * size_of::<IoSlice>()).next_multiple_of(*PAGESIZE),
             ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
             MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
         )?;
+        let addresses_addr = addresses_addr?;
 
-        process.write_value(addresses_addr, &addresses)?;
+        process.write_values(addresses_addr.into(), &addresses)?;
 
         let args = HasherArgs {
-            addresses: addresses_addr as *const _,
-            nr_pages: addresses.len(),
-            page_size: data.len(),
+            iovecs: addresses_addr as *const _,
+            len: addresses.len(),
         };
 
-        let result = unsafe { inject_and_run::<_, u64>(binary, &args, &mut process)? };
+        let result;
+        WithProcess(process, result) = unsafe { inject_and_run::<_, u64>(binary, &args, process)? };
 
         assert_eq!(result, 0xb625b1186286445a);
 
-        process.cont()?;
-        assert_eq!(process.waitpid()?, WaitStatus::Exited(process.pid, 0));
+        let status;
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
     }

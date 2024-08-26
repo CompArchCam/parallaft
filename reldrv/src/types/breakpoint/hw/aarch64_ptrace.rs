@@ -3,7 +3,7 @@ use nix::unistd::Pid;
 
 use crate::{
     error::{Error, Result},
-    process::{siginfo::SigInfoExt, Process},
+    process::{siginfo::SigInfoExt, state::Stopped, Process},
     types::breakpoint::Breakpoint,
 };
 
@@ -48,7 +48,7 @@ impl Breakpoint for HardwareBreakpointViaPtrace {
         self.addr
     }
 
-    fn enable(&mut self, process: &mut Process) -> Result<()> {
+    fn enable(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if self.slot.is_some() {
             return Ok(());
         }
@@ -104,7 +104,7 @@ impl Breakpoint for HardwareBreakpointViaPtrace {
         Ok(())
     }
 
-    fn disable(&mut self, process: &mut Process) -> Result<()> {
+    fn disable(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if let Some(slot) = self.slot {
             let regset = if self.watch {
                 0x403 /* NT_ARM_HW_WATCH */
@@ -137,7 +137,7 @@ impl Breakpoint for HardwareBreakpointViaPtrace {
         Ok(())
     }
 
-    fn is_hit(&self, process: &Process) -> Result<bool> {
+    fn is_hit(&self, process: &Process<Stopped>) -> Result<bool> {
         let siginfo = process.get_siginfo()?;
         Ok(siginfo.is_trap_hwbp() && unsafe { siginfo.si_addr() } as usize == self.addr)
     }
@@ -154,7 +154,7 @@ mod tests {
 
     use crate::{
         error::Result,
-        process::{registers::RegisterAccess, SyscallDir},
+        process::{registers::RegisterAccess, state::WithProcess, SyscallDir},
         test_utils::{init_logging, ptraced},
     };
 
@@ -194,49 +194,44 @@ mod tests {
         )?;
 
         bp.enable(&mut process)?;
-        process.resume()?;
 
         // expect watchpoint hit
-        let status = process.waitpid()?;
+        let mut status;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
         let siginfo = process.get_siginfo()?;
         let addr = unsafe { siginfo.si_addr() };
         assert_eq!(addr, &mut a as *mut _ as *mut c_void);
         assert!(bp.is_hit(&process)?);
         bp.disable(&mut process)?;
-        process.single_step()?;
 
         // re-enable watchpoint
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.single_step()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
         bp.enable(&mut process)?;
-        process.resume()?;
 
         // expect getpid entry
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
         assert_eq!(process.read_registers()?.sysno(), Some(Sysno::getpid));
         assert_eq!(process.syscall_dir()?, SyscallDir::Entry);
-        process.resume()?;
 
         // expect getpid exit
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
         assert_eq!(process.syscall_dir()?, SyscallDir::Exit);
-        process.resume()?;
 
         // expect watchpoint to be hit again
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
         let siginfo = process.get_siginfo()?;
         let addr = unsafe { siginfo.si_addr() };
         assert_eq!(addr, &mut a as *mut _ as *mut c_void);
         assert!(bp.is_hit(&process)?);
         bp.disable(&mut process)?;
-        process.cont()?;
 
         // expect exit
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())

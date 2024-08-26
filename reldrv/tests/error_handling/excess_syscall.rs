@@ -2,7 +2,10 @@ use std::sync::atomic::AtomicU32;
 
 use log::info;
 use nix::unistd::getpid;
-use reldrv::{dispatcher::Module, events::syscall::StandardSyscallHandler, RelShellOptionsBuilder};
+use reldrv::{
+    dispatcher::Module, events::syscall::StandardSyscallHandler, process::state::Stopped,
+    RelShellOptionsBuilder,
+};
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 
@@ -24,7 +27,7 @@ impl StandardSyscallHandler for ExcessSyscallAfter {
     fn handle_standard_syscall_entry_checker(
         &self,
         _syscall: &reverie_syscalls::Syscall,
-        _context: reldrv::events::HandlerContext,
+        _context: reldrv::events::HandlerContext<Stopped>,
     ) -> reldrv::error::Result<reldrv::events::syscall::StandardSyscallEntryCheckerHandlerExitAction>
     {
         if self

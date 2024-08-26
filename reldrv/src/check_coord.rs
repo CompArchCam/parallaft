@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -9,12 +8,9 @@ use std::thread::{park, Scope, Thread};
 use derive_builder::Builder;
 use log::{debug, error, info, warn};
 
-use nix::errno::Errno;
-use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::WaitStatus;
 
-use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo};
@@ -38,7 +34,8 @@ use crate::events::{
 use crate::exec_point_providers::ExecutionPointProvider;
 use crate::process::dirty_pages::IgnoredPagesProvider;
 use crate::process::registers::RegisterAccess;
-use crate::process::{OwnedProcess, Process};
+use crate::process::state::{Running, Stopped, Unowned};
+use crate::process::Process;
 use crate::statistics::timing::{self, Tracer};
 use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
@@ -61,7 +58,7 @@ struct Worker {
 
 pub struct CheckCoordinator<'disp, 'modules, 'tracer: 'disp> {
     pub segments: Arc<RwLock<SegmentChains>>,
-    pub main_pid: Pid,
+    pub main: Process<Unowned>,
     pub epoch: AtomicU32,
     options: CheckCoordinatorOptions,
     pub dispatcher: &'disp Dispatcher<'disp, 'modules>,
@@ -95,7 +92,7 @@ enum SyscallType {
 
 impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     pub fn new(
-        main: Process,
+        main: Process<Unowned>,
         options: CheckCoordinatorOptions,
         dispatcher: &'disp Dispatcher<'disp, 'modules>,
         tracer: &'tracer Tracer,
@@ -103,7 +100,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     ) -> Self {
         Self {
             segments: Arc::new(RwLock::new(SegmentChains::new())),
-            main_pid: main.pid,
+            main,
             epoch: AtomicU32::new(0),
             options,
             dispatcher,
@@ -117,7 +114,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     fn run_event_loop<'s, 'scope, 'env>(
         &'s self,
-        mut child: Inferior,
+        mut child: Inferior<Stopped>,
         mut ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<ExitReason>
@@ -142,15 +139,14 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         }
 
         let wall_time_tracer = self.tracer.trace(wall_time_event);
-        child.process().resume()?;
+        let mut child_running = child.try_map_process_noret(|x| x.resume())?;
 
         // Main loop
         let exit_reason = loop {
-            let status = match child.process().waitpid() {
-                Ok(s) => s,
-                Err(Errno::ECHILD) => break ExitReason::UnexpectedlyDies,
-                Err(e) => panic!("waitpid error {e:?}"),
-            };
+            let status;
+            (child, status) = child_running
+                .try_map_process(|x| Ok::<_, Error>(x.waitpid()?.unwrap_stopped()))
+                .expect("waitpid");
 
             if child.is_main() && self.aborting.load(Ordering::SeqCst) {
                 break ExitReason::Crashed(Error::Cancelled);
@@ -172,7 +168,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     break ExitReason::Signalled(sig);
                 }
                 WaitStatus::Stopped(_, sig) => {
-                    self.handle_signal(&mut child, sig, scope)?;
+                    child_running = self.handle_signal(child, sig, scope)?;
                 }
                 WaitStatus::PtraceSyscall(_) => {
                     // Tell if it is a syscall entry or exit
@@ -187,12 +183,12 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             if let Some(sysno) = regs.sysno() {
                                 let syscall = Syscall::from_raw(sysno, regs.syscall_args());
                                 // Standard syscall entry
-                                self.handle_syscall_entry(&mut child, syscall, scope)?;
+                                child_running = self.handle_syscall_entry(child, syscall, scope)?;
                                 ongoing_syscall = Some(SyscallType::Standard(syscall));
                             } else {
                                 // Custom syscall entry
-                                self.handle_custom_syscall_entry(
-                                    &mut child,
+                                child_running = self.handle_custom_syscall_entry(
+                                    child,
                                     regs.sysno_raw(),
                                     regs.syscall_args(),
                                     scope,
@@ -206,8 +202,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                         Some(SyscallType::Standard(syscall)) => {
                             // Standard syscall exit
-                            self.handle_syscall_exit(
-                                &mut child,
+                            child_running = self.handle_syscall_exit(
+                                child,
                                 syscall,
                                 regs.syscall_ret_val(),
                                 scope,
@@ -217,8 +213,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                         Some(SyscallType::Custom(sysno, args)) => {
                             // Custom syscall exit
-                            self.handle_custom_syscall_exit(
-                                &mut child,
+                            child_running = self.handle_custom_syscall_exit(
+                                child,
                                 sysno,
                                 args,
                                 regs.syscall_ret_val(),
@@ -229,7 +225,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                     }
                 }
-                WaitStatus::StillAlive => continue,
                 ws => unreachable!("{ws:?}"),
             }
         };
@@ -239,17 +234,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         // Dispatch fini and extra checks on segment status
         match &mut child {
             Inferior::Main(main) => {
-                // if self
-                //     .segments
-                //     .read_recursive()
-                //     .list
-                //     .iter()
-                //     .any(|x| matches!(&*x.status.lock(), SegmentStatus::Filling))
-                // {
-                //     info!("Main crashed without marking segment status as crashed");
-                //     return Ok(ExitReason::Crashed(Error));
-                // }
-
                 self.dispatcher
                     .handle_main_fini(main, &exit_reason, pctx(self, scope))?;
             }
@@ -268,7 +252,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     fn wait_until_unthrottled(
         &self,
-        main: &mut Main,
+        main: &mut Main<Running>,
         throttler: &(dyn Throttler + Sync),
         segments: &mut RwLockUpgradableReadGuard<SegmentChains>, // TODO: changeme
     ) {
@@ -305,21 +289,21 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     /// main inferior must not execute after the last saved event.
     fn take_main_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        main: &mut Main,
+        main: Main<Stopped>,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
         ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Main<Running>>
     where
         's: 'scope + 'disp,
     {
         let checkpointing_tracer = self.tracer.trace(timing::Event::MainCheckpointing);
         info!("{main} Checkpoint");
         if self.options.no_fork {
-            main.process.resume()?;
-            return Ok(());
+            let main = main.try_map_process_noret(|p| p.resume())?;
+            return Ok(main);
         }
 
         let mut segments = self.segments.upgradable_read();
@@ -327,30 +311,31 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         if !in_chain && is_finishing {
             info!("{main} No-op checkpoint_fini");
-            main.process.resume()?;
-            return Ok(());
+            let main = main.try_map_process_noret(|p| p.resume())?;
+            return Ok(main);
         }
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
         let forking_tracer = self.tracer.trace(timing::Event::MainForking);
-        let reference = main.process.fork(restart_old_syscall, true)?;
+        let (mut main, reference) = main.try_map_process(|p| p.fork(restart_old_syscall, true))?;
         forking_tracer.end();
 
         let dirty_page_tracking_tracer = self.tracer.trace(timing::Event::MainDirtyPageTracking);
-        self.dispatcher.handle_checkpoint_created_pre(main)?;
+        self.dispatcher.handle_checkpoint_created_pre(&mut main)?;
         dirty_page_tracking_tracer.end();
 
         let throttler = if in_chain {
-            self.dispatcher.dispatch_throttle(main, &segments, self)
+            self.dispatcher
+                .dispatch_throttle(&mut main, &segments, self)
         } else {
             None
         };
 
-        main.process.resume()?;
+        let mut main = main.try_map_process_noret(|p| p.resume())?;
         checkpointing_tracer.end();
 
-        let checkpoint = Checkpoint::new(epoch_local, reference, caller);
+        let checkpoint = Checkpoint::new(epoch_local, reference, caller)?;
 
         match (in_chain, is_finishing) {
             (false, false) => {
@@ -370,7 +355,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         debug!("{main} New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
             self.add_checkpoint(
-                main,
+                &mut main,
                 segments_mut,
                 checkpoint,
                 is_finishing,
@@ -388,14 +373,17 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 }
             }
 
-            self.wait_until_unthrottled(main, throttler, &mut segments);
+            self.wait_until_unthrottled(&mut main, throttler, &mut segments);
             throttling_tracer.end();
         }
 
-        Ok(())
+        Ok(main)
     }
 
-    fn take_checker_checkpoint<'s, 'scope, 'env>(&'s self, checker: &mut Checker) -> Result<()>
+    fn take_checker_checkpoint<'s, 'scope, 'env>(
+        &'s self,
+        mut checker: Checker<Stopped>,
+    ) -> Result<Checker<Running>>
     where
         's: 'scope + 'disp,
     {
@@ -403,7 +391,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         info!("{checker} Checkpoint");
 
-        self.dispatcher.handle_segment_completed(checker)?;
+        self.dispatcher.handle_segment_completed(&mut checker)?;
 
         let check_fail_reason;
 
@@ -412,9 +400,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             checker.segment.checker_status.lock().assume_checked();
         } else {
             check_fail_reason = checker.segment.clone().check(
-                checker,
+                &mut checker,
                 &self.dispatcher.get_ignored_pages(),
                 &self.dispatcher.get_extra_writable_ranges(),
+                self.dispatcher,
                 self.dispatcher,
                 self.dispatcher,
             )?;
@@ -433,7 +422,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         }
 
         self.dispatcher
-            .handle_segment_checked(checker, &check_fail_reason)?;
+            .handle_segment_checked(&mut checker, &check_fail_reason)?;
 
         let mut segments = self.segments.write();
         self.cleanup_committed_segments(&mut segments, true)?;
@@ -441,34 +430,36 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         checker_comparing_tracer.end();
 
-        checker.process.kill()?;
+        let checker = checker.try_map_process_noret(|p| p.kill())?;
 
-        Ok(())
+        Ok(checker)
     }
 
     /// Handle checkpoint request from the target
     fn take_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        child: Inferior<Stopped>,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
         ongoing_syscall: Option<SyscallType>,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
         match child {
-            Inferior::Main(main) => self.take_main_checkpoint(
-                main,
-                is_finishing,
-                restart_old_syscall,
-                caller,
-                ongoing_syscall,
-                scope,
-            ),
-            Inferior::Checker(checker) => self.take_checker_checkpoint(checker),
+            Inferior::Main(main) => self
+                .take_main_checkpoint(
+                    main,
+                    is_finishing,
+                    restart_old_syscall,
+                    caller,
+                    ongoing_syscall,
+                    scope,
+                )
+                .map(|x| x.into()),
+            Inferior::Checker(checker) => self.take_checker_checkpoint(checker).map(|x| x.into()),
         }
     }
 
@@ -490,7 +481,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     pub fn main_work<'s, 'scope, 'env>(
         &'s self,
-        process: OwnedProcess,
+        process: Process<Stopped>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> ExitReason
     where
@@ -511,7 +502,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
             let mut exit_reason = match self.run_event_loop(
                 Inferior::Main(Main {
-                    process,
+                    process: Some(process),
                     segment: None,
                 }),
                 None,
@@ -563,7 +554,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
 
             let mut checker = Checker {
-                process: checker_process,
+                process: Some(checker_process),
                 segment: segment.clone(),
             };
 
@@ -581,7 +572,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     fn add_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Running>,
         segments: &mut SegmentChains,
         checkpoint: Checkpoint,
         is_finishing: bool,
@@ -594,7 +585,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         let result = segments.add_checkpoint(
             checkpoint,
             is_finishing,
-            main.process.pid,
+            main.process.as_ref().unwrap().unowned_copy(),
             self.options.enable_async_events,
         );
 
@@ -717,10 +708,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     pub fn handle_syscall_entry<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        mut child: Inferior<Stopped>,
         syscall: Syscall,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
@@ -731,24 +722,20 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let syscall_entry_handling_tracer = self.tracer.trace(tracing_event);
 
-        let mut skip_ptrace_syscall = false;
-
-        info!(
-            "{child} Syscall: {:}",
-            syscall.display(child.process().deref())
-        );
+        info!("{child} Syscall: {:}", syscall.display(child.process()));
 
         if matches!(
-            self.dispatcher
-                .handle_standard_syscall_entry(&syscall, hctx(&mut child.into(), self, scope))?,
+            self.dispatcher.handle_standard_syscall_entry(
+                &syscall,
+                hctx(&mut (&mut child).into(), self, scope)
+            )?,
             SyscallHandlerExitAction::ContinueInferior
         ) {
-            child.process().resume()?;
-            return Ok(());
+            return child.try_map_process_noret(|p| p.resume());
         }
 
         match child {
-            Inferior::Main(main) => {
+            Inferior::Main(mut main) => {
                 // Main syscall entry
                 if let Some(segment) = &main.segment {
                     let segment = segment.clone();
@@ -756,7 +743,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
                     let result = self.dispatcher.handle_standard_syscall_entry_main(
                         &syscall,
-                        hctx(&mut main.into(), self, scope),
+                        hctx(&mut (&mut main).into(), self, scope),
                     )?;
 
                     match result {
@@ -769,6 +756,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             segment
                                 .record
                                 .push_incomplete_syscall(saved_incomplete_syscall);
+
+                            main.try_map_process_noret(|p| p.resume()).map(|x| x.into())
                         }
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                             saved_incomplete_syscall,
@@ -786,54 +775,47 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                                 CheckpointCaller::Shell,
                                 Some(SyscallType::Standard(syscall)),
                                 scope,
-                            )?;
-
-                            skip_ptrace_syscall = true;
+                            )
+                            .map(|x| x.into())
                         }
                     }
+                } else {
+                    main.try_map_process_noret(|p| p.resume()).map(|x| x.into())
                 }
             }
-            Inferior::Checker(checker) => {
+            Inferior::Checker(mut checker) => {
                 // Checker syscall entry
                 let result = self.dispatcher.handle_standard_syscall_entry_checker(
                     &syscall,
-                    hctx(&mut checker.into(), self, scope),
+                    hctx(&mut (&mut checker).into(), self, scope),
                 )?;
 
                 match result {
                     StandardSyscallEntryCheckerHandlerExitAction::NextHandler => {
                         panic!("Unhandled syscall exit")
                     }
-                    StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior => (),
+                    StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior => checker
+                        .try_map_process_noret(|p| p.resume())
+                        .map(|x| x.into()),
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
                         let incomplete_syscall = checker.segment.record.pop_incomplete_syscall()?;
-
                         assert!(incomplete_syscall.is_last_event);
-
                         syscall_entry_handling_tracer.end();
 
-                        self.take_checker_checkpoint(checker)?;
-
-                        skip_ptrace_syscall = true;
+                        self.take_checker_checkpoint(checker).map(|p| p.into())
                     }
                 }
             }
         }
-
-        if !skip_ptrace_syscall {
-            child.process().resume()?;
-        }
-
-        Ok(())
     }
 
     pub fn handle_syscall_exit<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        mut child: Inferior<Stopped>,
         last_syscall: Syscall,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
@@ -846,20 +828,17 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let syscall_exit_handling_tracer = self.tracer.trace(tracing_event);
 
-        let mut skip_ptrace_syscall = false;
-
         if self.dispatcher.handle_standard_syscall_exit(
             ret_val,
             &last_syscall,
-            hctx(&mut child.into(), self, scope),
+            hctx(&mut (&mut child).into(), self, scope),
         )? == SyscallHandlerExitAction::ContinueInferior
         {
-            child.process().resume()?;
-            return Ok(());
+            return child.try_map_process_noret(|p| p.resume());
         }
 
         match child {
-            Inferior::Main(main) => {
+            Inferior::Main(mut main) => {
                 if let Some(segment) = &main.segment {
                     let segment = segment.clone();
                     // Main syscall entry, inside protection zone
@@ -880,7 +859,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                                 SavedIncompleteSyscallKind::WithMemoryEffects {
                                     mem_written_ranges,
                                     ..
-                                } => SavedMemory::save(main.process.deref(), mem_written_ranges)?,
+                                } => SavedMemory::save(main.process(), mem_written_ranges)?,
                                 _ => panic!(),
                             };
 
@@ -893,7 +872,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             let result = self.dispatcher.handle_standard_syscall_exit_main(
                                 ret_val,
                                 &saved_incomplete_syscall,
-                                hctx(&mut main.into(), self, scope),
+                                hctx(&mut (&mut main).into(), self, scope),
                             )?;
 
                             assert!(
@@ -905,7 +884,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                         SyscallExitAction::Checkpoint => {
                             syscall_exit_handling_tracer.end();
-                            todo!("take a full checkpoint");
+                            todo!("take a full checkpoint")
                         }
                     };
 
@@ -914,6 +893,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         exit_action == SyscallExitAction::Checkpoint,
                         &segment,
                     )?;
+
+                    main.try_map_process_noret(|p| p.resume()).map(|x| x.into())
                 } else {
                     // outside protected region
                     let segments = self.segments.read();
@@ -926,7 +907,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             assert_eq!(ongoing_syscall.exit_action, SyscallExitAction::Checkpoint);
 
                             // restore registers as if we haven't modified any flags
-                            main.process.modify_registers_with(|regs| {
+                            main.process_mut().modify_registers_with(|regs| {
                                 regs.with_syscall_args(ongoing_syscall.syscall.into_parts().1, true)
                             })?;
 
@@ -939,13 +920,17 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                                 CheckpointCaller::Shell,
                                 None,
                                 scope,
-                            )?;
-                            skip_ptrace_syscall = true;
+                            )
+                            .map(|x| x.into())
+                        } else {
+                            main.try_map_process_noret(|p| p.resume()).map(|x| x.into())
                         }
+                    } else {
+                        main.try_map_process_noret(|p| p.resume()).map(|x| x.into())
                     }
                 }
             }
-            Inferior::Checker(checker) => {
+            Inferior::Checker(mut checker) => {
                 let saved_syscall_with_is_last_event = checker
                     .segment
                     .record
@@ -961,10 +946,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 match saved_syscall.exit_action {
                     SyscallExitAction::ReplayEffects => match &saved_syscall.kind {
                         SavedSyscallKind::WithMemoryEffects { mem_written, .. } => {
-                            checker.process.modify_registers_with(|regs| {
+                            checker.process_mut().modify_registers_with(|regs| {
                                 regs.with_syscall_ret_val(saved_syscall.ret_val)
                             })?;
-                            mem_written.dump(checker.process.deref_mut())?;
+                            mem_written.dump(checker.process_mut())?;
                         }
                         _ => panic!("Cannot replay syscall effects with unknown memory effects"),
                     },
@@ -981,7 +966,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         let result = self.dispatcher.handle_standard_syscall_exit_checker(
                             ret_val,
                             &saved_syscall,
-                            hctx(&mut checker.into(), self, scope),
+                            hctx(&mut (&mut checker).into(), self, scope),
                         )?;
 
                         if result == SyscallHandlerExitAction::NextHandler {
@@ -989,23 +974,21 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                     }
                 }
+
+                checker
+                    .try_map_process_noret(|p| p.resume())
+                    .map(|x| x.into())
             }
         }
-
-        if !skip_ptrace_syscall {
-            child.process().resume()?;
-        }
-
-        Ok(())
     }
 
     pub fn handle_custom_syscall_entry<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        mut child: Inferior<Stopped>,
         sysno: usize,
         args: SyscallArgs,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
@@ -1016,7 +999,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let handled = self
             .dispatcher
-            .handle_custom_syscall_entry(sysno, args, hctx(&mut child.into(), self, scope))
+            .handle_custom_syscall_entry(sysno, args, hctx(&mut (&mut child).into(), self, scope))
             .unwrap();
 
         if handled == SyscallHandlerExitAction::NextHandler
@@ -1044,7 +1027,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         CheckpointCaller::Child,
                         Some(SyscallType::Custom(sysno, args)),
                         scope,
-                    )?;
+                    )
+                    .map(|x| x.into())
                 }
                 Inferior::Checker(checker) => {
                     let result = checker.segment.record.pop_manual_checkpoint_request()?;
@@ -1055,31 +1039,29 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             UnexpectedEventReason::IncorrectValue,
                         ));
                     }
-                    self.take_checker_checkpoint(checker)?;
+                    self.take_checker_checkpoint(checker).map(|x| x.into())
                 }
             }
         } else {
-            child.process().resume()?;
+            child.try_map_process_noret(|p| p.resume())
         }
-
-        Ok(())
     }
 
     pub fn handle_custom_syscall_exit<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        mut child: Inferior<Stopped>,
         sysno: usize,
         _args: SyscallArgs,
         ret_val: isize,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
         debug!("{child} Syscall: ... = {ret_val}");
         let handled = self
             .dispatcher
-            .handle_custom_syscall_exit(ret_val, hctx(&mut child.into(), self, scope))
+            .handle_custom_syscall_exit(ret_val, hctx(&mut (&mut child).into(), self, scope))
             .unwrap();
 
         if handled == SyscallHandlerExitAction::NextHandler
@@ -1089,21 +1071,19 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             ))
         {
             child
-                .process()
+                .process_mut()
                 .modify_registers_with(|r| r.with_syscall_ret_val(0))?;
         }
 
-        child.process().resume()?;
-
-        Ok(())
+        child.try_map_process_noret(|p| p.resume())
     }
 
     pub fn handle_signal<'s, 'scope, 'env>(
         &'s self,
-        child: &mut Inferior,
+        mut child: Inferior<Stopped>,
         sig: Signal,
         scope: &'scope Scope<'scope, 'env>,
-    ) -> Result<()>
+    ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
     {
@@ -1116,37 +1096,40 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let result = self
             .dispatcher
-            .handle_signal(sig, hctx(&mut child.into(), self, scope))?;
+            .handle_signal(sig, hctx(&mut (&mut child).into(), self, scope))?;
 
         signal_handling_tracer.end();
 
         match result {
-            SignalHandlerExitAction::SkipPtraceSyscall => (),
+            SignalHandlerExitAction::SkipPtraceSyscall => todo!(),
             SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step } => {
                 if single_step {
-                    child.process().single_step()?;
+                    Ok(child.try_map_process_noret(|p| p.single_step())?)
                 } else {
-                    child.process().resume()?;
+                    Ok(child.try_map_process_noret(|p| p.resume())?)
                 }
             }
             SignalHandlerExitAction::NextHandler => {
                 info!("{child} Signal: {:}", sig);
-                ptrace::syscall(child.process().pid, sig)?;
+                Ok(child.try_map_process_noret(|p| p.resume_with_signal(sig))?)
             }
             SignalHandlerExitAction::ContinueInferior => {
-                ptrace::syscall(child.process().pid, sig)?;
+                Ok(child.try_map_process_noret(|p| p.resume_with_signal(sig))?)
             }
-            SignalHandlerExitAction::Checkpoint => {
-                self.take_checkpoint(child, false, false, CheckpointCaller::Shell, None, scope)?;
-            }
+            SignalHandlerExitAction::Checkpoint => Ok(self.take_checkpoint(
+                child,
+                false,
+                false,
+                CheckpointCaller::Shell,
+                None,
+                scope,
+            )?),
         }
-
-        Ok(())
     }
 
     pub fn push_curr_exec_point_to_event_log(
         &self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         is_finishing: bool,
     ) -> Result<()> {
         if let Some(segment) = main.segment.as_ref().cloned() {
@@ -1168,7 +1151,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     pub fn migrate_checker<'s, 'scope, 'env>(
         &'s self,
         new_cpu_set: Vec<usize>,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where

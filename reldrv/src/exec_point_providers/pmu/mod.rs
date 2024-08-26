@@ -30,7 +30,13 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::{memory::instructions, registers::RegisterAccess, siginfo::SigInfoExt, Process},
+    process::{
+        memory::instructions,
+        registers::RegisterAccess,
+        siginfo::SigInfoExt,
+        state::{Running, Stopped},
+        Process,
+    },
     statistics::StatisticsProvider,
     statistics_list,
     types::{
@@ -84,7 +90,11 @@ impl SegmentInfo {
         Ok(())
     }
 
-    pub fn migrate(&mut self, checker_process: &mut Process, new_cpu_set: &[usize]) -> Result<()> {
+    pub fn migrate(
+        &mut self,
+        checker_process: &mut Process<Stopped>,
+        new_cpu_set: &[usize],
+    ) -> Result<()> {
         self.init_or_migrate_branch_counter(checker_process.pid, new_cpu_set)?;
 
         if let Some((exec_point, state)) = self.active_exec_point.as_mut() {
@@ -132,7 +142,7 @@ impl ExecutionPointReplayState {
         exec_point: &BranchCounterBasedExecutionPoint,
         branch_count_curr: u64,
         cpu_set: &[usize],
-        checker_process: &mut Process,
+        checker_process: &mut Process<Stopped>,
         branch_type: BranchType,
         checker_never_use_branch_count_overflow: bool,
     ) -> Result<ExecutionPointReplayState> {
@@ -222,7 +232,7 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
 }
 
 impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
-    fn handle_checkpoint_created_pre(&self, _main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, _main: &mut Main<Stopped>) -> Result<()> {
         let mut t = self.main_branch_counter.lock();
         let counter = t.as_mut().unwrap();
         counter.reset()?;
@@ -230,7 +240,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         Ok(())
     }
 
-    fn handle_segment_created(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         self.segment_info_map.lock().insert(
             main.segment.as_ref().unwrap().nr,
             Arc::new(Mutex::new(SegmentInfo {
@@ -245,7 +255,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker) -> Result<()> {
+    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         let segment_info_map = self.segment_info_map.lock();
 
         let mut segment_info = segment_info_map.get(&checker.segment.nr).unwrap().lock();
@@ -253,7 +263,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         let checker_status = checker.segment.checker_status.lock();
         let checker_cpu_set = checker_status.cpu_set().unwrap();
 
-        segment_info.init_or_migrate_branch_counter(checker.process.pid, checker_cpu_set)?;
+        segment_info.init_or_migrate_branch_counter(checker.process().pid, checker_cpu_set)?;
 
         drop(checker_status);
 
@@ -271,7 +281,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
 impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -280,7 +290,7 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     {
         *self.main_branch_counter.lock() = Some(BranchCounter::new(
             self.branch_counter_type,
-            Target::Pid(main.process.pid),
+            Target::Pid(main.process().pid),
             true,
             self.main_cpu_set,
         )?);
@@ -292,7 +302,7 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
 impl PerfCounterBasedExecutionPointProvider<'_> {
     fn activate_first_exec_point_in_queue(
         &self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         segment_info: &mut SegmentInfo,
     ) -> Result<()> {
         if segment_info.active_exec_point.is_some() {
@@ -308,7 +318,7 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
                 &exec_point,
                 branch_count_curr,
                 checker.segment.checker_status.lock().cpu_set().unwrap(),
-                &mut checker.process,
+                checker.process.as_mut().unwrap(),
                 self.branch_counter_type,
                 self.checker_never_use_branch_count_overflow,
             )?;
@@ -325,7 +335,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -339,7 +349,8 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
         match context.child {
             InferiorRefMut::Checker(checker) => {
-                if checker.process.get_sigval()? == Some(Self::SIGVAL_CHECKER_PREPARE_EXEC_POINT) {
+                if checker.process().get_sigval()? == Some(Self::SIGVAL_CHECKER_PREPARE_EXEC_POINT)
+                {
                     debug!("{checker} Received sigval for preparing exec point");
 
                     self.activate_first_exec_point_in_queue(
@@ -364,7 +375,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                     if let Some((exec_point, mut state)) = segment_info.active_exec_point.take() {
                         let mut replay_done = false;
 
-                        let sig_info = checker.process.get_siginfo()?;
+                        let sig_info = checker.process().get_siginfo()?;
 
                         match &mut state {
                             ExecutionPointReplayState::CountingBranches { branch_irq } => {
@@ -373,7 +384,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
                                     state = ExecutionPointReplayState::Stepping {
                                         breakpoint: breakpoint(
-                                            &mut checker.process,
+                                            checker.process_mut(),
                                             exec_point.instruction_pointer,
                                         )?,
                                         breakpoint_suspended: false,
@@ -388,14 +399,14 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                 breakpoint_suspended,
                                 single_stepping,
                             } => {
-                                if breakpoint.is_hit(&checker.process)? {
+                                if breakpoint.is_hit(checker.process())? {
                                     debug!("{checker} Breakpoint hit");
 
                                     assert!(!*breakpoint_suspended);
                                     assert!(!*single_stepping);
 
                                     debug_assert_eq!(
-                                        checker.process.read_registers()?.ip(),
+                                        checker.process().read_registers()?.ip(),
                                         exec_point.instruction_pointer
                                     );
 
@@ -413,19 +424,19 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                                 .characteristics()
                                                 .needs_single_step_after_hit
                                             {
-                                                let regs = checker.process.read_registers()?;
+                                                let regs = checker.process().read_registers()?;
 
                                                 if breakpoint
                                                     .characteristics()
                                                     .needs_bp_disabled_during_single_stepping
                                                 {
                                                     debug!("{checker} Disabling breakpoint for single stepping");
-                                                    breakpoint.disable(&mut checker.process)?;
+                                                    breakpoint.disable(checker.process_mut())?;
                                                     *breakpoint_suspended = true;
                                                 }
 
                                                 if !checker
-                                                    .process
+                                                    .process()
                                                     .instr_eq(regs.ip(), instructions::SYSCALL)
                                                 {
                                                     // PTRACE_SINGLESTEP will
@@ -441,7 +452,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                             }
                                         }
                                         std::cmp::Ordering::Equal => {
-                                            breakpoint.disable(&mut checker.process)?;
+                                            breakpoint.disable(checker.process_mut())?;
 
                                             debug!(
                                                 "{checker} Reached execution point {exec_point:?}"
@@ -450,14 +461,14 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                             replay_done = true;
                                         }
                                         std::cmp::Ordering::Greater => {
-                                            breakpoint.disable(&mut checker.process)?;
+                                            breakpoint.disable(checker.process_mut())?;
 
                                             unreachable!("Unexpected skid");
                                         }
                                     }
 
                                     handled = true;
-                                } else if checker.process.get_siginfo()?.is_trap_trace() {
+                                } else if checker.process().get_siginfo()?.is_trap_trace() {
                                     if *single_stepping {
                                         debug!("{checker} Single step trap");
                                         *single_stepping = false;
@@ -465,7 +476,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                         if *breakpoint_suspended {
                                             debug!("{checker} Resuming breakpoint");
                                             *breakpoint_suspended = false;
-                                            breakpoint.enable(&mut checker.process)?;
+                                            breakpoint.enable(checker.process_mut())?;
                                         }
 
                                         handled = true;
@@ -513,7 +524,7 @@ impl StandardSyscallHandler for PerfCounterBasedExecutionPointProvider<'_> {
         &self,
         _ret_val: isize,
         _syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if let InferiorRefMut::Checker(checker) = context.child {
             let segment_id = checker.segment.nr;
@@ -557,7 +568,7 @@ impl StatisticsProvider for PerfCounterBasedExecutionPointProvider<'_> {
 impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
     fn get_current_execution_point(
         &self,
-        child: &mut InferiorRefMut,
+        child: &mut InferiorRefMut<Stopped>,
     ) -> Result<Arc<dyn ExecutionPoint>> {
         match child {
             InferiorRefMut::Main(main) => {
@@ -567,7 +578,7 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
 
                 Ok(Arc::new(BranchCounterBasedExecutionPoint {
                     branch_count: branches_executed,
-                    instruction_pointer: main.process.read_registers()?.ip(),
+                    instruction_pointer: main.process().read_registers()?.ip(),
                     ty: self.branch_counter_type,
                     segment_info: segment_info_map
                         .get(&main.segment.as_ref().unwrap().nr)
@@ -584,7 +595,7 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
 
                 Ok(Arc::new(BranchCounterBasedExecutionPoint {
                     branch_count,
-                    instruction_pointer: checker.process.read_registers()?.ip(),
+                    instruction_pointer: checker.process().read_registers()?.ip(),
                     ty: self.branch_counter_type,
                     segment_info: segment_info_arc.clone(),
                 }))
@@ -610,7 +621,7 @@ impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
 }
 
 impl MigrationHandler for PerfCounterBasedExecutionPointProvider<'_> {
-    fn handle_checker_migration(&self, context: HandlerContext) -> Result<()> {
+    fn handle_checker_migration(&self, context: HandlerContext<Stopped>) -> Result<()> {
         let segment_info_map = self.segment_info_map.lock();
         let checker = context.child.unwrap_checker_mut();
         let segment_info = segment_info_map.get(&checker.segment.nr).unwrap();
@@ -618,7 +629,7 @@ impl MigrationHandler for PerfCounterBasedExecutionPointProvider<'_> {
         let checker_status = checker.segment.checker_status.lock();
         let new_cpu_set = checker_status.cpu_set().unwrap();
 
-        segment_info.migrate(&mut checker.process, new_cpu_set)?;
+        segment_info.migrate(checker.process.as_mut().unwrap(), new_cpu_set)?;
         debug!("{checker} Migrating to CPU set: {new_cpu_set:?}");
         debug!("{checker} Current state: {segment_info:?}");
 

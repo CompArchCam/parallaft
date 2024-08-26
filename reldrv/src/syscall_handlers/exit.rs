@@ -10,6 +10,7 @@ use crate::{
         },
         HandlerContext,
     },
+    process::state::Stopped,
     types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
     },
@@ -33,7 +34,7 @@ impl StandardSyscallHandler for ExitHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext,
+        _context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {
@@ -52,7 +53,7 @@ impl StandardSyscallHandler for ExitHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext,
+        _context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         Ok(match syscall {
             Syscall::Exit(_) | Syscall::ExitGroup(_) => {

@@ -19,7 +19,7 @@ use crate::{
         },
         HandlerContext,
     },
-    process::registers::RegisterAccess,
+    process::{registers::RegisterAccess, state::Stopped},
     types::{
         memory_map::MemoryMap,
         process_id::Main,
@@ -52,7 +52,7 @@ impl MmapHandler {
 impl ProcessLifetimeHook for MmapHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -60,7 +60,7 @@ impl ProcessLifetimeHook for MmapHandler {
         'disp: 'scope,
     {
         if self.is_test {
-            for map in main.process.procfs()?.maps()? {
+            for map in main.process().procfs()?.maps()? {
                 context.check_coord.dispatcher.handle_memory_map_created(
                     &map.into(),
                     hctx(&mut main.into(), context.check_coord, context.scope),
@@ -75,10 +75,10 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        mut context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let syscall = *syscall;
-        let main = context.process();
+        let main = context.process_mut();
 
         match syscall {
             Syscall::Mmap(mut mmap) => {
@@ -145,10 +145,10 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let syscall = *syscall;
-        let checker = context.child.unwrap_checker();
+        let checker = context.child.unwrap_checker_mut();
 
         match syscall {
             Syscall::Mmap(mut mmap) => {
@@ -160,11 +160,11 @@ impl StandardSyscallHandler for MmapHandler {
                 );
 
                 if !mmap.flags().contains(MapFlags::MAP_ANONYMOUS) {
-                    debug!("{} Mmap: Checkpoint fini", { checker });
+                    debug!("{} Mmap: Checkpoint fini", &checker);
                     // File-backed mmap
 
                     if mmap.fd() >= 0 {
-                        checker.process.modify_registers_with(|regs| {
+                        checker.process_mut().modify_registers_with(|regs| {
                             regs.with_syscall_args(mmap.into_parts().1, false)
                         })?;
 
@@ -192,7 +192,7 @@ impl StandardSyscallHandler for MmapHandler {
                                 .with_flags(mmap.flags() | MapFlags::MAP_FIXED_NOREPLACE);
 
                             let (new_sysno, new_args) = mmap.into_parts();
-                            checker.process.modify_registers_with(|regs| {
+                            checker.process_mut().modify_registers_with(|regs| {
                                 regs.with_sysno(new_sysno)
                                     .with_syscall_args(new_args, false)
                             })?;
@@ -229,7 +229,7 @@ impl StandardSyscallHandler for MmapHandler {
                     }
 
                     let (new_sysno, new_args) = mremap.into_parts();
-                    checker.process.modify_registers_with(|regs| {
+                    checker.process_mut().modify_registers_with(|regs| {
                         regs.with_sysno(new_sysno)
                             .with_syscall_args(new_args, false)
                     })?;
@@ -261,12 +261,14 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        context: HandlerContext,
+        mut context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
-        let main = context.process();
+        let child_id = context.child.id();
+
+        let main = context.process_mut();
         match saved_incomplete_syscall.syscall {
             Syscall::Mmap(mmap) => {
-                debug!("{} Mmap: restoring registers", context.child);
+                debug!("{} Mmap: restoring registers", child_id);
                 // restore registers as if we haven't modified mmap/mremap flags
                 main.modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1, true)
@@ -282,7 +284,7 @@ impl StandardSyscallHandler for MmapHandler {
                 Ok(SyscallHandlerExitAction::ContinueInferior)
             }
             Syscall::Mremap(_) => {
-                debug!("{} Mmap: restoring registers", context.child);
+                debug!("{} Mmap: restoring registers", child_id);
                 // restore registers as if we haven't modified mmap/mremap flags
                 main.modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_incomplete_syscall.syscall.into_parts().1, true)
@@ -322,13 +324,13 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         _ret_val: isize,
         saved_syscall: &SavedSyscall,
-        context: HandlerContext,
+        mut context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match saved_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {
                 debug!("{} Mmap: restoring registers", context.child);
                 // restore registers as if we haven't modified mmap/mremap flags
-                context.process().modify_registers_with(|regs| {
+                context.process_mut().modify_registers_with(|regs| {
                     regs.with_syscall_args(saved_syscall.syscall.into_parts().1, true)
                 })?;
 

@@ -13,7 +13,7 @@ use reldrv::{
     dispatcher::Module,
     error::Result,
     events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-    process::PAGESIZE,
+    process::{state::Stopped, PAGESIZE},
     types::{
         exit_reason::ExitReason,
         perf_counter::{
@@ -51,7 +51,7 @@ impl CyclesCounter {
 impl ProcessLifetimeHook for CyclesCounter {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -77,7 +77,7 @@ impl ProcessLifetimeHook for CyclesCounter {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>

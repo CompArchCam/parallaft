@@ -3,6 +3,7 @@ use std::thread::Scope;
 use crate::{
     check_coord::CheckCoordinator,
     error::Result,
+    process::state::Stopped,
     types::{
         exit_reason::ExitReason,
         process_id::{Checker, Main},
@@ -27,7 +28,7 @@ pub trait ProcessLifetimeHook {
     /// Called after spawning the main process
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -40,7 +41,7 @@ pub trait ProcessLifetimeHook {
     /// Called after main exits
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         exit_reason: &ExitReason,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
@@ -54,7 +55,7 @@ pub trait ProcessLifetimeHook {
     /// Called after spawning a checker process
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -67,7 +68,7 @@ pub trait ProcessLifetimeHook {
     /// Called before killing a checker process
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where

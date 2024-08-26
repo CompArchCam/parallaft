@@ -14,6 +14,7 @@ use crate::{
         HandlerContext,
     },
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
+    process::state::{Running, Stopped},
     statistics::{StatisticValue, StatisticsProvider},
     statistics_list,
     types::{exit_reason::ExitReason, process_id::Main},
@@ -43,7 +44,7 @@ impl CheckpointSizeLimiter {
 impl ProcessLifetimeHook for CheckpointSizeLimiter {
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
@@ -68,7 +69,7 @@ impl SignalHandler for CheckpointSizeLimiter {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -97,7 +98,7 @@ impl SignalHandler for CheckpointSizeLimiter {
 }
 
 impl SegmentEventHandler for CheckpointSizeLimiter {
-    fn handle_segment_created(&self, _main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, _main: &mut Main<Running>) -> Result<()> {
         if let Some(fd) = self.fpt_fd.lock().as_mut() {
             fd.clear_fault().unwrap()
         }
@@ -105,7 +106,7 @@ impl SegmentEventHandler for CheckpointSizeLimiter {
         Ok(())
     }
 
-    fn handle_segment_chain_closed(&self, _main: &mut Main) -> Result<()> {
+    fn handle_segment_chain_closed(&self, _main: &mut Main<Running>) -> Result<()> {
         if let Some(fd) = self.fpt_fd.lock().as_mut() {
             fd.clear_fault().unwrap()
         }
@@ -121,7 +122,7 @@ impl ScheduleCheckpointReady for CheckpointSizeLimiter {
         }
 
         let mut fd = FptFd::new(
-            check_coord.main_pid,
+            check_coord.main.pid,
             self.size_watermark * 2,
             FptFlags::EXCLUDE_NON_WRITABLE_VMA
                 | FptFlags::SIGTRAP_WATERMARK

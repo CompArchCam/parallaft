@@ -10,6 +10,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
+    process::state::Stopped,
     statistics_list,
 };
 
@@ -52,7 +53,7 @@ impl StandardSyscallHandler for CounterCollector {
     fn handle_standard_syscall_entry(
         &self,
         _syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if context.child.is_main() {
             self.syscall_count.fetch_add(1, Ordering::SeqCst);

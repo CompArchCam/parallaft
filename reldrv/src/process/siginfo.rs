@@ -5,11 +5,15 @@ use nix::{
 
 use crate::error::Result;
 
-use super::Process;
+use super::{state::Stopped, Process};
 
-impl Process {
+impl Process<Stopped> {
     pub fn get_siginfo(&self) -> Result<siginfo_t> {
         Ok(ptrace::getsiginfo(self.pid)?)
+    }
+
+    pub fn get_sigval(&self) -> Result<Option<usize>> {
+        Ok(self.get_siginfo()?.sigval())
     }
 }
 

@@ -2,7 +2,7 @@ use nix::sys::signal::Signal;
 
 use super::HandlerContext;
 
-use crate::error::Result;
+use crate::{error::Result, process::state::Stopped};
 
 pub enum SignalHandlerExitAction {
     /// Try the next handler. The signal is not handled by the current handler.
@@ -25,7 +25,7 @@ pub trait SignalHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

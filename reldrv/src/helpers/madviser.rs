@@ -4,7 +4,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::segment::SegmentEventHandler,
-    process::{dirty_pages::AsIoSlice, PAGESIZE},
+    process::{dirty_pages::AsIoSlice, state::Running, PAGESIZE},
     types::process_id::Main,
 };
 
@@ -17,12 +17,13 @@ impl Madviser {
 }
 
 impl SegmentEventHandler for Madviser {
-    fn handle_segment_created(&self, main: &mut Main) -> Result<()> {
+    fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         let segment = main.segment.as_ref().unwrap().clone();
 
         // TODO: take dirty page addresses if necessary
 
-        let process = segment.checkpoint_start.process.lock();
+        let process_mg = segment.checkpoint_start.process.lock();
+        let process = process_mg.as_ref().unwrap();
         let mut iovecs = Vec::new();
 
         process.for_each_writable_map(

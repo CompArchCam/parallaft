@@ -11,20 +11,34 @@ pub mod syscall;
 use std::thread::Scope;
 
 use crate::{
-    check_coord::CheckCoordinator, process::OwnedProcess, types::process_id::InferiorRefMut,
+    check_coord::CheckCoordinator,
+    process::{
+        state::ProcessState,
+        Process,
+    },
+    types::process_id::InferiorRefMut,
 };
 
-pub struct HandlerContext<'ido, 'id, 'disp: 'scope, 'scope, 'env, 'modules, 'tracer> {
-    pub child: &'ido mut InferiorRefMut<'id>,
+pub struct HandlerContext<
+    'ido,
+    'id,
+    'disp: 'scope,
+    'scope,
+    'env,
+    'modules,
+    'tracer,
+    S: ProcessState,
+> {
+    pub child: &'ido mut InferiorRefMut<'id, S>,
     pub check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     pub scope: &'scope Scope<'scope, 'env>,
 }
 
-pub fn hctx<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer>(
-    child: &'ido mut InferiorRefMut<'id>,
+pub fn hctx<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S: ProcessState>(
+    child: &'ido mut InferiorRefMut<'id, S>,
     check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     scope: &'scope Scope<'scope, 'env>,
-) -> HandlerContext<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer> {
+) -> HandlerContext<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S> {
     HandlerContext {
         child,
         check_coord,
@@ -32,14 +46,14 @@ pub fn hctx<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer>(
     }
 }
 
-impl<'id, 'disp, 'scope, 'env, 'modules, 'tracer>
-    HandlerContext<'_, 'id, 'disp, 'scope, 'env, 'modules, 'tracer>
+impl<'id, 'disp, 'scope, 'env, 'modules, 'tracer, S: ProcessState>
+    HandlerContext<'_, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S>
 {
-    pub fn process(&self) -> &OwnedProcess {
+    pub fn process(&self) -> &Process<S> {
         self.child.process()
     }
 
-    pub fn process_mut(&mut self) -> &mut OwnedProcess {
+    pub fn process_mut(&mut self) -> &mut Process<S> {
         self.child.process_mut()
     }
 }

@@ -8,7 +8,6 @@ use std::{
 };
 
 use log::debug;
-use nix::unistd::Pid;
 use parking_lot::{Mutex, RwLock};
 use perf_event::events::Hardware;
 use reverie_syscalls::Syscall;
@@ -24,7 +23,10 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::Process,
+    process::{
+        state::{Stopped, Unowned},
+        Process,
+    },
     signal_handlers::{
         begin_protection::main_begin_protection_req, slice_segment::main_enqueue_slice_segment_req,
     },
@@ -91,7 +93,7 @@ impl DynamicSlicer {
     fn should_slice_segment(
         &self,
         segments: &RwLock<SegmentChains>,
-        main_pid: Pid,
+        main: &Process<Unowned>,
     ) -> Result<bool> {
         let main_cycles = self.main_cycles_counter.lock().as_mut().unwrap().read()?;
 
@@ -129,7 +131,7 @@ impl DynamicSlicer {
         }
 
         if main_cycles > 0 {
-            let memory_stats = Process::new(main_pid).memory_stats()?;
+            let memory_stats = main.memory_stats()?;
 
             let fork_cow_cost_fraction = (memory_stats.dirty_pages as f64
                 * self.params.nr_cycles_per_cow_op
@@ -156,13 +158,13 @@ impl DynamicSlicer {
 }
 
 impl SegmentEventHandler for DynamicSlicer {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main) -> Result<()> {
+    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
         self.main_cycles_counter
             .lock()
             .get_or_try_insert_with(|| -> Result<_> {
                 GenericHardwareEventCounter::new(
                     Hardware::CPU_CYCLES,
-                    Target::Pid(main.process.pid),
+                    Target::Pid(main.process().pid),
                     false,
                     None,
                 )
@@ -178,11 +180,11 @@ impl StandardSyscallHandler for DynamicSlicer {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
-            main_begin_protection_req(context.child.process().pid)?;
+            main_begin_protection_req(context.child.process())?;
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
@@ -192,7 +194,7 @@ impl StandardSyscallHandler for DynamicSlicer {
 impl ProcessLifetimeHook for DynamicSlicer {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -203,7 +205,7 @@ impl ProcessLifetimeHook for DynamicSlicer {
         *self.worker.lock() = Some(tx);
 
         let segments = context.check_coord.segments.clone();
-        let main_pid = main.process.pid;
+        let main_unowned = main.process().unowned_copy();
 
         context.scope.spawn(move || {
             (|| -> Result<()> {
@@ -213,11 +215,11 @@ impl ProcessLifetimeHook for DynamicSlicer {
                     if let Some(segment) = segments.read().main_segment() {
                         if (segment.nr > self.epoch.load(std::sync::atomic::Ordering::SeqCst)
                             || segment.nr == 0)
-                            && self.should_slice_segment(&segments, main_pid)?
+                            && self.should_slice_segment(&segments, &main_unowned)?
                         {
                             self.epoch
                                 .store(segment.nr, std::sync::atomic::Ordering::SeqCst);
-                            main_enqueue_slice_segment_req(main_pid)?;
+                            main_enqueue_slice_segment_req(&main_unowned)?;
                         }
                     }
                 }

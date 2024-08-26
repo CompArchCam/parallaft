@@ -5,6 +5,7 @@ use crate::{
     process::{
         memory::{instructions, ReplacedInstruction},
         registers::RegisterAccess,
+        state::Stopped,
         Process,
     },
 };
@@ -23,7 +24,7 @@ pub struct SoftwareBreakpoint {
 }
 
 impl SoftwareBreakpoint {
-    pub fn new(process: &mut Process, pc: usize) -> Result<Self> {
+    pub fn new(process: &mut Process<Stopped>, pc: usize) -> Result<Self> {
         let mut ret = Self {
             pc,
             state: BreakpointState::Disabled,
@@ -38,7 +39,7 @@ impl Breakpoint for SoftwareBreakpoint {
         self.pc
     }
 
-    fn enable(&mut self, process: &mut Process) -> Result<()> {
+    fn enable(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if let BreakpointState::Enabled(_) = self.state {
             return Ok(());
         }
@@ -53,7 +54,7 @@ impl Breakpoint for SoftwareBreakpoint {
         Ok(())
     }
 
-    fn disable(&mut self, process: &mut Process) -> Result<()> {
+    fn disable(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if let BreakpointState::Disabled = self.state {
             return Ok(());
         }
@@ -73,7 +74,7 @@ impl Breakpoint for SoftwareBreakpoint {
         Ok(())
     }
 
-    fn is_hit(&self, process: &Process) -> Result<bool> {
+    fn is_hit(&self, process: &Process<Stopped>) -> Result<bool> {
         match self.state {
             BreakpointState::Enabled(_) => {
                 let pc = process.read_registers()?.ip();
@@ -101,7 +102,9 @@ mod tests {
 
     use crate::{
         error::Result,
-        process::{memory::MemoryAccess, registers::RegisterAccess, SyscallDir},
+        process::{
+            memory::MemoryAccess, registers::RegisterAccess, state::WithProcess, SyscallDir,
+        },
         test_utils::ptraced,
         types::breakpoint::Breakpoint,
     };
@@ -116,15 +119,13 @@ mod tests {
             0
         });
 
-        process.resume()?;
-
-        let status = process.waitpid()?;
+        let mut status;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
         assert_eq!(process.syscall_dir()?, SyscallDir::Entry);
         assert_eq!(process.read_registers()?.sysno(), Some(Sysno::getpid));
-        process.resume()?;
 
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
         assert_eq!(process.syscall_dir()?, SyscallDir::Exit);
 
@@ -132,10 +133,9 @@ mod tests {
         let ip = process.read_registers()?.ip();
         let mut bp = SoftwareBreakpoint::new(&mut process, ip)?;
         dbg_hex!(process.read_value::<_, u64>(process.read_registers()?.ip())?);
-        process.resume()?;
 
         // Assert breakpoint has been hit
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         dbg!(process.read_registers()?.sysno());
         dbg!(process.syscall_dir()?);
         dbg_hex!(process.read_value::<_, u64>(process.read_registers()?.ip())?);
@@ -145,17 +145,15 @@ mod tests {
 
         // Disable the breakpoint
         bp.disable(&mut process)?;
-        process.resume()?;
 
         // Expect the getppid syscall entry
-        let status = process.waitpid()?;
+        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
         assert_eq!(process.syscall_dir()?, SyscallDir::Entry);
         assert_eq!(process.read_registers()?.sysno(), Some(Sysno::getppid));
 
-        process.cont()?;
-
-        let status = process.waitpid()?;
+        // Expect process exit
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())

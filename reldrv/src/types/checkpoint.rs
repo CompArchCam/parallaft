@@ -1,6 +1,9 @@
 use parking_lot::Mutex;
 
-use crate::process::{detach::DetachedProcess, OwnedProcess};
+use crate::{
+    error::Result,
+    process::{detach::Detached, state::Stopped, Process},
+};
 
 pub type EpochId = u32;
 
@@ -13,19 +16,23 @@ pub enum CheckpointCaller {
 
 #[derive(Debug)]
 pub struct Checkpoint {
-    pub process: Mutex<DetachedProcess<OwnedProcess>>,
+    pub process: Mutex<Option<Process<Detached>>>,
     pub caller: CheckpointCaller,
     pub epoch: EpochId,
 }
 
 impl Checkpoint {
-    pub fn new(epoch: EpochId, reference: OwnedProcess, caller: CheckpointCaller) -> Self {
-        Self {
+    pub fn new(
+        epoch: EpochId,
+        reference: Process<Stopped>,
+        caller: CheckpointCaller,
+    ) -> Result<Self> {
+        let detached = reference.detach()?;
+
+        Ok(Self {
             epoch,
             caller,
-            process: Mutex::new(
-                DetachedProcess::detach_from(reference).expect("Failed to detach process"),
-            ),
-        }
+            process: Mutex::new(Some(detached)),
+        })
     }
 }

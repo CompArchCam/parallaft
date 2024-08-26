@@ -23,11 +23,13 @@ mod test_utils;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs;
-use std::ops::Deref;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use cfg_if::cfg_if;
+use comparators::memory::hasher::HashBasedMemoryComparator;
+use comparators::memory::simple::SimpleMemoryComparator;
+use comparators::memory::MemoryComparatorType;
 use debug_utils::core_dumper::CoreDumper;
 use debug_utils::exec_point_dumper::ExecutionPointDumper;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
@@ -46,10 +48,12 @@ use helpers::cpufreq::CpuFreqScalerType;
 use helpers::insn_patcher::InstructionPatcher;
 use helpers::madviser::Madviser;
 use nix::sys::signal::Signal;
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::sys::wait::{WaitPidFlag, WaitStatus};
 use nix::unistd::{getpid, Pid};
 
 use log::info;
+use process::state::{Running, WithProcess};
+use process::Process;
 use signal_handlers::begin_protection::BeginProtectionHandler;
 use signal_handlers::mrs::MrsHandler;
 use signal_handlers::slice_segment::SliceSegmentHandler;
@@ -78,7 +82,6 @@ use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
 // use crate::inferior_rtlib::pmu::PmuSegmentor;
 
-use crate::process::OwnedProcess;
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::cpuid;
 use crate::statistics::counter::CounterCollector;
@@ -240,6 +243,9 @@ pub struct RelShellOptions {
     pub core_dump_dir: PathBuf,
     pub watchpoint_addresses: Vec<usize>,
 
+    // memory comparator options
+    pub memory_comparator: MemoryComparatorType,
+
     // integration test
     pub is_test: bool,
 
@@ -277,17 +283,17 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         std::env::args_os().collect::<Vec<OsString>>()
     );
 
-    let child = OwnedProcess::new(child_pid);
-
     #[cfg(target_arch = "x86_64")]
     let mut cpuid_overrides = Vec::from(cpuid::overrides::NO_RDRAND);
 
-    assert_eq!(
-        waitpid(child.pid, Some(WaitPidFlag::WSTOPPED)).unwrap(),
-        WaitStatus::Stopped(child_pid, Signal::SIGSTOP)
-    );
+    let WithProcess(child, status) = Process::new(child_pid, Running)
+        .waitpid_with_flags(Some(WaitPidFlag::WSTOPPED))
+        .unwrap()
+        .unwrap_stopped();
 
-    child.seize().expect("Failed to seize process with ptrace");
+    assert_eq!(status, WaitStatus::Stopped(child_pid, Signal::SIGSTOP));
+
+    let child = child.seize().expect("Failed to seize process");
 
     let disp = Dispatcher::new();
 
@@ -475,6 +481,16 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
         disp.register_module(IntelHybridWorkaround::new());
     }
 
+    match options.memory_comparator {
+        MemoryComparatorType::Hasher => {
+            disp.register_module(HashBasedMemoryComparator::new());
+        }
+        MemoryComparatorType::Simple => {
+            disp.register_module(SimpleMemoryComparator::new());
+        }
+        MemoryComparatorType::None => (),
+    }
+
     disp.register_module(ExecutionPointDumper);
     disp.register_module(InProtectionAsserter);
     disp.register_module(Watchpoint::new(&options.watchpoint_addresses));
@@ -484,7 +500,7 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
     }
 
     let check_coord = CheckCoordinator::new(
-        child.deref().clone(),
+        child.unowned_copy(),
         options.check_coord_flags,
         &disp,
         tracer,

@@ -15,7 +15,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::{memory::MemoryAccess, registers::RegisterAccess, Process},
+    process::{memory::MemoryAccess, registers::RegisterAccess, state::Stopped, Process},
     syscall_handlers::is_execve_ok,
     types::{
         breakpoint::{Breakpoint, HardwareBreakpoint},
@@ -45,7 +45,7 @@ impl<'a> Watchpoint<'a> {
         }
     }
 
-    fn create_watchpoints(&self, process: &mut Process) -> Result<WatchpointList> {
+    fn create_watchpoints(&self, process: &mut Process<Stopped>) -> Result<WatchpointList> {
         let mut watchpoints = Vec::new();
 
         for address in self.addresses {
@@ -62,7 +62,7 @@ impl<'a> Watchpoint<'a> {
 
     fn handle_if_watchpoint_hit(
         &self,
-        child: &mut InferiorRefMut,
+        child: &mut InferiorRefMut<Stopped>,
         watchpoints: &mut WatchpointList,
     ) -> Result<SignalHandlerExitAction> {
         if let Some(pos) = watchpoints.stepping_bp_pos {
@@ -126,8 +126,8 @@ impl<'a> Watchpoint<'a> {
         Ok(SignalHandlerExitAction::NextHandler)
     }
 
-    fn register_main_watchpoints(&self, main: &mut Main) -> Result<()> {
-        *self.main_watchpoints.lock() = Some(self.create_watchpoints(&mut main.process)?);
+    fn register_main_watchpoints(&self, main: &mut Main<Stopped>) -> Result<()> {
+        *self.main_watchpoints.lock() = Some(self.create_watchpoints(main.process_mut())?);
         debug!("{main} {} watchpoints registered", self.addresses.len());
         Ok(())
     }
@@ -136,7 +136,7 @@ impl<'a> Watchpoint<'a> {
 impl ProcessLifetimeHook for Watchpoint<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -149,7 +149,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
@@ -163,7 +163,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -172,7 +172,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
     {
         self.checker_watchpoints.lock().insert(
             checker.segment.nr,
-            self.create_watchpoints(&mut checker.process)?,
+            self.create_watchpoints(checker.process_mut())?,
         );
 
         debug!("{checker} {} watchpoints registered", self.addresses.len());
@@ -182,7 +182,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
 
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -199,7 +199,7 @@ impl StandardSyscallHandler for Watchpoint<'_> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if let InferiorRefMut::Main(main) = context.child {
             if is_execve_ok(syscall, ret_val) {
@@ -215,7 +215,7 @@ impl SignalHandler for Watchpoint<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

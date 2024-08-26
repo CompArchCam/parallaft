@@ -1,7 +1,7 @@
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    process::{dirty_pages::PageFlag, Process},
+    process::dirty_pages::PageFlag,
     types::process_id::InferiorId,
 };
 
@@ -29,12 +29,15 @@ impl DirtyPageAddressTracker for KPageCountDirtyPageTracker {
                 .unwrap()
                 .process
                 .lock()
+                .as_ref()
+                .unwrap()
                 .get_dirty_pages(PageFlag::KPageCountEqualsOne, extra_writable_ranges)?,
-            InferiorId::Checker(segment) => {
-                let pid = segment.checker_status.lock().pid().unwrap();
-                Process::new(pid)
-                    .get_dirty_pages(PageFlag::KPageCountEqualsOne, extra_writable_ranges)?
-            }
+            InferiorId::Checker(segment) => segment
+                .checker_status
+                .lock()
+                .process()
+                .unwrap()
+                .get_dirty_pages(PageFlag::KPageCountEqualsOne, extra_writable_ranges)?,
         };
 
         Ok(DirtyPageAddressesWithFlags {

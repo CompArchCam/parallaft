@@ -8,6 +8,7 @@ use super::{RunningAverage, StatisticValue, StatisticsProvider};
 use crate::dispatcher::Subscribers;
 use crate::events::module_lifetime::ModuleLifetimeHook;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::process::state::Stopped;
 use crate::process::Process;
 use crate::statistics_list;
 use crate::types::process_id::Main;
@@ -38,7 +39,7 @@ impl MemoryCollector {
 impl ProcessLifetimeHook for MemoryCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        _main: &mut Main,
+        _main: &mut Main<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -52,27 +53,30 @@ impl ProcessLifetimeHook for MemoryCollector {
             while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(self.interval) {
                 // TODO: join handle
                 let segments = context.check_coord.segments.read();
-                let mut pids = vec![context.check_coord.main_pid];
+                let mut processes = vec![context.check_coord.main.clone()];
 
                 for segment in &segments.list {
-                    if let Some(p) = segment.checker_status.lock().pid() {
-                        pids.push(p);
+                    if let Some(p) = segment.checker_status.lock().process() {
+                        processes.push(p.clone());
                     }
 
-                    if let Some(p) = segment.checkpoint_end().map(|c| c.process.lock().pid) {
-                        pids.push(p);
+                    if let Some(p) = segment
+                        .checkpoint_end()
+                        .map(|c| c.process.lock().as_ref().unwrap().unowned_copy())
+                    {
+                        processes.push(p);
                     };
                 }
 
                 if self.include_rt {
-                    pids.push(Process::shell().pid);
+                    processes.push(Process::shell());
                 }
 
                 drop(segments);
 
-                let pss = pids
+                let pss = processes
                     .iter()
-                    .map(|&pid| Process::new(pid).memory_stats().map(|x| x.pss).unwrap_or(0)) // Process may die at this point
+                    .map(|p| p.memory_stats().map(|x| x.pss).unwrap_or(0)) // Process may die at this point
                     .sum::<usize>();
 
                 debug!("Sampled PSS = {}", pss);

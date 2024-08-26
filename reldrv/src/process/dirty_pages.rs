@@ -1,32 +1,27 @@
 use std::{
-    collections::HashSet,
-    io::{IoSlice, IoSliceMut},
+    collections::{BTreeSet, HashSet},
     ops::Range,
     slice,
 };
 
 use log::{debug, info, trace};
 
-use pretty_hex::PrettyHex;
 use procfs::{
     process::{MMPermissions, MMapPath, MemoryMap, MemoryPageFlags, PageInfo, SwapPageFlags},
     KPageCount,
 };
-use reverie_syscalls::MemoryAccess;
 use try_insert_ext::OptionInsertExt;
 
 use crate::error::Result;
 use crate::process::Process;
 
-use super::PAGESIZE;
-
-const PAGE_DIFF_BLOCK_SIZE: usize = 64;
+use super::{state::ProcessState, PAGESIZE};
 
 pub fn merge_page_addresses(
     page_addresses_p1: &[usize],
     page_addresses_p2: &[usize],
     ignored_pages: &[usize],
-) -> HashSet<usize> {
+) -> Vec<Range<usize>> {
     let mut pages: HashSet<usize> = HashSet::new();
     pages.extend(page_addresses_p1);
     pages.extend(page_addresses_p2);
@@ -34,82 +29,21 @@ pub fn merge_page_addresses(
     let pages = pages
         .difference(&ignored_pages.iter().copied().collect::<HashSet<usize>>())
         .cloned()
-        .collect::<HashSet<usize>>();
+        .collect::<BTreeSet<usize>>();
 
-    pages
-}
-
-pub fn filter_writable_addresses(
-    mut addresses: HashSet<usize>,
-    writable_regions: &[Range<usize>],
-) -> HashSet<usize> {
-    addresses.retain(|a| writable_regions.iter().any(|r| r.contains(a)));
-    addresses
-}
-
-/// Compare the given pages of two processes' memory. Returns if the pages are
-/// equal.
-pub fn page_diff(
-    p1_memory: &impl MemoryAccess,
-    p2_memory: &impl MemoryAccess,
-    page_addresses: &HashSet<usize>,
-) -> Result<bool> {
-    let page_size = { *PAGESIZE };
-
-    let mut buf_p1 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
-    let mut buf_p2 = vec![0_u8; PAGE_DIFF_BLOCK_SIZE * page_size];
-
-    let remote_iovs: Vec<IoSlice> = page_addresses
-        .iter()
-        .map(|&p| IoSlice::new(unsafe { slice::from_raw_parts(p as _, page_size) }))
-        .collect();
-
-    for remote_iov in remote_iovs.chunks(PAGE_DIFF_BLOCK_SIZE) {
-        let local_iov_p1 = IoSliceMut::new(&mut buf_p1[..remote_iov.len() * page_size]);
-        let local_iov_p2 = IoSliceMut::new(&mut buf_p2[..remote_iov.len() * page_size]);
-
-        p1_memory.read_vectored(remote_iov, &mut [local_iov_p1])?;
-        p2_memory.read_vectored(remote_iov, &mut [local_iov_p2])?;
-
-        if buf_p1 != buf_p2 {
-            for ((page1, page2), r) in buf_p1
-                .chunks(page_size)
-                .zip(buf_p2.chunks(page_size))
-                .zip(remote_iov)
-            {
-                if page1 != page2 {
-                    info!("Page mismatch: {:?}", r.as_ptr());
-
-                    let mismatch_addr = page1
-                        .iter()
-                        .zip(page2.iter())
-                        .position(|(a, b)| a != b)
-                        .unwrap()
-                        & !0x7;
-
-                    let page1_word = &page1[mismatch_addr..mismatch_addr + 0x8];
-                    let page2_word = &page2[mismatch_addr..mismatch_addr + 0x8];
-
-                    info!(
-                        "{:02X?} != {:02X?} @ offset {:#0x}",
-                        page1_word, page2_word, mismatch_addr
-                    );
-
-                    info!(
-                        "Mismatch address: {:#0x}",
-                        r.as_ptr() as usize + mismatch_addr
-                    );
-
-                    trace!("Page data 1:\n{:?}", page1.hex_dump());
-                    trace!("Page data 2:\n{:?}", page2.hex_dump());
-                }
+    pages.into_iter().fold(Vec::new(), |mut acc, page| {
+        if acc.is_empty() {
+            acc.push(page..page + *PAGESIZE);
+        } else {
+            let last_range = acc.last_mut().unwrap();
+            if last_range.end == page {
+                last_range.end += *PAGESIZE;
+            } else {
+                acc.push(page..page + *PAGESIZE);
             }
-
-            return Ok(false);
         }
-    }
-
-    Ok(true)
+        acc
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +53,7 @@ pub enum PageFlag {
     KPageCountEqualsOne,
 }
 
-impl Process {
+impl<S: ProcessState> Process<S> {
     pub fn for_each_writable_map<F>(
         &self,
         mut f: F,
@@ -223,7 +157,7 @@ impl Process {
         Ok(dirty_pages_it)
     }
 
-    pub fn clear_dirty_page_bits(&self) -> Result<()> {
+    pub fn clear_dirty_page_bits(&mut self) -> Result<()> {
         self.procfs()?.clear_refs(4)?;
 
         Ok(())
@@ -317,4 +251,34 @@ impl AsIoSlice for MemoryMap {
 
 pub trait IgnoredPagesProvider {
     fn get_ignored_pages(&self) -> Box<[usize]>;
+}
+
+#[cfg(test)]
+mod tests {
+    use itertools::Itertools;
+
+    use crate::process::PAGESIZE;
+
+    use super::merge_page_addresses;
+
+    #[test]
+    fn test_merge_page_addresses() {
+        let page_addresses_p1 = vec![1, 2, 3, 5, 7]
+            .into_iter()
+            .map(|x| x * *PAGESIZE)
+            .collect_vec();
+        let page_addresses_p2 = vec![5, 6, 7]
+            .into_iter()
+            .map(|x| x * *PAGESIZE)
+            .collect_vec();
+
+        let addresses = merge_page_addresses(&page_addresses_p1, &page_addresses_p2, &[]);
+
+        let expected = vec![1..4, 5..8]
+            .into_iter()
+            .map(|x| (x.start * *PAGESIZE)..(x.end * *PAGESIZE))
+            .collect_vec();
+
+        assert_eq!(addresses, expected);
+    }
 }

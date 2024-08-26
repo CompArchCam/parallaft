@@ -1,16 +1,93 @@
 use std::{fmt::Display, sync::Arc};
 
-use crate::process::OwnedProcess;
+use crate::process::{
+    state::{ProcessState, WithProcess},
+    Process,
+};
 
 use super::segment::Segment;
 
+macro_rules! impl_maps {
+    ($t:tt) => {
+        impl<S: ProcessState> $t<S> {
+            pub fn map_process<F, R, S2: ProcessState>(mut self, f: F) -> ($t<S2>, R)
+            where
+                F: FnOnce(Process<S>) -> WithProcess<S2, R>,
+            {
+                let WithProcess(p2, r) = f(self.process.take().unwrap());
+
+                (
+                    $t {
+                        process: Some(p2),
+                        segment: self.segment,
+                    },
+                    r,
+                )
+            }
+
+            pub fn try_map_process<F, R, E, S2: ProcessState>(
+                mut self,
+                f: F,
+            ) -> Result<($t<S2>, R), E>
+            where
+                F: FnOnce(Process<S>) -> Result<WithProcess<S2, R>, E>,
+            {
+                let WithProcess(p2, r) = f(self.process.take().unwrap())?;
+
+                Ok((
+                    $t {
+                        process: Some(p2),
+                        segment: self.segment,
+                    },
+                    r,
+                ))
+            }
+
+            pub fn try_map_process_noret<F, E, S2: ProcessState>(
+                mut self,
+                f: F,
+            ) -> Result<$t<S2>, E>
+            where
+                F: FnOnce(Process<S>) -> Result<Process<S2>, E>,
+            {
+                let p2 = f(self.process.take().unwrap())?;
+
+                Ok($t {
+                    process: Some(p2),
+                    segment: self.segment,
+                })
+            }
+
+            pub fn try_map_process_inplace<F, R, E>(&mut self, f: F) -> Result<R, E>
+            where
+                F: FnOnce(Process<S>) -> Result<WithProcess<S, R>, E>,
+            {
+                let WithProcess(p2, r) = f(self.process.take().unwrap())?;
+
+                self.process = Some(p2);
+                Ok(r)
+            }
+
+            pub fn process(&self) -> &Process<S> {
+                self.process.as_ref().unwrap()
+            }
+
+            pub fn process_mut(&mut self) -> &mut Process<S> {
+                self.process.as_mut().unwrap()
+            }
+        }
+    };
+}
+
 #[derive(Debug)]
-pub struct Main {
-    pub process: OwnedProcess,
+pub struct Main<S: ProcessState> {
+    pub process: Option<Process<S>>,
     pub segment: Option<Arc<Segment>>,
 }
 
-impl Display for Main {
+impl_maps!(Main);
+
+impl<S: ProcessState> Display for Main<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.segment.as_ref() {
             Some(segment) => write!(f, "[M{:>6}]", segment.nr),
@@ -20,24 +97,26 @@ impl Display for Main {
 }
 
 #[derive(Debug)]
-pub struct Checker {
-    pub process: OwnedProcess,
+pub struct Checker<S: ProcessState> {
+    pub process: Option<Process<S>>,
     pub segment: Arc<Segment>,
 }
 
-impl Display for Checker {
+impl_maps!(Checker);
+
+impl<S: ProcessState> Display for Checker<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[C{:>6}]", self.segment.nr)
     }
 }
 
 #[derive(Debug)]
-pub enum Inferior {
-    Main(Main),
-    Checker(Checker),
+pub enum Inferior<S: ProcessState> {
+    Main(Main<S>),
+    Checker(Checker<S>),
 }
 
-impl Inferior {
+impl<S: ProcessState> Inferior<S> {
     pub fn is_main(&self) -> bool {
         matches!(self, Inferior::Main { .. })
     }
@@ -46,45 +125,52 @@ impl Inferior {
         matches!(self, Inferior::Checker { .. })
     }
 
-    pub fn unwrap_main(&self) -> &Main {
+    pub fn unwrap_main(&self) -> &Main<S> {
         match self {
             Inferior::Main(main) => main,
             _ => panic!("Cannot unwrap Main from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_main_mut(&mut self) -> &mut Main {
+    pub fn unwrap_main_mut(&mut self) -> &mut Main<S> {
         match self {
             Inferior::Main(main) => main,
             _ => panic!("Cannot unwrap Main from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_checker(&self) -> &Checker {
+    pub fn unwrap_checker(&self) -> &Checker<S> {
         match self {
             Inferior::Checker(checker) => checker,
             _ => panic!("Cannot unwrap Checker from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_checker_mut(&mut self) -> &mut Checker {
+    pub fn unwrap_checker_mut(&mut self) -> &mut Checker<S> {
         match self {
             Inferior::Checker(checker) => checker,
             _ => panic!("Cannot unwrap Checker from ProcessIdentity"),
         }
     }
 
-    pub fn process(&self) -> &OwnedProcess {
+    pub fn process(&self) -> &Process<S> {
         match self {
-            Inferior::Main(main) => &main.process,
-            Inferior::Checker(checker) => &checker.process,
+            Inferior::Main(main) => &main.process.as_ref().unwrap(),
+            Inferior::Checker(checker) => checker.process.as_ref().unwrap(),
         }
     }
 
-    pub fn process_mut(&mut self) -> &mut OwnedProcess {
+    pub fn process_mut(&mut self) -> &mut Process<S> {
         match self {
-            Inferior::Main(main) => &mut main.process,
-            Inferior::Checker(checker) => &mut checker.process,
+            Inferior::Main(main) => main.process.as_mut().unwrap(),
+            Inferior::Checker(checker) => checker.process.as_mut().unwrap(),
+        }
+    }
+
+    pub fn take_process(&mut self) -> Process<S> {
+        match self {
+            Inferior::Main(main) => main.process.take().unwrap(),
+            Inferior::Checker(checker) => checker.process.take().unwrap(),
         }
     }
 
@@ -94,14 +180,62 @@ impl Inferior {
             Inferior::Checker(checker) => InferiorId::Checker(checker.segment.clone()),
         }
     }
+
+    pub fn try_map_process<S2: ProcessState, E, R>(
+        self,
+        f: impl FnOnce(Process<S>) -> std::result::Result<WithProcess<S2, R>, E>,
+    ) -> std::result::Result<(Inferior<S2>, R), E> {
+        match self {
+            Inferior::Main(main) => {
+                let (p2, r) = main.try_map_process(f)?;
+                Ok((Inferior::Main(p2), r))
+            }
+            Inferior::Checker(checker) => {
+                let (p2, r) = checker.try_map_process(f)?;
+                Ok((Inferior::Checker(p2), r))
+            }
+        }
+    }
+
+    pub fn try_map_process_noret<S2: ProcessState, E>(
+        self,
+        f: impl FnOnce(Process<S>) -> std::result::Result<Process<S2>, E>,
+    ) -> std::result::Result<Inferior<S2>, E> {
+        match self {
+            Inferior::Main(main) => Ok(Inferior::Main(main.try_map_process_noret(f)?)),
+            Inferior::Checker(checker) => Ok(Inferior::Checker(checker.try_map_process_noret(f)?)),
+        }
+    }
+
+    pub fn try_map_process_inplace<E, R>(
+        &mut self,
+        f: impl FnOnce(Process<S>) -> std::result::Result<WithProcess<S, R>, E>,
+    ) -> std::result::Result<R, E> {
+        match self {
+            Inferior::Main(main) => main.try_map_process_inplace(f),
+            Inferior::Checker(checker) => checker.try_map_process_inplace(f),
+        }
+    }
 }
 
-impl Display for Inferior {
+impl<S: ProcessState> Display for Inferior<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Main(main) => main.fmt(f),
             Self::Checker(checker) => checker.fmt(f),
         }
+    }
+}
+
+impl<S: ProcessState> From<Main<S>> for Inferior<S> {
+    fn from(value: Main<S>) -> Self {
+        Self::Main(value)
+    }
+}
+
+impl<S: ProcessState> From<Checker<S>> for Inferior<S> {
+    fn from(value: Checker<S>) -> Self {
+        Self::Checker(value)
     }
 }
 
@@ -120,49 +254,65 @@ impl InferiorId {
     }
 }
 
-impl From<&Main> for InferiorId {
-    fn from(value: &Main) -> Self {
+impl<S: ProcessState> From<&Main<S>> for InferiorId {
+    fn from(value: &Main<S>) -> Self {
         Self::Main(value.segment.clone())
     }
 }
 
-impl From<&Checker> for InferiorId {
-    fn from(value: &Checker) -> Self {
+impl<S: ProcessState> From<&Checker<S>> for InferiorId {
+    fn from(value: &Checker<S>) -> Self {
         Self::Checker(value.segment.clone())
     }
 }
 
-impl From<&Inferior> for InferiorId {
-    fn from(value: &Inferior) -> Self {
+impl<S: ProcessState> From<&Inferior<S>> for InferiorId {
+    fn from(value: &Inferior<S>) -> Self {
         value.id()
     }
 }
 
-impl From<&mut Main> for InferiorId {
-    fn from(value: &mut Main) -> Self {
+impl<S: ProcessState> From<&mut Main<S>> for InferiorId {
+    fn from(value: &mut Main<S>) -> Self {
         Self::Main(value.segment.clone())
     }
 }
 
-impl From<&mut Checker> for InferiorId {
-    fn from(value: &mut Checker) -> Self {
+impl<S: ProcessState> From<&mut Checker<S>> for InferiorId {
+    fn from(value: &mut Checker<S>) -> Self {
         Self::Checker(value.segment.clone())
     }
 }
 
-impl From<&mut Inferior> for InferiorId {
-    fn from(value: &mut Inferior) -> Self {
+impl<S: ProcessState> From<&mut Inferior<S>> for InferiorId {
+    fn from(value: &mut Inferior<S>) -> Self {
         value.id()
     }
 }
 
-pub enum InferiorRefMut<'a> {
-    Main(&'a mut Main),
-    Checker(&'a mut Checker),
+impl<'a, S: ProcessState> From<&mut InferiorRefMut<'a, S>> for InferiorId {
+    fn from(value: &mut InferiorRefMut<S>) -> Self {
+        value.id()
+    }
 }
 
-impl<'a> From<&'a mut Inferior> for InferiorRefMut<'a> {
-    fn from(value: &'a mut Inferior) -> Self {
+impl Display for InferiorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InferiorId::Main(Some(main)) => write!(f, "[M{:>6}]", main.nr),
+            InferiorId::Main(None) => write!(f, "[M      ]"),
+            InferiorId::Checker(checker) => write!(f, "[C{:>6}]", checker.nr),
+        }
+    }
+}
+
+pub enum InferiorRefMut<'a, S: ProcessState> {
+    Main(&'a mut Main<S>),
+    Checker(&'a mut Checker<S>),
+}
+
+impl<'a, S: ProcessState> From<&'a mut Inferior<S>> for InferiorRefMut<'a, S> {
+    fn from(value: &'a mut Inferior<S>) -> Self {
         match value {
             Inferior::Main(main) => InferiorRefMut::Main(main),
             Inferior::Checker(checker) => InferiorRefMut::Checker(checker),
@@ -170,19 +320,19 @@ impl<'a> From<&'a mut Inferior> for InferiorRefMut<'a> {
     }
 }
 
-impl<'a> From<&'a mut Main> for InferiorRefMut<'a> {
-    fn from(value: &'a mut Main) -> Self {
+impl<'a, S: ProcessState> From<&'a mut Main<S>> for InferiorRefMut<'a, S> {
+    fn from(value: &'a mut Main<S>) -> Self {
         InferiorRefMut::Main(value)
     }
 }
 
-impl<'a> From<&'a mut Checker> for InferiorRefMut<'a> {
-    fn from(value: &'a mut Checker) -> Self {
+impl<'a, S: ProcessState> From<&'a mut Checker<S>> for InferiorRefMut<'a, S> {
+    fn from(value: &'a mut Checker<S>) -> Self {
         InferiorRefMut::Checker(value)
     }
 }
 
-impl<'a> InferiorRefMut<'a> {
+impl<'a, S: ProcessState> InferiorRefMut<'a, S> {
     pub fn copied(&'a mut self) -> Self {
         match self {
             InferiorRefMut::Main(main) => InferiorRefMut::Main(main),
@@ -198,45 +348,45 @@ impl<'a> InferiorRefMut<'a> {
         matches!(self, InferiorRefMut::Checker { .. })
     }
 
-    pub fn unwrap_main(&self) -> &Main {
+    pub fn unwrap_main(&self) -> &Main<S> {
         match self {
             InferiorRefMut::Main(main) => main,
             _ => panic!("Cannot unwrap Main from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_main_mut(&mut self) -> &mut Main {
+    pub fn unwrap_main_mut(&mut self) -> &mut Main<S> {
         match self {
             InferiorRefMut::Main(main) => main,
             _ => panic!("Cannot unwrap Main from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_checker(&self) -> &Checker {
+    pub fn unwrap_checker(&self) -> &Checker<S> {
         match self {
             InferiorRefMut::Checker(checker) => checker,
             _ => panic!("Cannot unwrap Checker from ProcessIdentity"),
         }
     }
 
-    pub fn unwrap_checker_mut(&mut self) -> &mut Checker {
+    pub fn unwrap_checker_mut(&mut self) -> &mut Checker<S> {
         match self {
             InferiorRefMut::Checker(checker) => checker,
             _ => panic!("Cannot unwrap Checker from ProcessIdentity"),
         }
     }
 
-    pub fn process(&self) -> &OwnedProcess {
+    pub fn process(&self) -> &Process<S> {
         match self {
-            InferiorRefMut::Main(main) => &main.process,
-            InferiorRefMut::Checker(checker) => &checker.process,
+            InferiorRefMut::Main(main) => main.process.as_ref().unwrap(),
+            InferiorRefMut::Checker(checker) => checker.process.as_ref().unwrap(),
         }
     }
 
-    pub fn process_mut(&mut self) -> &mut OwnedProcess {
+    pub fn process_mut(&mut self) -> &mut Process<S> {
         match self {
-            InferiorRefMut::Main(main) => &mut main.process,
-            InferiorRefMut::Checker(checker) => &mut checker.process,
+            InferiorRefMut::Main(main) => main.process.as_mut().unwrap(),
+            InferiorRefMut::Checker(checker) => checker.process.as_mut().unwrap(),
         }
     }
 
@@ -259,7 +409,7 @@ impl<'a> InferiorRefMut<'a> {
     }
 }
 
-impl Display for InferiorRefMut<'_> {
+impl<S: ProcessState> Display for InferiorRefMut<'_, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Main(main) => main.fmt(f),
@@ -274,8 +424,8 @@ pub enum InferiorRole {
     Checker(Arc<Segment>),
 }
 
-impl From<&InferiorRefMut<'_>> for InferiorRole {
-    fn from(value: &InferiorRefMut) -> Self {
+impl<S: ProcessState> From<&InferiorRefMut<'_, S>> for InferiorRole {
+    fn from(value: &InferiorRefMut<S>) -> Self {
         match value {
             InferiorRefMut::Main(_) => InferiorRole::Main,
             InferiorRefMut::Checker(checker) => InferiorRole::Checker(checker.segment.clone()),

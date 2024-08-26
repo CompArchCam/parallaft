@@ -13,7 +13,9 @@ use crate::{
     },
     error::Result,
     events::{
-        comparator::{RegisterComparator, RegisterComparsionResult},
+        comparator::{
+            MemoryComparator, MemoryComparsionResult, RegisterComparator, RegisterComparsionResult,
+        },
         hctx,
         insn_patching::InstructionPatchingEventHandler,
         memory::MemoryEventHandler,
@@ -32,7 +34,12 @@ use crate::{
     exec_point_providers::ExecutionPointProvider,
     helpers::insn_patcher::Patch,
     inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
-    process::{dirty_pages::IgnoredPagesProvider, registers::Registers},
+    process::{
+        dirty_pages::IgnoredPagesProvider,
+        registers::Registers,
+        state::{Running, Stopped},
+        Process,
+    },
     statistics::{StatisticValue, StatisticsProvider},
     throttlers::Throttler,
     types::{
@@ -81,6 +88,7 @@ pub struct Subscribers<'a> {
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
     stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
     register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
+    memory_comparators: Vec<&'a dyn MemoryComparator>,
     module_lifetime_hooks: Vec<&'a dyn ModuleLifetimeHook>,
     exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
     memory_event_handlers: Vec<&'a dyn MemoryEventHandler>,
@@ -110,6 +118,7 @@ impl<'a> Subscribers<'a> {
             extra_writable_ranges_providers: Vec::new(),
             stats_providers: Vec::new(),
             register_comparators: Vec::new(),
+            memory_comparators: Vec::new(),
             module_lifetime_hooks: Vec::new(),
             exec_point_provider: None,
             memory_event_handlers: Vec::new(),
@@ -185,6 +194,10 @@ impl<'a> Subscribers<'a> {
         self.register_comparators.push(comparator)
     }
 
+    pub fn install_memory_comparator(&mut self, comparator: &'a dyn MemoryComparator) {
+        self.memory_comparators.push(comparator)
+    }
+
     pub fn install_module_lifetime_hook(&mut self, hook: &'a dyn ModuleLifetimeHook) {
         self.module_lifetime_hooks.push(hook)
     }
@@ -230,7 +243,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 
     pub fn dispatch_throttle(
         &self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         segments: &SegmentChains,
         check_coord: &CheckCoordinator,
     ) -> Option<&'a (dyn Throttler + Sync)> {
@@ -269,7 +282,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
 impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -285,7 +298,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_main_fini<'s, 'scope, 'disp>(
         &'s self,
-        main: &mut Main,
+        main: &mut Main<Stopped>,
         exit_reason: &ExitReason,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
@@ -302,7 +315,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -318,7 +331,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
-        checker: &mut Checker,
+        checker: &mut Checker<Stopped>,
         context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -352,7 +365,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry(
@@ -372,7 +385,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit(
@@ -392,7 +405,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_main(
@@ -412,7 +425,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_main(
@@ -432,7 +445,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_checker(
@@ -455,7 +468,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_checker(
@@ -478,7 +491,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_entry(
@@ -498,7 +511,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
-        context: HandlerContext,
+        context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_exit(
@@ -519,7 +532,7 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -540,13 +553,13 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
 }
 
 impl SegmentEventHandler for Dispatcher<'_, '_> {
-    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main: &mut Main));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, main: &mut Main));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, main: &mut Main));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker, check_fail_reason: &Option<CheckFailReason>));
+    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, main: &mut Main<Running>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, main: &mut Main<Running>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main<Running>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker<Stopped>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker<Stopped>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
 }
 
@@ -563,7 +576,7 @@ impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
 }
 
 impl<'a, 'm> ScheduleCheckpoint for Dispatcher<'a, 'm> {
-    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, main: &mut Main, check_coord: &CheckCoordinator));
+    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, main: &mut Main<Stopped>, check_coord: &CheckCoordinator));
 }
 
 impl<'a, 'm> ScheduleCheckpointReady for Dispatcher<'a, 'm> {
@@ -637,6 +650,21 @@ impl RegisterComparator for Dispatcher<'_, '_> {
     }
 }
 
+impl MemoryComparator for Dispatcher<'_, '_> {
+    fn compare_memory(
+        &self,
+        page_addresses: &[Range<usize>],
+        chk_process: Process<Stopped>,
+        ref_process: Process<Stopped>,
+    ) -> Result<(Process<Stopped>, Process<Stopped>, MemoryComparsionResult)> {
+        if let Some(c) = self.subscribers.read().memory_comparators.first() {
+            c.compare_memory(page_addresses, chk_process, ref_process)
+        } else {
+            Ok((chk_process, ref_process, MemoryComparsionResult::Pass))
+        }
+    }
+}
+
 impl ModuleLifetimeHook for Dispatcher<'_, '_> {
     fn init<'s, 'scope, 'env>(&'s self, scope: &'scope Scope<'scope, 'env>) -> Result<()>
     where
@@ -671,13 +699,17 @@ impl ExecutionPointProvider for Dispatcher<'_, '_> {
     generate_event_handler_option!(exec_point_provider,
         fn get_current_execution_point<'b>(
             &self,
-            child: &mut InferiorRefMut,
+            child: &mut InferiorRefMut<Stopped>,
         ) -> Result<Arc<dyn ExecutionPoint>>
     );
 }
 
 impl MemoryEventHandler for Dispatcher<'_, '_> {
-    fn handle_memory_map_created(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+    fn handle_memory_map_created(
+        &self,
+        map: &MemoryMap,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_created(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }
@@ -685,7 +717,11 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
         Ok(())
     }
 
-    fn handle_memory_map_removed(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+    fn handle_memory_map_removed(
+        &self,
+        map: &MemoryMap,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_removed(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }
@@ -693,7 +729,11 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
         Ok(())
     }
 
-    fn handle_memory_map_updated(&self, map: &MemoryMap, ctx: HandlerContext) -> Result<()> {
+    fn handle_memory_map_updated(
+        &self,
+        map: &MemoryMap,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_updated(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }
@@ -703,7 +743,11 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
 }
 
 impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
-    fn handle_instruction_patched(&self, patch: &Patch, ctx: HandlerContext) -> Result<()> {
+    fn handle_instruction_patched(
+        &self,
+        patch: &Patch,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         for handler in &self.subscribers.read().instruction_patching_events_handlers {
             handler
                 .handle_instruction_patched(patch, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
@@ -712,7 +756,7 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
         Ok(())
     }
 
-    fn should_instruction_patched(&self, patch: &Patch, ctx: HandlerContext) -> bool {
+    fn should_instruction_patched(&self, patch: &Patch, ctx: HandlerContext<Stopped>) -> bool {
         self.subscribers
             .read()
             .instruction_patching_events_handlers
@@ -722,7 +766,11 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
             })
     }
 
-    fn handle_instruction_patch_removed(&self, patch: &Patch, ctx: HandlerContext) -> Result<()> {
+    fn handle_instruction_patch_removed(
+        &self,
+        patch: &Patch,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         for handler in &self.subscribers.read().instruction_patching_events_handlers {
             handler.handle_instruction_patch_removed(
                 patch,
@@ -735,7 +783,7 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
 }
 
 impl MigrationHandler for Dispatcher<'_, '_> {
-    fn handle_checker_migration(&self, ctx: HandlerContext) -> Result<()> {
+    fn handle_checker_migration(&self, ctx: HandlerContext<Stopped>) -> Result<()> {
         for handler in &self.subscribers.read().migration_handlers {
             handler.handle_checker_migration(hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }

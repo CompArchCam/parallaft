@@ -1,4 +1,4 @@
-use super::{siginfo::SigInfoExt, Process};
+use super::{state::ProcessState, Process};
 use crate::error::Result;
 
 #[allow(non_camel_case_types)]
@@ -19,7 +19,7 @@ union siginfo_t {
     si_pad: [nix::libc::c_int; 128 / core::mem::size_of::<nix::libc::c_int>()],
 }
 
-impl Process {
+impl<S: ProcessState> Process<S> {
     pub fn sigqueue(&self, value: usize) -> Result<()> {
         unsafe {
             nix::libc::syscall(
@@ -39,9 +39,5 @@ impl Process {
             )
         };
         Ok(())
-    }
-
-    pub fn get_sigval(&self) -> Result<Option<usize>> {
-        Ok(self.get_siginfo()?.sigval())
     }
 }

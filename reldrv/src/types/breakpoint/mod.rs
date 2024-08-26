@@ -1,7 +1,10 @@
 mod hw;
 mod sw;
 
-use crate::{error::Result, process::Process};
+use crate::{
+    error::Result,
+    process::{state::Stopped, Process},
+};
 use cfg_if::cfg_if;
 pub use hw::HardwareBreakpoint;
 pub use sw::SoftwareBreakpoint;
@@ -13,9 +16,9 @@ pub struct BreakpointCharacteristics {
 
 pub trait Breakpoint: Send + Sync {
     fn addr(&self) -> usize;
-    fn enable(&mut self, process: &mut Process) -> Result<()>;
-    fn disable(&mut self, process: &mut Process) -> Result<()>;
-    fn is_hit(&self, process: &Process) -> Result<bool>;
+    fn enable(&mut self, process: &mut Process<Stopped>) -> Result<()>;
+    fn disable(&mut self, process: &mut Process<Stopped>) -> Result<()>;
+    fn is_hit(&self, process: &Process<Stopped>) -> Result<bool>;
     fn characteristics(&self) -> BreakpointCharacteristics {
         BreakpointCharacteristics {
             needs_bp_disabled_during_single_stepping: true,
@@ -25,7 +28,7 @@ pub trait Breakpoint: Send + Sync {
 }
 
 pub fn breakpoint(
-    #[allow(unused_variables)] process: &mut Process,
+    #[allow(unused_variables)] process: &mut Process<Stopped>,
     pc: usize,
 ) -> Result<Box<dyn Breakpoint>> {
     cfg_if! {

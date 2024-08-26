@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use nix::unistd::Pid;
 
 use crate::{
     dirty_page_trackers::DirtyPageAddressesWithFlags,
     error::{Error, Result},
-    process::OwnedProcess,
+    process::{
+        state::{Stopped, Unowned, WithProcess},
+        Process,
+    },
 };
 
 use super::checkpoint::Checkpoint;
@@ -21,7 +23,7 @@ pub enum CheckFailReason {
 pub enum CheckerStatus {
     NotReady,
     Executing {
-        pid: Pid,
+        process: Process<Unowned>,
         cpu_set: Vec<usize>,
     },
     Checked {
@@ -47,20 +49,27 @@ impl CheckerStatus {
         &mut self,
         from_checkpoint: &Checkpoint,
         cpu_set: Vec<usize>,
-    ) -> Result<OwnedProcess> {
+    ) -> Result<Process<Stopped>> {
         let mut ref_process = from_checkpoint.process.lock();
-        let checker_process = ref_process.borrow_with(|p| p.fork(true, true))??;
+
+        let WithProcess(new_ref_process, chk_process) = ref_process
+            .take()
+            .unwrap()
+            .try_borrow_with(|p2| p2.fork(true, true))?;
+
+        *ref_process = Some(new_ref_process);
+
         *self = CheckerStatus::Executing {
-            pid: checker_process.pid,
+            process: chk_process.unowned_copy(),
             cpu_set,
         };
 
-        Ok(checker_process)
+        Ok(chk_process)
     }
 
-    pub fn pid(&self) -> Option<Pid> {
+    pub fn process(&self) -> Option<&Process<Unowned>> {
         match self {
-            CheckerStatus::Executing { pid, .. } => Some(*pid),
+            CheckerStatus::Executing { process, .. } => Some(process),
             _ => None,
         }
     }

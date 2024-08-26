@@ -8,7 +8,7 @@ use crate::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
         HandlerContext,
     },
-    process::{registers::RegisterAccess, Process},
+    process::{registers::RegisterAccess, state::Stopped},
 };
 
 pub struct VdsoRemover;
@@ -31,7 +31,7 @@ impl StandardSyscallHandler for VdsoRemover {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        mut context: HandlerContext<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if ret_val == 0 {
             match syscall {
@@ -57,8 +57,9 @@ impl StandardSyscallHandler for VdsoRemover {
                         }
 
                         if v == nix::libc::AT_SYSINFO_EHDR {
-                            Process::new(process.pid) // TODO
-                            .write_value(addr, &nix::libc::AT_IGNORE)?;
+                            context
+                                .process_mut()
+                                .write_value(addr, &nix::libc::AT_IGNORE)?;
 
                             info!("vDSO removed at offset {:p}", (addr - sp) as *const u8);
 
