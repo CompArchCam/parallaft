@@ -151,8 +151,8 @@ pub enum StatsOutput {
     StdOut,
 }
 
-#[derive(Default, Builder, Derivative)]
-#[derivative(Debug)]
+#[derive(Builder, Derivative)]
+#[derivative(Debug, Default)]
 #[builder(default, pattern = "owned")]
 pub struct RelShellOptions {
     /// Dump statistics
@@ -232,6 +232,8 @@ pub struct RelShellOptions {
 
     // slicer
     pub slicer: SlicerType,
+
+    #[derivative(Default(value = "true"))]
     pub slicer_auto_start: bool,
 
     // fixed interval slicer
@@ -277,7 +279,7 @@ impl RelShellOptionsBuilder {
     }
 }
 
-pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
+pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     info!(
         "Starting with args {:?}",
         std::env::args_os().collect::<Vec<OsString>>()
@@ -329,12 +331,13 @@ pub fn parent_work(child_pid: Pid, options: RelShellOptions) -> ExitReason {
 
     // Execution point providers
     if options.exec_point_replay {
+        options.check_coord_flags.enable_async_events = true;
+
         let exec_point_provider =
             disp.register_module(PerfCounterBasedExecutionPointProvider::new(
                 &options.main_cpu_set,
                 options.exec_point_replay_branch_type,
                 options.exec_point_replay_checker_never_use_branch_count_overflow,
-                options.is_test,
             ));
 
         cfg_if::cfg_if! {

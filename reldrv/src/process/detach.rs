@@ -1,4 +1,3 @@
-
 use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
 
 use super::{
@@ -26,7 +25,7 @@ impl Process<Stopped> {
         let registers;
         (self, registers) = self.read_registers_precise()?;
 
-        let saved_ctx = self.instr_inject_and_jump(instructions::TRAP, false)?;
+        let saved_ctx = self.insn_inject_and_jump(instructions::TRAP, false)?;
         let syscall_dir = self.syscall_dir()?;
 
         if syscall_dir == SyscallDir::Entry {
@@ -70,7 +69,7 @@ impl Process<Detached> {
             WaitStatus::PtraceEvent(process.pid, Signal::SIGSTOP, nix::libc::PTRACE_EVENT_STOP)
         );
 
-        process.instr_restore_and_jump_back(state.instr)?;
+        process.insn_restore_and_jump_back(state.instr)?;
 
         if state.syscall_dir == SyscallDir::Entry {
             process = process.restart_to_syscall_entry_stop(

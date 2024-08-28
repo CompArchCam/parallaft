@@ -16,7 +16,9 @@ use crate::{
         HandlerContext,
     },
     process::{
-        memory::{Instruction, RawInstruction}, state::Stopped, Process
+        memory::{Instruction, RawInstruction},
+        state::Stopped,
+        Process,
     },
     types::{memory_map::MemoryMap, process_id::InferiorRole},
 };
@@ -46,7 +48,7 @@ pub struct Patch {
 impl Patch {
     fn apply(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if !self.applied {
-            process.instr_inject(self.pattern.replace, self.address)?;
+            process.insn_inject(self.pattern.replace, self.address)?;
             self.applied = true;
         }
         Ok(())
@@ -55,7 +57,7 @@ impl Patch {
     #[allow(dead_code)]
     fn revert(&mut self, process: &mut Process<Stopped>) -> Result<()> {
         if self.applied {
-            process.instr_inject(self.orig_insn, self.address)?;
+            process.insn_inject(self.orig_insn, self.address)?;
             self.applied = false;
         }
         Ok(())
@@ -82,7 +84,11 @@ impl InstructionPatcher {
 }
 
 impl MemoryEventHandler for InstructionPatcher {
-    fn handle_memory_map_created(&self, map: &MemoryMap, ctx: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_memory_map_created(
+        &self,
+        map: &MemoryMap,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         if !map.perms.contains(MMPermissions::EXECUTE) {
             return Ok(());
         }
@@ -165,7 +171,11 @@ impl MemoryEventHandler for InstructionPatcher {
         Ok(())
     }
 
-    fn handle_memory_map_removed(&self, map: &MemoryMap, ctx: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_memory_map_removed(
+        &self,
+        map: &MemoryMap,
+        ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         if self.patterns.is_empty() {
             return Ok(());
         }
@@ -201,7 +211,11 @@ impl MemoryEventHandler for InstructionPatcher {
         Ok(())
     }
 
-    fn handle_memory_map_updated(&self, _map: &MemoryMap, _ctx: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_memory_map_updated(
+        &self,
+        _map: &MemoryMap,
+        _ctx: HandlerContext<Stopped>,
+    ) -> Result<()> {
         todo!()
     }
 }

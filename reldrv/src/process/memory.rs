@@ -6,6 +6,7 @@ use super::{
     Process, PAGEMASK,
 };
 
+use itertools::Itertools;
 use nix::{
     errno::Errno,
     sys::{
@@ -73,16 +74,16 @@ pub mod instructions {
     pub const NOP: Instruction = Instruction::new(0xd503201f); /* nop */
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct ReplacedInstruction {
-    addr: usize,
-    old_word: usize,
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ReplacedInstructions {
+    pub addr: usize,
+    old_words: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ReplacedInstructionWithOldIp {
     old_ip: usize,
-    replaced_insn: ReplacedInstruction,
+    pub replaced_insns: ReplacedInstructions,
 }
 
 impl MemoryAccess for Process<Stopped> {
@@ -141,26 +142,65 @@ impl Process<Stopped> {
         Instruction::new(raw_instr)
     }
 
-    pub fn instr_inject(
+    /// Inject a sequence of instructions starting at the given address
+    pub fn insns_inject(
         &mut self,
-        instr: Instruction,
-        addr: usize,
-    ) -> crate::error::Result<ReplacedInstruction> {
-        let old_word: usize = self.read_value(addr)?;
+        insns: &[Instruction],
+        base_addr: usize,
+    ) -> crate::error::Result<ReplacedInstructions> {
+        let len_bytes = insns.iter().map(|insn| insn.length()).sum::<usize>();
+        let len = (len_bytes - 1) / std::mem::size_of::<usize>() + 1;
 
-        assert!(instr.length() <= std::mem::size_of::<*mut std::ffi::c_void>());
+        let mut old_words = Vec::<usize>::with_capacity(len);
+        let mut new_data_u8 = Vec::<u8>::with_capacity(len_bytes);
 
-        let mask = (1_usize << (instr.length() * 8)) - 1;
-        let new_word = (instr.value as usize) & mask | (old_word & !mask);
+        for insn in insns {
+            new_data_u8.extend(insn.value.to_le_bytes());
+        }
 
-        unsafe { ptrace::write(self.pid, addr as *mut _, new_word as *mut _)? };
+        for i in 0..len {
+            let addr = base_addr + i * std::mem::size_of::<usize>();
+            let old_val = ptrace::read(self.pid, addr as *mut _)? as usize;
+            old_words.push(old_val);
+        }
 
-        Ok(ReplacedInstruction { addr, old_word })
+        let chunks = new_data_u8.into_iter().chunks(size_of::<usize>());
+
+        let new_words = chunks
+            .into_iter()
+            .zip(old_words.iter())
+            .map(|(chunk, old_word)| {
+                let mut buf = old_word.to_le_bytes();
+                for (i, byte) in chunk.enumerate() {
+                    buf[i] = byte;
+                }
+                usize::from_le_bytes(buf)
+            });
+
+        for (i, new_word) in new_words.enumerate() {
+            let addr = base_addr + i * std::mem::size_of::<usize>();
+            unsafe { ptrace::write(self.pid, addr as *mut _, new_word as *mut _)? };
+        }
+
+        Ok(ReplacedInstructions {
+            addr: base_addr,
+            old_words,
+        })
     }
 
-    pub fn instr_inject_and_jump(
+    /// Inject a single instruction at the given address
+    pub fn insn_inject(
         &mut self,
-        instr: Instruction,
+        insn: Instruction,
+        addr: usize,
+    ) -> crate::error::Result<ReplacedInstructions> {
+        self.insns_inject(&[insn], addr)
+    }
+
+    /// Inject a sequence of instructions and jump to it
+    pub fn insns_inject_and_jump(
+        &mut self,
+        insns: &[Instruction],
         keep_ip: bool,
     ) -> crate::error::Result<ReplacedInstructionWithOldIp> {
         let registers = self.read_registers()?;
@@ -175,27 +215,39 @@ impl Process<Stopped> {
             addr = old_ip & *PAGEMASK;
         }
 
-        let replaced_insn = self.instr_inject(instr, addr)?;
+        let replaced_insn = self.insns_inject(insns, addr)?;
 
         self.write_registers(registers.with_ip(addr))?;
 
         Ok(ReplacedInstructionWithOldIp {
             old_ip,
-            replaced_insn,
+            replaced_insns: replaced_insn,
         })
     }
 
-    pub fn instr_restore(&mut self, ctx: ReplacedInstruction) -> crate::error::Result<()> {
-        unsafe { ptrace::write(self.pid, ctx.addr as *mut _, ctx.old_word as *mut _)? };
+    /// Inject a single instruction at the given address and jump to it
+    pub fn insn_inject_and_jump(
+        &mut self,
+        insn: Instruction,
+        keep_ip: bool,
+    ) -> crate::error::Result<ReplacedInstructionWithOldIp> {
+        self.insns_inject_and_jump(&[insn], keep_ip)
+    }
+
+    pub fn insn_restore(&mut self, ctx: ReplacedInstructions) -> crate::error::Result<()> {
+        for (i, &old_word) in ctx.old_words.iter().enumerate() {
+            let addr = ctx.addr + i * std::mem::size_of::<usize>();
+            unsafe { ptrace::write(self.pid, addr as *mut _, old_word as *mut _)? };
+        }
         Ok(())
     }
 
-    pub fn instr_restore_and_jump_back(
+    pub fn insn_restore_and_jump_back(
         &mut self,
         ctx: ReplacedInstructionWithOldIp,
     ) -> crate::error::Result<()> {
-        self.write_registers(self.read_registers()?.with_ip(ctx.old_ip))?;
-        self.instr_restore(ctx.replaced_insn)?;
+        self.modify_registers_with(|r| r.with_ip(ctx.old_ip))?;
+        self.insn_restore(ctx.replaced_insns)?;
 
         Ok(())
     }
@@ -304,7 +356,7 @@ mod tests {
 
         // inject a trap
         let mut regs = process.read_registers()?;
-        let old_instr = process.instr_inject_and_jump(instructions::TRAP, false)?;
+        let old_instr = process.insn_inject_and_jump(instructions::TRAP, false)?;
 
         // expect the trap
         WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
@@ -312,7 +364,7 @@ mod tests {
         assert!(matches!(status, WaitStatus::Stopped(_, Signal::SIGTRAP)));
 
         // jump back
-        process.instr_restore_and_jump_back(old_instr)?;
+        process.insn_restore_and_jump_back(old_instr)?;
 
         let mut regs_now = process.read_registers()?;
 

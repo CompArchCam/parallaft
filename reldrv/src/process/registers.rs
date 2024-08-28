@@ -599,7 +599,7 @@ impl RegisterAccess for Process<Stopped> {
                 ));
 
                 // inject a breakpoint
-                let old_instr = self.instr_inject_and_jump(instructions::TRAP, false)?;
+                let old_instr = self.insn_inject_and_jump(instructions::TRAP, false)?;
 
                 // expect the injected breakpoint
                 let status;
@@ -611,7 +611,7 @@ impl RegisterAccess for Process<Stopped> {
                 regs.regs[7] = x7;
 
                 // restore the original instruction
-                self.instr_restore_and_jump_back(old_instr)?;
+                self.insn_restore_and_jump_back(old_instr)?;
 
                 // re-enter the original syscall
                 self.write_registers(
@@ -640,7 +640,7 @@ impl RegisterAccess for Process<Stopped> {
                 let mut regs = self.read_registers()?;
 
                 // inject a breakpoint
-                let old_instr = self.instr_inject_and_jump(instructions::TRAP, false)?;
+                let old_instr = self.insn_inject_and_jump(instructions::TRAP, false)?;
 
                 // expect the injected breakpoint
                 let status;
@@ -652,31 +652,36 @@ impl RegisterAccess for Process<Stopped> {
                 regs.regs[7] = x7;
 
                 // restore the original instruction
-                self.instr_restore_and_jump_back(old_instr)?;
+                self.insn_restore_and_jump_back(old_instr)?;
 
-                // re-enter the original syscall
-                self.write_registers(
-                    regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize))
-                        .with_syscall_skipped(),
-                )?;
+                if self.instr_eq(
+                    regs.ip() - instructions::SYSCALL.length(),
+                    instructions::SYSCALL,
+                ) {
+                    // re-enter the original syscall
+                    self.write_registers(
+                        regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize))
+                            .with_syscall_skipped(),
+                    )?;
 
-                // kick off the original syscall entry
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
-                debug_assert!(matches!(
-                    ptrace::getsyscallinfo(self.pid)?.op,
-                    ptrace::SyscallInfoOp::Entry { .. }
-                ));
+                    // kick off the original syscall entry
+                    let status;
+                    WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+                    assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                    debug_assert!(matches!(
+                        ptrace::getsyscallinfo(self.pid)?.op,
+                        ptrace::SyscallInfoOp::Entry { .. }
+                    ));
 
-                // syscall exit
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
-                debug_assert!(matches!(
-                    ptrace::getsyscallinfo(self.pid)?.op,
-                    ptrace::SyscallInfoOp::Exit { .. }
-                ));
+                    // syscall exit
+                    let status;
+                    WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+                    assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                    debug_assert!(matches!(
+                        ptrace::getsyscallinfo(self.pid)?.op,
+                        ptrace::SyscallInfoOp::Exit { .. }
+                    ));
+                }
 
                 // restore the original registers
                 self.write_registers(regs)?;

@@ -3,7 +3,7 @@ use log::debug;
 use crate::{
     error::Result,
     process::{
-        memory::{instructions, ReplacedInstruction},
+        memory::{instructions, ReplacedInstructions},
         registers::RegisterAccess,
         state::Stopped,
         Process,
@@ -15,7 +15,7 @@ use super::Breakpoint;
 #[derive(Debug)]
 enum BreakpointState {
     Disabled,
-    Enabled(ReplacedInstruction),
+    Enabled(ReplacedInstructions),
 }
 
 pub struct SoftwareBreakpoint {
@@ -44,7 +44,7 @@ impl Breakpoint for SoftwareBreakpoint {
             return Ok(());
         }
 
-        self.state = BreakpointState::Enabled(process.instr_inject(instructions::TRAP, self.pc)?);
+        self.state = BreakpointState::Enabled(process.insn_inject(instructions::TRAP, self.pc)?);
 
         #[cfg(test)]
         dbg_hex::dbg_hex!(self.pc);
@@ -69,7 +69,7 @@ impl Breakpoint for SoftwareBreakpoint {
 
         debug!("Breakpoint at PC {:#0x} disabled", self.pc);
 
-        process.instr_restore(ctx)?;
+        process.insn_restore(ctx)?;
 
         Ok(())
     }

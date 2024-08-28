@@ -93,15 +93,13 @@ impl<S: ProcessState> Process<S> {
     }
 
     pub unsafe fn with_state<S2: ProcessState>(mut self, state: S2) -> Process<S2> {
-        let handles = self.handles.take().unwrap();
-
         self.owned = false;
 
         let owned = state.is_owned();
 
         Process {
             pid: self.pid,
-            handles: Some(handles),
+            handles: self.handles.take(),
             state,
             owned,
         }
@@ -227,7 +225,9 @@ impl Process<Stopped> {
     ) -> Result<Process<Stopped>> {
         match self.syscall_dir()? {
             SyscallDir::Entry => Ok(self),
-            SyscallDir::Exit => todo!("Process::setup_syscall_entry with syscall-exit-stop"),
+            SyscallDir::Exit => {
+                todo!("Process::restart_to_syscall_entry_stop with syscall-exit-stop")
+            }
             SyscallDir::None => {
                 debug_assert!(self.instr_eq(syscall_instr_ip, instructions::SYSCALL));
 
@@ -249,7 +249,9 @@ impl Process<Stopped> {
         syscall_instr_ip: usize,
     ) -> Result<Process<Stopped>> {
         match self.syscall_dir()? {
-            SyscallDir::Entry => todo!("Process::setup_syscall_exit with syscall-entry-stop"),
+            SyscallDir::Entry => {
+                todo!("Process::restart_to_syscall_exit_stop with syscall-entry-stop")
+            }
             SyscallDir::Exit => Ok(self),
             SyscallDir::None => {
                 debug_assert!(self.instr_eq(syscall_instr_ip, instructions::SYSCALL));

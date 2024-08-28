@@ -23,7 +23,6 @@ use crate::{
     error::{Error, Result, UnexpectedEventReason},
     events::{
         migration::MigrationHandler,
-        module_lifetime::ModuleLifetimeHook,
         process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
@@ -183,7 +182,6 @@ pub struct PerfCounterBasedExecutionPointProvider<'a> {
     main_cpu_set: &'a [usize],
     #[cfg(target_arch = "x86_64")]
     main_cpu_model: CpuModel,
-    is_test: bool,
     checkpoint_count: AtomicU64,
     branch_counter_type: BranchType,
     checker_never_use_branch_count_overflow: bool,
@@ -196,7 +194,6 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
         main_cpu_set: &'a [usize],
         branch_counter_type: BranchType,
         checker_never_use_branch_count_overflow: bool,
-        is_test: bool,
     ) -> Self {
         Self {
             main_branch_counter: Mutex::new(None),
@@ -206,7 +203,6 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             main_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(main_cpu_set)
                 .unwrap()
                 .0,
-            is_test,
             checkpoint_count: AtomicU64::new(0),
             branch_counter_type,
             checker_never_use_branch_count_overflow,
@@ -604,22 +600,6 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
     }
 }
 
-impl ModuleLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
-    where
-        's: 'scope,
-    {
-        if self.is_test {
-            let segment_info_map = self.segment_info_map.lock();
-            assert!(segment_info_map.is_empty());
-        }
-        Ok(())
-    }
-}
-
 impl MigrationHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_checker_migration(&self, context: HandlerContext<Stopped>) -> Result<()> {
         let segment_info_map = self.segment_info_map.lock();
@@ -646,7 +626,6 @@ impl Module for PerfCounterBasedExecutionPointProvider<'_> {
         subs.install_signal_handler(self);
         subs.install_stats_providers(self);
         subs.set_execution_point_provider(self);
-        subs.install_module_lifetime_hook(self);
         subs.install_process_lifetime_hook(self);
         subs.install_standard_syscall_handler(self);
         subs.install_migration_handler(self);

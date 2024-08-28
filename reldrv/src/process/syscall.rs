@@ -29,7 +29,7 @@ impl Process<Stopped> {
         args: SyscallArgs,
         mut restart_parent_old_syscall: bool,
         mut restart_child_old_syscall: bool,
-        force_instr_insertion: bool,
+        force_insn_insertion: bool,
     ) -> Result<WithProcess<Stopped, i64>> {
         // save the old states
         let saved_regs;
@@ -41,58 +41,58 @@ impl Process<Stopped> {
         // block signals during our injected syscall
         ptrace::setsigmask(self.pid, !0)?;
 
-        let op = if force_instr_insertion {
-            SyscallDir::None
-        } else {
-            self.syscall_dir()?
-        };
+        let dir = self.syscall_dir()?;
 
-        match op {
-            SyscallDir::Entry => (),
-            SyscallDir::Exit => {
-                // never restart old syscalls on exit
-                restart_child_old_syscall = false;
-                restart_parent_old_syscall = false;
+        if dir == SyscallDir::None || force_insn_insertion {
+            debug!("Ad-hoc syscall injection");
+            // insert an ad-hoc syscall instruction
+            restart_child_old_syscall = false;
+            restart_parent_old_syscall = false;
 
-                // handle syscall exit
-                debug_assert_eq!(
-                    self.instr_at(
-                        saved_regs.ip() - instructions::SYSCALL.length(),
-                        instructions::SYSCALL.length()
-                    ),
-                    instructions::SYSCALL
-                );
+            saved_instr = Some(
+                self.insns_inject_and_jump(&[instructions::SYSCALL, instructions::TRAP], false)?,
+            );
 
-                self.write_registers(
-                    saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize)),
-                )?; // jump back to previous syscall
+            let status;
+            WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
 
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+            assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
 
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+            debug_assert_eq!(
+                self.read_registers()?.ip(),
+                saved_instr.as_ref().unwrap().replaced_insns.addr + instructions::SYSCALL.length()
+            );
 
-                debug_assert!(self.syscall_dir()?.is_entry());
-            }
-            SyscallDir::None => {
-                debug!("Ad-hoc syscall injection");
-                // insert an ad-hoc syscall instruction
-                restart_child_old_syscall = false;
-                restart_parent_old_syscall = false;
+            debug_assert!(self.syscall_dir()?.is_entry());
+        } else if dir == SyscallDir::Exit {
+            debug!("Injection syscall on exit");
+            // never restart old syscalls on exit
+            restart_child_old_syscall = false;
+            restart_parent_old_syscall = false;
 
-                saved_instr = Some(self.instr_inject_and_jump(instructions::SYSCALL, false)?);
+            // handle syscall exit
+            debug_assert_eq!(
+                self.instr_at(
+                    saved_regs.ip() - instructions::SYSCALL.length(),
+                    instructions::SYSCALL.length()
+                ),
+                instructions::SYSCALL
+            );
 
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+            self.write_registers(
+                saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize)),
+            )?; // jump back to previous syscall
 
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+            let status;
+            WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
 
-                debug_assert!(self.syscall_dir()?.is_entry());
-            }
-        };
+            assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+
+            debug_assert!(self.syscall_dir()?.is_entry());
+        }
 
         // prepare the injected syscall number and arguments
-        self.write_registers(saved_regs.with_sysno(nr).with_syscall_args(args, false))?;
+        self.modify_registers_with(|r| r.with_sysno(nr).with_syscall_args(args, false))?;
 
         // execute our injected syscall
         let mut status;
@@ -129,7 +129,7 @@ impl Process<Stopped> {
             saved_regs,
             saved_sigmask,
             restart_parent_old_syscall,
-            saved_instr,
+            saved_instr.clone(),
         )?;
 
         if let Some(child_pid) = child_pid {
@@ -214,10 +214,22 @@ impl Process<Stopped> {
         restart_old_syscall: bool,
         saved_instr: Option<ReplacedInstructionWithOldIp>,
     ) -> Result<Process<Stopped>> {
+        if let Some(saved_instr) = saved_instr {
+            debug_assert_eq!(
+                process.read_registers()?.ip(),
+                saved_instr.replaced_insns.addr + instructions::SYSCALL.length()
+            );
+            debug_assert!(process.instr_eq(process.read_registers()?.ip(), instructions::TRAP));
+
+            let status;
+            WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+            assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+
+            process.insn_restore_and_jump_back(saved_instr)?;
+        }
+
         if restart_old_syscall {
             let mut saved_regs = saved_regs;
-
-            assert!(saved_instr.is_none());
 
             // jump back to the previous instruction
             debug_assert!(process.instr_eq(
@@ -233,15 +245,7 @@ impl Process<Stopped> {
 
             // restore the registers
             process.write_registers(saved_regs)?;
-        } else {
-            process.write_registers(saved_regs)?;
-        }
 
-        if let Some(saved_instr) = saved_instr {
-            process.instr_restore_and_jump_back(saved_instr)?;
-        }
-
-        if restart_old_syscall {
             // execute the original syscall and expect the syscall event
             // TODO: handle death
             let status;
@@ -259,7 +263,7 @@ impl Process<Stopped> {
                     matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
                 );
             }
-
+        } else {
             process.write_registers(saved_regs)?;
         }
 
@@ -272,6 +276,9 @@ impl Process<Stopped> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::arch::asm;
+
+    use cfg_if::cfg_if;
     use nix::{
         sys::signal::raise,
         unistd::{getpid, gettid, getuid},
@@ -401,6 +408,39 @@ pub(crate) mod tests {
         // program exit
         WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
+        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_syscall_injection_on_signal() -> crate::error::Result<()> {
+        let mut process = ptraced(|| {
+            cfg_if! {
+                if #[cfg(target_arch = "x86_64")] {
+                    unsafe { asm!("int3") };
+                } else if #[cfg(target_arch = "aarch64")] {
+                    unsafe { asm!("brk #0") };
+                }
+            }
+            0
+        });
+
+        let mut status;
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+        assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+
+        // inject a getpid syscall
+        let pid;
+        WithProcess(process, pid) =
+            process.syscall_direct(Sysno::getpid, syscall_args!(), true, true, false)?;
+
+        assert_eq!(pid as i32, process.pid.as_raw());
+
+        process
+            .modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as isize))?;
+
+        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
         assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
