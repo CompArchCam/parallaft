@@ -2,15 +2,19 @@ use log::error;
 use reverie_syscalls::Syscall;
 
 use crate::{
-    dispatcher::{Module, Subscribers}, error::{Error, Result, UnexpectedEventReason}, events::{
+    dispatcher::{Module, Subscribers},
+    error::{Error, Result, UnexpectedEventReason},
+    events::{
         syscall::{
             StandardSyscallEntryCheckerHandlerExitAction,
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
         },
         HandlerContext,
-    }, process::state::Stopped, types::segment_record::saved_syscall::{
+    },
+    process::state::Stopped,
+    types::segment_record::saved_syscall::{
         SavedIncompleteSyscall, SavedIncompleteSyscallKind, SyscallExitAction,
-    }
+    },
 };
 
 pub struct ReplicatedSyscallHandler {}

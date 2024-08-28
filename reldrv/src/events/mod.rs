@@ -12,10 +12,7 @@ use std::thread::Scope;
 
 use crate::{
     check_coord::CheckCoordinator,
-    process::{
-        state::ProcessState,
-        Process,
-    },
+    process::{state::ProcessState, Process},
     types::process_id::InferiorRefMut,
 };
 

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 use crate::{
     dirty_page_trackers::DirtyPageAddressesWithFlags,
     error::{Error, Result},
