@@ -101,12 +101,12 @@ impl Process<Detached> {
     }
 }
 
-// impl RegisterAccess for Process<Detached> {
-//     fn read_registers(&self) -> Result<Registers> {
-//         Ok(self.state.0.registers.clone())
-//     }
+impl RegisterAccess for Process<Detached> {
+    fn read_registers(&self) -> Result<Registers> {
+        Ok(self.state.0.registers.clone())
+    }
 
-//     fn write_registers(&mut self, _regs: Registers) -> Result<()> {
-//         panic!("Cannot write registers to a detached process")
-//     }
-// }
+    fn write_registers(&mut self, _regs: Registers) -> Result<()> {
+        panic!("Cannot write registers to a detached process")
+    }
+}

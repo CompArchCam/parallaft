@@ -545,8 +545,14 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
-        let checker_process = segment.start_checker(self.checker_cpu_set.clone())?;
+        let mut checker_process = segment.start_checker(self.checker_cpu_set.clone())?;
         checker_forking_tracer.end();
+
+        if cfg!(debug_assertions) {
+            let registers;
+            (checker_process, registers) = checker_process.read_registers_precise()?;
+            assert_eq!(registers, segment.reference_start().read_registers()?);
+        }
 
         segment.record.wait_for_initial_event()?;
 
