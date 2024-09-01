@@ -4,6 +4,10 @@ use std::{
 };
 
 use itertools::Itertools;
+use nix::sys::{
+    resource::{getrusage, UsageWho},
+    time::TimeValLike,
+};
 use parking_lot::Mutex;
 use reverie_syscalls::Syscall;
 
@@ -73,6 +77,10 @@ pub enum Event {
 
     // Misc
     AllWall,
+
+    // Shell events
+    ShellUser,
+    ShellSys,
 }
 
 impl Event {
@@ -103,6 +111,9 @@ impl Event {
             Event::CheckerWall => "checker_wall",
 
             Event::AllWall => "all_wall",
+
+            Event::ShellUser => "shell_user",
+            Event::ShellSys => "shell_sys",
         }
     }
 }
@@ -228,6 +239,28 @@ impl ProcessLifetimeHook for Tracer {
         'disp: 'scope,
     {
         *self.exit_status.lock() = Some(exit_reason.exit_code());
+        Ok(())
+    }
+
+    fn handle_all_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'disp,
+        'disp: 'scope,
+    {
+        let usage = getrusage(UsageWho::RUSAGE_SELF)?;
+
+        self.add(
+            Event::ShellUser,
+            Duration::from_nanos(usage.user_time().num_nanoseconds() as _),
+        );
+        self.add(
+            Event::ShellSys,
+            Duration::from_nanos(usage.system_time().num_nanoseconds() as _),
+        );
+
         Ok(())
     }
 }
