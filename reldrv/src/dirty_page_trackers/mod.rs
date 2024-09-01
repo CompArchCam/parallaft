@@ -1,3 +1,4 @@
+#[cfg(feature = "dpt_fpt")]
 pub mod fpt;
 pub mod kpagecount;
 pub mod null;
@@ -14,26 +15,18 @@ pub struct DirtyPageAddressFlags {
     pub contains_writable_only: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct DirtyPageAddressesWithFlags {
-    pub addresses: Box<dyn AsRef<[usize]> + Send + Sync>,
+    pub addresses: Vec<Range<usize>>,
     pub flags: DirtyPageAddressFlags,
 }
 
 impl DirtyPageAddressesWithFlags {
     pub fn empty() -> Self {
         Self {
-            addresses: Box::new(vec![]),
+            addresses: Vec::new(),
             flags: Default::default(),
         }
-    }
-}
-
-impl Debug for DirtyPageAddressesWithFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DirtyPageAddressFlags")
-            .field("contains_writable_only", &self.flags.contains_writable_only)
-            .field("addresses", &self.addresses.as_ref().as_ref())
-            .finish()
     }
 }
 

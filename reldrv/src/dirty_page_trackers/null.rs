@@ -21,7 +21,7 @@ impl DirtyPageAddressTracker for NullDirtyPageTracker {
         _extra_writable_ranges: &[std::ops::Range<usize>],
     ) -> Result<DirtyPageAddressesWithFlags> {
         Ok(DirtyPageAddressesWithFlags {
-            addresses: Box::new([]),
+            addresses: Vec::new(),
             flags: DirtyPageAddressFlags {
                 contains_writable_only: true,
             },

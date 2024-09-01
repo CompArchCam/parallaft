@@ -2,7 +2,7 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::segment::SegmentEventHandler,
-    process::{dirty_pages::PageFlag, state::Stopped},
+    process::{dirty_pages::PageFlagType, state::Stopped},
     types::process_id::{Checker, InferiorId, Main},
 };
 
@@ -10,12 +10,14 @@ use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressesWi
 
 pub struct SoftDirtyPageTracker {
     dont_clear_soft_dirty: bool,
+    dont_use_pagemap_scan: bool,
 }
 
 impl SoftDirtyPageTracker {
-    pub fn new(dont_clear_soft_dirty: bool) -> Self {
+    pub fn new(dont_clear_soft_dirty: bool, dont_use_pagemap_scan: bool) -> Self {
         Self {
             dont_clear_soft_dirty,
+            dont_use_pagemap_scan,
         }
     }
 }
@@ -36,17 +38,25 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                 .lock()
                 .as_ref()
                 .unwrap()
-                .get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?,
+                .get_dirty_pages(
+                    PageFlagType::SoftDirty,
+                    extra_writable_ranges,
+                    !self.dont_use_pagemap_scan,
+                )?,
             InferiorId::Checker(segment) => segment
                 .checker_status
                 .lock()
                 .process()
                 .unwrap()
-                .get_dirty_pages(PageFlag::SoftDirty, extra_writable_ranges)?,
+                .get_dirty_pages(
+                    PageFlagType::SoftDirty,
+                    extra_writable_ranges,
+                    !self.dont_use_pagemap_scan,
+                )?,
         };
 
         Ok(DirtyPageAddressesWithFlags {
-            addresses: Box::new(pages),
+            addresses: pages,
             flags: DirtyPageAddressFlags {
                 contains_writable_only: true,
             },

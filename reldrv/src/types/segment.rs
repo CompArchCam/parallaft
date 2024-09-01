@@ -3,6 +3,7 @@ use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use log::{debug, error, info};
 use parking_lot::{Condvar, MappedMutexGuard, Mutex, MutexGuard};
 
@@ -14,7 +15,7 @@ use crate::events::comparator::{
 use crate::process::detach::Detached;
 use crate::process::dirty_pages::merge_page_addresses;
 use crate::process::state::{Stopped, Unowned, WithProcess};
-use crate::process::Process;
+use crate::process::{Process, PAGESIZE};
 
 use super::checker::{CheckFailReason, CheckerStatus};
 use super::checkpoint::Checkpoint;
@@ -211,9 +212,12 @@ impl Segment {
         comparator: &dyn MemoryComparator,
     ) -> Result<(Process<Stopped>, Process<Stopped>, Option<CheckFailReason>)> {
         let dpa_merged = merge_page_addresses(
-            dpa_main.addresses.as_ref().as_ref(),
-            dpa_checker.addresses.as_ref().as_ref(),
-            ignored_pages,
+            &dpa_main.addresses,
+            &dpa_checker.addresses,
+            &ignored_pages
+                .iter()
+                .map(|&x| x..x + *PAGESIZE)
+                .collect_vec(),
         );
 
         let checker_writable_ranges = checker_process.get_writable_ranges()?;
@@ -270,7 +274,8 @@ impl Segment {
         let (checker_process, mut checker_regs) = checker_process.read_registers_precisely()?;
         checker_regs = checker_regs.strip_orig().with_resume_flag_cleared();
 
-        let (reference_process, mut reference_regs) = reference_process.read_registers_precisely()?;
+        let (reference_process, mut reference_regs) =
+            reference_process.read_registers_precisely()?;
         reference_regs = reference_regs.strip_orig().with_resume_flag_cleared();
 
         let reg_cmp_result =

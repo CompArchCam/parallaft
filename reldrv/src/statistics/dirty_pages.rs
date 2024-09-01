@@ -1,6 +1,7 @@
 use crate::dispatcher::Subscribers;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::process::state::Stopped;
+use crate::process::PAGESIZE;
 use crate::statistics_list;
 use crate::types::checker::CheckerStatus;
 use crate::types::process_id::Checker;
@@ -43,8 +44,13 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
             ..
         } = &*checker_status
         {
-            self.avg
-                .update(dirty_page_addresses.addresses.as_ref().as_ref().len() as _);
+            self.avg.update(
+                dirty_page_addresses
+                    .addresses
+                    .iter()
+                    .map(|x| (x.end - x.start) / *PAGESIZE)
+                    .sum::<usize>() as _,
+            );
         }
 
         Ok(())

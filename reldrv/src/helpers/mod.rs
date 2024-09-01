@@ -1,4 +1,5 @@
 pub mod affinity;
+#[cfg(feature = "helper_checkpoint_size_limiter")]
 pub mod checkpoint_size_limiter;
 pub mod cpufreq;
 #[cfg(target_arch = "aarch64")]

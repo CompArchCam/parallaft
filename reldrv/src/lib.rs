@@ -71,11 +71,13 @@ use types::perf_counter::symbolic_events::BranchType;
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
 #[cfg(target_arch = "x86_64")]
 use crate::comparators::intel_hybrid_workaround::IntelHybridWorkaround;
+#[cfg(feature = "dpt_fpt")]
 use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::Dispatcher;
 
 use crate::helpers::affinity::AffinitySetter;
+#[cfg(feature = "helper_checkpoint_size_limiter")]
 use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 #[cfg(target_arch = "x86_64")]
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
@@ -111,6 +113,7 @@ use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DirtyPageAddressTrackerType {
     SoftDirty,
+    #[cfg(feature = "dpt_fpt")]
     Fpt,
     #[cfg(feature = "dpt_uffd")]
     Uffd,
@@ -122,6 +125,7 @@ impl ToString for DirtyPageAddressTrackerType {
     fn to_string(&self) -> String {
         match self {
             Self::SoftDirty => "soft-dirty",
+            #[cfg(feature = "dpt_fpt")]
             Self::Fpt => "fpt",
             #[cfg(feature = "dpt_uffd")]
             Self::Uffd => "uffd",
@@ -207,6 +211,7 @@ pub struct RelShellOptions {
 
     // dirty page tracker backend to use
     pub dirty_page_tracker: DirtyPageAddressTrackerType,
+    pub dont_use_pagemap_scan: bool,
 
     // soft dirty page tracker options
     pub dont_clear_soft_dirty: bool,
@@ -419,6 +424,7 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
         }
     }
 
+    #[cfg(feature = "helper_checkpoint_size_limiter")]
     disp.register_module(CheckpointSizeLimiter::new(
         options.checkpoint_size_watermark,
     ));
@@ -461,8 +467,12 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     // Dirty page trackers
     match options.dirty_page_tracker {
         DirtyPageAddressTrackerType::SoftDirty => {
-            disp.register_module(SoftDirtyPageTracker::new(options.dont_clear_soft_dirty));
+            disp.register_module(SoftDirtyPageTracker::new(
+                options.dont_clear_soft_dirty,
+                options.dont_use_pagemap_scan,
+            ));
         }
+        #[cfg(feature = "dpt_fpt")]
         DirtyPageAddressTrackerType::Fpt => {
             disp.register_module(FptDirtyPageTracker::new());
         }
@@ -471,7 +481,9 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
             disp.register_module(UffdDirtyPageTracker::new(options.dont_clear_soft_dirty));
         }
         DirtyPageAddressTrackerType::KPageCount => {
-            disp.register_module(KPageCountDirtyPageTracker::new());
+            disp.register_module(KPageCountDirtyPageTracker::new(
+                options.dont_use_pagemap_scan,
+            ));
         }
         DirtyPageAddressTrackerType::None => {
             disp.register_module(NullDirtyPageTracker::new());

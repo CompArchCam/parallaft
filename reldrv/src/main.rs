@@ -166,8 +166,13 @@ struct CliArgs {
     exec_point_replay_checker_never_use_branch_count_overflow: bool,
 
     /// Dirty page tracker to use
-    #[arg(long, default_value_t = Default::default())]
+    #[arg(long, default_value_t)]
     dirty_page_tracker: DirtyPageAddressTrackerType,
+
+    /// Don't use the faster PAGEMAP_SCAN ioctl to get dirty pages. Only
+    /// applicable to soft-dirty and k-page-count page tracker.
+    #[arg(long)]
+    dont_use_pagemap_scan: bool,
 
     /// Enable on-demand fork (ODF)
     #[arg(long)]
@@ -338,6 +343,7 @@ fn main() {
             exec_point_replay_branch_type: cli.exec_point_replay_branch_type,
             exec_point_replay_checker_never_use_branch_count_overflow: cli.exec_point_replay_checker_never_use_branch_count_overflow,
             dirty_page_tracker: cli.dirty_page_tracker,
+            dont_use_pagemap_scan: cli.dont_use_pagemap_scan,
             dont_clear_soft_dirty: cli.dont_clear_soft_dirty,
             enable_odf: cli.odf,
             sample_memory_usage: cli.sample_memory_usage,

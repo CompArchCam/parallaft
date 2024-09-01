@@ -1,17 +1,21 @@
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    process::dirty_pages::PageFlag,
+    process::dirty_pages::PageFlagType,
     types::process_id::InferiorId,
 };
 
 use super::{DirtyPageAddressFlags, DirtyPageAddressTracker, DirtyPageAddressesWithFlags};
 
-pub struct KPageCountDirtyPageTracker;
+pub struct KPageCountDirtyPageTracker {
+    dont_use_pagemap_scan: bool,
+}
 
 impl KPageCountDirtyPageTracker {
-    pub fn new() -> Self {
-        Self
+    pub fn new(dont_use_pagemap_scan: bool) -> Self {
+        Self {
+            dont_use_pagemap_scan,
+        }
     }
 }
 
@@ -31,17 +35,25 @@ impl DirtyPageAddressTracker for KPageCountDirtyPageTracker {
                 .lock()
                 .as_ref()
                 .unwrap()
-                .get_dirty_pages(PageFlag::KPageCountEqualsOne, extra_writable_ranges)?,
+                .get_dirty_pages(
+                    PageFlagType::KPageCountEqualsOne,
+                    extra_writable_ranges,
+                    !self.dont_use_pagemap_scan,
+                )?,
             InferiorId::Checker(segment) => segment
                 .checker_status
                 .lock()
                 .process()
                 .unwrap()
-                .get_dirty_pages(PageFlag::KPageCountEqualsOne, extra_writable_ranges)?,
+                .get_dirty_pages(
+                    PageFlagType::KPageCountEqualsOne,
+                    extra_writable_ranges,
+                    !self.dont_use_pagemap_scan,
+                )?,
         };
 
         Ok(DirtyPageAddressesWithFlags {
-            addresses: Box::new(pages),
+            addresses: pages,
             flags: DirtyPageAddressFlags {
                 contains_writable_only: true,
             },
