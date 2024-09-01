@@ -136,7 +136,7 @@ impl Default for DirtyPageAddressTrackerType {
     fn default() -> Self {
         cfg_if! {
             if #[cfg(target_arch = "aarch64")] {
-                Self::None
+                Self::KPageCount
             }
             else {
                 Self::SoftDirty

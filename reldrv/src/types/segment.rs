@@ -267,10 +267,10 @@ impl Segment {
         reference_process: R,
         comparator: &dyn RegisterComparator,
     ) -> Result<(C, R, Option<CheckFailReason>)> {
-        let (checker_process, mut checker_regs) = checker_process.read_registers_precise()?;
+        let (checker_process, mut checker_regs) = checker_process.read_registers_precisely()?;
         checker_regs = checker_regs.strip_orig().with_resume_flag_cleared();
 
-        let (reference_process, mut reference_regs) = reference_process.read_registers_precise()?;
+        let (reference_process, mut reference_regs) = reference_process.read_registers_precisely()?;
         reference_regs = reference_regs.strip_orig().with_resume_flag_cleared();
 
         let reg_cmp_result =

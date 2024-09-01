@@ -188,6 +188,10 @@ impl<S: ProcessState> Process<S> {
     pub fn forget(self) {
         unsafe { self.with_state(Unowned) };
     }
+
+    pub fn with_ret<R>(self, ret: R) -> WithProcess<S, R> {
+        WithProcess(self, ret)
+    }
 }
 
 impl Process<Stopped> {
@@ -275,42 +279,140 @@ impl Process<Stopped> {
         }
     }
 
-    pub fn save_syscall_context(&mut self) -> crate::error::Result<SavedSyscallContext> {
+    pub fn skip_syscall(mut self) -> crate::error::Result<Process<Stopped>> {
+        assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
         let regs = self.read_registers()?;
+        self.write_registers(regs.with_syscall_skipped())?;
+        let status;
+        WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+        assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+        debug_assert_eq!(self.syscall_dir()?, SyscallDir::Exit);
+        self.write_registers(regs)?;
+        Ok(self)
+    }
+
+    /// Run the given function with the process in a non-syscall-stop context.
+    /// This is useful for reading/writing the full register set (i.e. with the
+    /// correct x7) in a syscall-stop. Note that the instruction pointer of the
+    /// process is changed during the invocation of function f. So changes to
+    /// the instruction pointer in f will be masked.
+    pub fn run_without_syscall_stop_context<R>(
+        mut self,
+        f: impl FnOnce(Process<Stopped>) -> crate::error::Result<WithProcess<Stopped, R>>,
+    ) -> crate::error::Result<WithProcess<Stopped, R>> {
+        match self.syscall_dir()? {
+            SyscallDir::Entry => {
+                // syscall entry
+                self = self.skip_syscall()?;
+
+                // inject a breakpoint
+                let old_instr = self.insn_inject_and_jump(instructions::TRAP, false)?;
+
+                // expect the injected breakpoint
+                let status;
+                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Stopped(self.pid, Signal::SIGTRAP));
+
+                // execute f
+                let result;
+                WithProcess(self, result) = f(self)?;
+
+                debug_assert!(self.instr_eq(
+                    old_instr.old_ip - instructions::SYSCALL.length(),
+                    instructions::SYSCALL
+                ));
+
+                // restore the original instruction
+                self.insn_restore_and_jump_back(old_instr)?;
+
+                // re-enter the original syscall
+                self.modify_registers_with(|r| {
+                    r.with_offsetted_ip(-(instructions::SYSCALL.length() as isize))
+                })?;
+
+                let status;
+                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
+                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
+
+                Ok(WithProcess(self, result))
+            }
+            SyscallDir::Exit => {
+                // inject a breakpoint
+                let old_instr = self.insn_inject_and_jump(instructions::TRAP, false)?;
+
+                // expect the injected breakpoint
+                let status;
+                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Stopped(self.pid, Signal::SIGTRAP));
+
+                // execute f
+                let result;
+                WithProcess(self, result) = f(self)?;
+
+                // restore the original instruction
+                self.insn_restore_and_jump_back(old_instr)?;
+
+                Ok(WithProcess(self, result))
+            }
+            _ => f(self),
+        }
+    }
+
+    pub fn save_syscall_context_and_reg(
+        mut self,
+    ) -> crate::error::Result<WithProcess<Stopped, SavedSyscallContext>> {
+        let regs;
+        (self, regs) = self.read_registers_precisely()?;
 
         match self.syscall_dir()? {
             SyscallDir::Entry => {
                 let syscall_ip = regs.ip() - SYSCALL.length();
                 debug_assert!(self.instr_eq(syscall_ip, SYSCALL));
 
-                self.write_registers(regs.with_syscall_skipped())?;
+                self = self.skip_syscall()?;
 
-                Ok(SavedSyscallContext {
-                    dir: SyscallDir::Entry,
-                    regs,
-                })
+                Ok(WithProcess(
+                    self,
+                    SavedSyscallContext {
+                        dir: SyscallDir::Entry,
+                        regs,
+                    },
+                ))
             }
             SyscallDir::Exit => {
                 let syscall_ip = regs.ip() - SYSCALL.length();
                 debug_assert!(self.instr_eq(syscall_ip, SYSCALL));
 
-                Ok(SavedSyscallContext {
-                    dir: SyscallDir::Exit,
-                    regs,
-                })
+                Ok(WithProcess(
+                    self,
+                    SavedSyscallContext {
+                        dir: SyscallDir::Exit,
+                        regs,
+                    },
+                ))
             }
-            SyscallDir::None => Ok(SavedSyscallContext {
-                dir: SyscallDir::None,
-                regs,
-            }),
+            SyscallDir::None => Ok(WithProcess(
+                self,
+                SavedSyscallContext {
+                    dir: SyscallDir::None,
+                    regs,
+                },
+            )),
         }
     }
 
-    pub fn restore_syscall_context(
+    pub fn restore_syscall_context_and_reg(
         mut self,
         ctx: SavedSyscallContext,
     ) -> crate::error::Result<Process<Stopped>> {
         let regs = ctx.regs;
+
+        if self.syscall_dir()? == SyscallDir::Entry {
+            self = self.skip_syscall()?;
+        }
+
+        self = self.write_registers_precisely(regs)?;
 
         match ctx.dir {
             SyscallDir::Entry => {
@@ -325,30 +427,8 @@ impl Process<Stopped> {
                 assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
                 debug_assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
             }
-            SyscallDir::Exit => {
-                let regs = ctx.regs;
-
-                let syscall_ip = regs.ip() - SYSCALL.length();
-
-                debug_assert!(self.instr_eq(syscall_ip, SYSCALL));
-                self.write_registers(regs.with_ip(syscall_ip).with_syscall_skipped())?;
-
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
-
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
-                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Entry);
-
-                let status;
-                WithProcess(self, status) = self.resume()?.waitpid()?.unwrap_stopped();
-
-                assert_eq!(status, WaitStatus::PtraceSyscall(self.pid));
-                debug_assert_eq!(self.syscall_dir()?, SyscallDir::Exit);
-            }
-            SyscallDir::None => (),
+            _ => (),
         }
-
-        self.write_registers(regs)?;
 
         Ok(self)
     }

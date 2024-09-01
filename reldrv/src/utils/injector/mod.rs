@@ -1,12 +1,12 @@
 use std::{mem::size_of, slice};
 
 use itertools::repeat_n;
-use log::debug;
+use log::{debug, info};
 use nix::sys::{
     mman::{MapFlags, ProtFlags},
     wait::WaitStatus,
 };
-use reverie_syscalls::MemoryAccess;
+use reverie_syscalls::{Displayable, MemoryAccess, Syscall};
 use syscalls::Sysno;
 
 use crate::{
@@ -73,21 +73,19 @@ pub unsafe fn inject_and_run<T, R>(
     )?;
     let base_addr = base_addr?;
 
-    let syscall_ctx = process.save_syscall_context()?;
+    let syscall_ctx;
+    WithProcess(process, syscall_ctx) = process.save_syscall_context_and_reg()?;
 
     process.write_exact(base_addr.into(), &buf)?;
 
-    let old_regs = process.read_registers()?;
-
-    let new_regs = old_regs
-        .with_sp(
+    process.modify_registers_with(|r| {
+        r.with_sp(
             base_addr + stack_addr + STACK_SIZE, /* stack grows down */
         )
         .with_ip(base_addr + bin_addr)
         .with_arg0(base_addr + arg_addr)
-        .with_arg1(base_addr + out_addr);
-
-    process.write_registers(new_regs)?;
+        .with_arg1(base_addr + out_addr)
+    })?;
 
     debug!("Starting parasite");
     let mut process_running = process.resume()?;
@@ -100,6 +98,14 @@ pub unsafe fn inject_and_run<T, R>(
             WaitStatus::PtraceSyscall(_) => {
                 let regs = process.read_registers()?;
                 let syscall_dir = process.syscall_dir()?;
+
+                if syscall_dir == SyscallDir::Entry {
+                    info!(
+                        "Parasite syscall: {}",
+                        Syscall::from_raw(regs.sysno().unwrap(), regs.syscall_args())
+                            .display(&process)
+                    );
+                }
 
                 if syscall_dir == SyscallDir::Entry && regs.sysno() == Some(Sysno::rt_sigreturn) {
                     debug!("Parasite finished");
@@ -114,6 +120,7 @@ pub unsafe fn inject_and_run<T, R>(
             WaitStatus::Exited(_, _) => panic!("Process exited unexpectedly"),
             WaitStatus::Signaled(_, sig, _) => panic!("Process unexpectedly signaled with {}", sig),
             WaitStatus::Stopped(_, sig) => {
+                info!("Parasite signal: {}", sig);
                 process_running = process.resume_with_signal(sig)?;
                 continue;
             }
@@ -123,11 +130,9 @@ pub unsafe fn inject_and_run<T, R>(
         process_running = process.resume()?;
     }
 
-    process = process.restore_syscall_context(syscall_ctx)?;
+    process = process.restore_syscall_context_and_reg(syscall_ctx)?;
 
     let out: R = process.read_value(base_addr + out_addr)?;
-
-    process.write_registers(old_regs)?;
 
     let result;
     WithProcess(process, result) =

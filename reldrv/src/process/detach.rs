@@ -23,7 +23,7 @@ impl ProcessState for Detached {}
 impl Process<Stopped> {
     pub fn detach(mut self) -> Result<Process<Detached>> {
         let registers;
-        (self, registers) = self.read_registers_precise()?;
+        (self, registers) = self.read_registers_precisely()?;
 
         let saved_ctx = self.insn_inject_and_jump(instructions::TRAP, false)?;
         let syscall_dir = self.syscall_dir()?;

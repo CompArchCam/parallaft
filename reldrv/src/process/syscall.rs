@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, info};
 use nix::{
     sched::CloneFlags,
     sys::{
@@ -201,7 +201,7 @@ impl Process<Stopped> {
     }
 
     fn save_state(process: Process<Stopped>) -> Result<(Process<Stopped>, Registers, u64)> {
-        let (process, regs) = process.read_registers_precise()?;
+        let (process, regs) = process.read_registers_precisely()?;
         let pid = process.pid;
 
         Ok((process, regs, ptrace::getsigmask(pid)?))
@@ -596,7 +596,7 @@ pub(crate) mod tests {
         #[cfg(target_arch = "aarch64")]
         {
             let regs_precise;
-            (_, regs_precise) = parent.read_registers_precise()?;
+            (_, regs_precise) = parent.read_registers_precisely()?;
             assert_eq!(regs_precise.with_x7(0), regs);
             assert_eq!(child.read_registers()?.with_x7(0), regs);
         }
