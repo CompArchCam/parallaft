@@ -82,7 +82,7 @@ pub struct ReplacedInstructions {
 
 #[derive(Debug, Clone)]
 pub struct ReplacedInstructionWithOldIp {
-    old_ip: usize,
+    pub old_ip: usize,
     pub replaced_insns: ReplacedInstructions,
 }
 
@@ -301,10 +301,11 @@ mod tests {
         },
         unistd::getpid,
     };
+    use reverie_syscalls::MemoryAccess;
 
     use crate::{
         error::Result,
-        process::{memory::instructions, state::WithProcess},
+        process::{memory::instructions, state::WithProcess, PAGEMASK},
         test_utils::ptraced,
     };
 
@@ -356,7 +357,12 @@ mod tests {
 
         // inject a trap
         let mut regs = process.read_registers()?;
+        let addr = regs.ip() & *PAGEMASK;
+        let old_word = process.read_value::<_, usize>(addr)?;
         let old_instr = process.insn_inject_and_jump(instructions::TRAP, false)?;
+
+        assert_eq!(old_instr.replaced_insns.old_words.len(), 1);
+        assert_eq!(old_word, old_instr.replaced_insns.old_words[0]);
 
         // expect the trap
         WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
@@ -381,6 +387,9 @@ mod tests {
 
         // check register matches
         assert_eq!(regs_now, regs);
+
+        let new_word = process.read_value::<_, usize>(addr)?;
+        assert_eq!(old_word, new_word);
 
         // program exit
         WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
