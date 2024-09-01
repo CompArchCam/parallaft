@@ -2,6 +2,7 @@ use cfg_if::cfg_if;
 use clap::ValueEnum;
 use nix::unistd::Pid;
 use perf_event::SampleSkid;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
@@ -72,7 +73,7 @@ fn get_expr(branch_type: BranchType, cpu_model: CpuModel) -> Expr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
 pub enum BranchType {
     #[default]
     AllExclFar,

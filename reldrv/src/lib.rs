@@ -20,10 +20,11 @@ pub mod utils;
 #[cfg(test)]
 mod test_utils;
 
-use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 use cfg_if::cfg_if;
@@ -40,6 +41,7 @@ use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
 use dirty_page_trackers::null::NullDirtyPageTracker;
 #[cfg(feature = "dpt_uffd")]
 use dirty_page_trackers::uffd::UffdDirtyPageTracker;
+use dirty_page_trackers::DirtyPageAddressTrackerType;
 use dispatcher::Module;
 
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
@@ -47,13 +49,14 @@ use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
 use helpers::insn_patcher::InstructionPatcher;
 use helpers::madviser::Madviser;
-use nix::sys::signal::Signal;
+use nix::sys::signal::{raise, Signal};
 use nix::sys::wait::{WaitPidFlag, WaitStatus};
-use nix::unistd::{getpid, Pid};
+use nix::unistd::{fork, getpid, ForkResult, Pid};
 
 use log::info;
 use process::state::{Running, WithProcess};
 use process::Process;
+use serde::{Deserialize, Serialize};
 use signal_handlers::begin_protection::BeginProtectionHandler;
 use signal_handlers::mrs::MrsHandler;
 use signal_handlers::slice_segment::SliceSegmentHandler;
@@ -62,8 +65,7 @@ use slicers::entire_program::EntireProgramSlicer;
 use slicers::fixed_interval::FixedIntervalSlicer;
 use slicers::{ReferenceType, SlicerType};
 use statistics::perf::CounterKind;
-
-use clap::ValueEnum;
+use syscalls::{syscall, Sysno};
 use throttlers::nr_checkers::NrCheckersBasedThrottler;
 use types::exit_reason::ExitReason;
 use types::perf_counter::symbolic_events::BranchType;
@@ -110,54 +112,16 @@ use crate::exec_point_providers::pmu::PerfCounterBasedExecutionPointProvider;
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::{cpuid::CpuidHandler, rdtsc::RdtscHandler};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum DirtyPageAddressTrackerType {
-    SoftDirty,
-    #[cfg(feature = "dpt_fpt")]
-    Fpt,
-    #[cfg(feature = "dpt_uffd")]
-    Uffd,
-    KPageCount,
-    None,
-}
-
-impl ToString for DirtyPageAddressTrackerType {
-    fn to_string(&self) -> String {
-        match self {
-            Self::SoftDirty => "soft-dirty",
-            #[cfg(feature = "dpt_fpt")]
-            Self::Fpt => "fpt",
-            #[cfg(feature = "dpt_uffd")]
-            Self::Uffd => "uffd",
-            Self::KPageCount => "k-page-count",
-            Self::None => "none",
-        }
-        .to_string()
-    }
-}
-
-impl Default for DirtyPageAddressTrackerType {
-    fn default() -> Self {
-        cfg_if! {
-            if #[cfg(target_arch = "aarch64")] {
-                Self::KPageCount
-            }
-            else {
-                Self::SoftDirty
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StatsOutput {
     File(PathBuf),
     StdOut,
 }
 
-#[derive(Builder, Derivative)]
+#[derive(Builder, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, Default)]
 #[builder(default, pattern = "owned")]
+#[serde(default)]
 pub struct RelShellOptions {
     /// Dump statistics
     pub dump_stats: Option<StatsOutput>,
@@ -178,9 +142,11 @@ pub struct RelShellOptions {
     pub check_coord_flags: CheckCoordinatorOptions,
 
     /// Checkpoint period
+    #[derivative(Default(value = "1000000000"))]
     pub checkpoint_period: u64,
 
     // nr segments based throttler plugin options
+    #[derivative(Default(value = "16"))]
     pub max_nr_live_segments: usize,
 
     // memory-based throttler plugin options
@@ -222,6 +188,7 @@ pub struct RelShellOptions {
     // memory sampler options
     pub sample_memory_usage: bool,
     pub memory_sample_includes_rt: bool,
+    #[derivative(Default(value = "Duration::from_millis(500)"))]
     pub memory_sample_interval: Duration,
 
     // speculation control options
@@ -237,9 +204,7 @@ pub struct RelShellOptions {
 
     // slicer
     pub slicer: SlicerType,
-
-    #[derivative(Default(value = "true"))]
-    pub slicer_auto_start: bool,
+    pub slicer_dont_auto_start: bool,
 
     // fixed interval slicer
     pub fixed_interval_slicer_skip: Option<u64>,
@@ -254,9 +219,11 @@ pub struct RelShellOptions {
     pub memory_comparator: MemoryComparatorType,
 
     // integration test
+    #[serde(skip)]
     pub is_test: bool,
 
     // extra modules
+    #[serde(skip)]
     #[derivative(Debug = "ignore")]
     pub extra_modules: Vec<Box<dyn Module + Sync>>,
 }
@@ -285,10 +252,7 @@ impl RelShellOptionsBuilder {
 }
 
 pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
-    info!(
-        "Starting with args {:?}",
-        std::env::args_os().collect::<Vec<OsString>>()
-    );
+    info!("Starting with options {:#?}", &options);
 
     #[cfg(target_arch = "x86_64")]
     let mut cpuid_overrides = Vec::from(cpuid::overrides::NO_RDRAND);
@@ -378,7 +342,7 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
                 options.fixed_interval_slicer_reference_type,
                 &options.main_cpu_set,
                 options.is_test,
-                options.slicer_auto_start,
+                !options.slicer_dont_auto_start,
             ));
         }
         SlicerType::EntireProgram => {
@@ -542,4 +506,26 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     }
 
     exit_status
+}
+
+pub fn run(cmd: &mut Command, options: RelShellOptions) -> ExitReason {
+    if options.enable_odf {
+        unsafe { syscall!(Sysno::prctl, 65, 0, 0, 0, 0) }
+            .expect("Failed to initialise on-demand fork (ODF). Check your kernel support.");
+    }
+
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => parent_work(child, options),
+        Ok(ForkResult::Child) => {
+            let err = unsafe {
+                cmd.pre_exec(move || {
+                    raise(Signal::SIGSTOP).unwrap();
+                    Ok(())
+                })
+                .exec()
+            };
+            panic!("failed to spawn subcommand: {:?}", err)
+        }
+        Err(err) => panic!("Fork failed: {}", err),
+    }
 }

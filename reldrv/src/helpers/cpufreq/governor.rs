@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{Error, Result};
 
 use super::utils::{
@@ -7,7 +9,7 @@ use super::utils::{
     set_cpufreq_max_freq, set_cpufreq_speed, strings,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CpuFreqGovernor {
     Ondemand { max_freq_khz: Option<u64> },
     Userspace { speed_khz: u64 },

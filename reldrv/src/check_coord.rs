@@ -15,6 +15,7 @@ use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 
 use reverie_syscalls::{Displayable, Syscall, SyscallArgs, SyscallInfo};
 use scopeguard::defer;
+use serde::{Deserialize, Serialize};
 
 use crate::dirty_page_trackers::ExtraWritableRangesProvider;
 use crate::dispatcher::Dispatcher;
@@ -69,7 +70,7 @@ pub struct CheckCoordinator<'disp, 'modules, 'tracer: 'disp> {
     checker_cpu_set: Vec<usize>,
 }
 
-#[derive(Debug, Default, Clone, Builder)]
+#[derive(Debug, Default, Clone, Builder, Serialize, Deserialize)]
 #[builder(default)]
 pub struct CheckCoordinatorOptions {
     /// Don't compare state between a completed checker and the checkpoint. Assume their state matches.

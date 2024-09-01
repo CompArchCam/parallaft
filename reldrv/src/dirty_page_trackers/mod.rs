@@ -6,9 +6,36 @@ pub mod soft_dirty;
 #[cfg(feature = "dpt_uffd")]
 pub mod uffd;
 
+use cfg_if::cfg_if;
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, ops::Range};
 
 use crate::{error::Result, types::process_id::InferiorId};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+pub enum DirtyPageAddressTrackerType {
+    SoftDirty,
+    #[cfg(feature = "dpt_fpt")]
+    Fpt,
+    #[cfg(feature = "dpt_uffd")]
+    Uffd,
+    KPageCount,
+    None,
+}
+
+impl Default for DirtyPageAddressTrackerType {
+    fn default() -> Self {
+        cfg_if! {
+            if #[cfg(target_arch = "aarch64")] {
+                Self::KPageCount
+            }
+            else {
+                Self::SoftDirty
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DirtyPageAddressFlags {

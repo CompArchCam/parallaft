@@ -37,6 +37,8 @@ userfaultfd = { git = "https://github.com/mbyzhang/userfaultfd-rs.git", features
 pidfd_getfd = { version = "0.2.2", optional = true }
 pidfd = "0.2.4"
 strum = { version = "0.26.3", features = ["derive"] }
+serde = "1.0.209"
+serde_yaml = "0.9.34"
 
 [dev-dependencies]
 tempfile = "3"

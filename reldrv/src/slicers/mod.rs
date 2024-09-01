@@ -1,12 +1,13 @@
 use std::fmt::Display;
 
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 pub mod dynamic;
 pub mod entire_program;
 pub mod fixed_interval;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default, Serialize, Deserialize)]
 pub enum ReferenceType {
     #[default]
     Instructions,
@@ -31,7 +32,7 @@ impl Into<perf_event::events::Hardware> for ReferenceType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default, Serialize, Deserialize)]
 pub enum SlicerType {
     #[default]
     Null,

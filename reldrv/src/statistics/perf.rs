@@ -3,6 +3,7 @@ use clap::ValueEnum;
 use nix::unistd::Pid;
 use parking_lot::Mutex;
 use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, DynamicBuilder, Hardware};
+use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
@@ -14,7 +15,7 @@ use crate::types::process_id::Main;
 
 use super::StatisticValue;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize)]
 pub enum CounterKind {
     LLLoads,
     LLLoadMisses,
