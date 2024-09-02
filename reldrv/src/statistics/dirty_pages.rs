@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::dispatcher::Subscribers;
 use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
 use crate::process::state::Stopped;
@@ -7,10 +9,10 @@ use crate::types::checker::CheckerStatus;
 use crate::types::process_id::Checker;
 use crate::{dispatcher::Module, error::Result};
 
-use super::{RunningAverage, StatisticValue, StatisticsProvider};
+use super::{StatisticValue, StatisticsProvider};
 
 pub struct DirtyPageStatsCollector {
-    avg: RunningAverage,
+    total_dirty_pages: AtomicU64,
 }
 
 impl Default for DirtyPageStatsCollector {
@@ -22,7 +24,7 @@ impl Default for DirtyPageStatsCollector {
 impl DirtyPageStatsCollector {
     pub fn new() -> Self {
         Self {
-            avg: RunningAverage::new(),
+            total_dirty_pages: AtomicU64::new(0),
         }
     }
 }
@@ -44,12 +46,13 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
             ..
         } = &*checker_status
         {
-            self.avg.update(
+            self.total_dirty_pages.fetch_add(
                 dirty_page_addresses
                     .addresses
                     .iter()
                     .map(|x| (x.end - x.start) / *PAGESIZE)
                     .sum::<usize>() as _,
+                Ordering::SeqCst,
             );
         }
 
@@ -63,7 +66,7 @@ impl StatisticsProvider for DirtyPageStatsCollector {
     }
 
     fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
-        statistics_list!(nr_dirty_pages = self.avg.get())
+        statistics_list!(total_dirty_pages = self.total_dirty_pages.load(Ordering::SeqCst))
     }
 }
 
