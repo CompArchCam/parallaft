@@ -5,3 +5,16 @@ max_nr_live_segments: 5
 exec_point_replay: true
 slicer: !FixedInterval
 dump_stats: !StdOut
+hwmon_sensor_paths:
+- hwmon: macsmc_hwmon
+  sensor: CPU P-cores Power
+- hwmon: macsmc_hwmon
+  sensor: CPU E-cores Power
+- hwmon: macsmc_hwmon
+  sensor: SoC Power
+- hwmon: macsmc_hwmon
+  sensor: DRAM VDD2H Power
+- hwmon: macsmc_hwmon
+  sensor: CPU SRAM 1 Power
+- hwmon: macsmc_hwmon
+  sensor: CPU SRAM 2 Power

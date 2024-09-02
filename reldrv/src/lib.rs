@@ -64,6 +64,7 @@ use slicers::dynamic::DynamicSlicer;
 use slicers::entire_program::EntireProgramSlicer;
 use slicers::fixed_interval::FixedIntervalSlicer;
 use slicers::{ReferenceType, SlicerType};
+use statistics::hwmon::{HwmonCollector, HwmonSensorPath};
 use statistics::perf::CounterKind;
 use syscalls::{syscall, Sysno};
 use throttlers::nr_checkers::NrCheckersBasedThrottler;
@@ -190,6 +191,11 @@ pub struct RelShellOptions {
     pub memory_sample_includes_rt: bool,
     #[derivative(Default(value = "Duration::from_millis(500)"))]
     pub memory_sample_interval: Duration,
+
+    // hwmon sampler options
+    #[derivative(Default(value = "Duration::from_secs(1)"))]
+    pub hwmon_sample_interval: Duration,
+    pub hwmon_sensor_paths: Vec<HwmonSensorPath>,
 
     // speculation control options
     pub enable_speculative_store_bypass_misfeature: bool,
@@ -411,6 +417,13 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     disp.register_module(CounterCollector::new());
     disp.register_module(PerfStatsCollector::new(options.enabled_perf_counters));
     disp.register_module(DirtyPageStatsCollector::new());
+
+    if !options.hwmon_sensor_paths.is_empty() {
+        disp.register_module(HwmonCollector::new(
+            options.hwmon_sample_interval,
+            options.hwmon_sensor_paths,
+        ));
+    }
 
     if options.sample_memory_usage {
         disp.register_module(MemoryCollector::new(

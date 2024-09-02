@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 
 pub mod counter;
 pub mod dirty_pages;
+pub mod hwmon;
 pub mod memory;
 pub mod perf;
 pub mod timing;
@@ -43,7 +44,7 @@ macro_rules! impl_statistic_value {
     };
 }
 
-impl_statistic_value!(u32, i32, f32, u64, i64, f64, usize, isize);
+impl_statistic_value!(u32, i32, f32, u64, i64, f64, usize, isize, bool);
 
 struct DisplayProxy<'i> {
     inner: &'i dyn StatisticValue,

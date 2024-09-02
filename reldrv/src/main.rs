@@ -11,6 +11,7 @@ use reldrv::comparators::memory::MemoryComparatorType;
 use reldrv::dirty_page_trackers::DirtyPageAddressTrackerType;
 use reldrv::helpers::cpufreq::{CpuFreqGovernor, CpuFreqScalerType};
 use reldrv::slicers::{ReferenceType, SlicerType};
+use reldrv::statistics::hwmon::HwmonSensorPath;
 use reldrv::types::perf_counter::symbolic_events::BranchType;
 use reldrv::StatsOutput;
 use reldrv::{statistics::perf::CounterKind, RelShellOptions};
@@ -180,6 +181,14 @@ struct CliArgs {
     /// Memory sample interval in milliseconds
     #[arg(long, value_parser = parse_duration)]
     memory_sample_interval: Option<Duration>,
+
+    /// Hwmon sample interval in milliseconds
+    #[arg(long, value_parser = parse_duration)]
+    hwmon_sample_interval: Option<Duration>,
+
+    /// Hwmon power sensor paths to sample (e.g. macsmc_hwmon/CPU P-cores Power)
+    #[arg(long, use_value_delimiter = true, value_parser = HwmonSensorPath::parse)]
+    hwmon_sensor_paths: Option<Vec<HwmonSensorPath>>,
 
     /// Enable speculative store bypass misfeature
     #[arg(long)]
@@ -447,6 +456,16 @@ fn main() {
     // memory_sample_interval
     apply_if_some(&mut config, cli.memory_sample_interval, |config, val| {
         config.memory_sample_interval = val;
+    });
+
+    // hwmon_sample_interval
+    apply_if_some(&mut config, cli.hwmon_sample_interval, |config, val| {
+        config.hwmon_sample_interval = val;
+    });
+
+    // hwmon_sensor_paths
+    apply_if_some(&mut config, cli.hwmon_sensor_paths, |config, val| {
+        config.hwmon_sensor_paths = val;
     });
 
     // enable_speculative_store_bypass_misfeature

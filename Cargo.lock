@@ -697,6 +697,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libmedium"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b85c92a0b648b015ab74db96a4fb00df6db6f5f08e18bdee3859a48bb9c65e5e"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1125,6 +1131,7 @@ dependencies = [
  "lazy-init",
  "lazy_static",
  "libfpt-rs",
+ "libmedium",
  "log",
  "log-panics",
  "nix 0.26.1",
