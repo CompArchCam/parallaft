@@ -8,9 +8,13 @@ use crate::{
     events::{
         migration::MigrationHandler,
         process_lifetime::{HandlerContext, ProcessLifetimeHook},
+        segment::SegmentEventHandler,
         HandlerContextWithInferior,
     },
-    process::{state::Stopped, Process},
+    process::{
+        state::{Running, Stopped},
+        Process,
+    },
     types::process_id::{Checker, Main},
 };
 
@@ -51,6 +55,23 @@ impl<'a> AffinitySetter<'a> {
             shell_cpu_set,
             cache_masks,
         }
+    }
+}
+
+impl SegmentEventHandler for AffinitySetter<'_> {
+    fn handle_segment_filled(&self, main: &mut Main<Running>) -> Result<()> {
+        main.segment
+            .as_ref()
+            .unwrap()
+            .checkpoint_end()
+            .unwrap()
+            .process
+            .lock()
+            .as_mut()
+            .unwrap()
+            .set_cpu_affinity(self.checker_cpu_set)?;
+
+        Ok(())
     }
 }
 
@@ -124,6 +145,15 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
             .set_cpu_affinity(self.checker_cpu_set)?;
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
+        checker
+            .segment
+            .checkpoint_start
+            .process
+            .lock()
+            .as_mut()
+            .unwrap()
+            .set_cpu_affinity(&self.checker_cpu_set)?;
+
         Ok(())
     }
 }
@@ -151,6 +181,7 @@ impl Module for AffinitySetter<'_> {
     where
         's: 'd,
     {
+        subs.install_segment_event_handler(self);
         subs.install_process_lifetime_hook(self);
         subs.install_migration_handler(self);
     }
