@@ -6,7 +6,6 @@ use crate::{
 
 pub mod checkpoint_sync;
 pub mod memory;
-pub mod nr_checkers;
 pub mod nr_segments;
 
 pub trait Throttler {

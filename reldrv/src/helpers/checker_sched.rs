@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-pub struct NrCheckersBasedThrottler<'a> {
+pub struct CheckerScheduler<'a> {
     checker_cpu_set: &'a [usize],
     checker_emerg_cpu_set: &'a [usize],
     allow_checker_migration: bool,
@@ -30,7 +30,7 @@ pub struct NrCheckersBasedThrottler<'a> {
     cvar: Condvar,
 }
 
-impl<'a> NrCheckersBasedThrottler<'a> {
+impl<'a> CheckerScheduler<'a> {
     const SIGVAL_MIGRATE_CHECKER: usize = 0xc24be7956574a300;
 
     pub fn new(
@@ -48,7 +48,7 @@ impl<'a> NrCheckersBasedThrottler<'a> {
     }
 }
 
-impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
+impl SegmentEventHandler for CheckerScheduler<'_> {
     fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
         let mut live_checkers = self.live_checkers.lock();
         live_checkers.insert(main.segment.as_ref().unwrap().clone());
@@ -137,14 +137,14 @@ impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
     }
 }
 
-impl MigrationHandler for NrCheckersBasedThrottler<'_> {
+impl MigrationHandler for CheckerScheduler<'_> {
     fn handle_checker_migration(&self, _ctx: HandlerContextWithInferior<Stopped>) -> Result<()> {
         self.cvar.notify_all();
         Ok(())
     }
 }
 
-impl SignalHandler for NrCheckersBasedThrottler<'_> {
+impl SignalHandler for CheckerScheduler<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
@@ -170,7 +170,7 @@ impl SignalHandler for NrCheckersBasedThrottler<'_> {
     }
 }
 
-impl Module for NrCheckersBasedThrottler<'_> {
+impl Module for CheckerScheduler<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut crate::dispatcher::Subscribers<'d>)
     where
         's: 'd,

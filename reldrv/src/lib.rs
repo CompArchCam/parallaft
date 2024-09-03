@@ -44,6 +44,7 @@ use dirty_page_trackers::uffd::UffdDirtyPageTracker;
 use dirty_page_trackers::DirtyPageAddressTrackerType;
 use dispatcher::Module;
 
+use helpers::checker_sched::CheckerScheduler;
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
@@ -67,7 +68,6 @@ use slicers::{ReferenceType, SlicerType};
 use statistics::hwmon::{HwmonCollector, HwmonSensorPath};
 use statistics::perf::CounterKind;
 use syscalls::{syscall, Sysno};
-use throttlers::nr_checkers::NrCheckersBasedThrottler;
 use types::exit_reason::ExitReason;
 use types::perf_counter::symbolic_events::BranchType;
 
@@ -412,6 +412,14 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
         disp.register_module(Madviser::new());
     }
 
+    if options.checker_cpu_set.len() > 0 {
+        disp.register_module(CheckerScheduler::new(
+            &options.checker_cpu_set,
+            &options.checker_emerg_cpu_set,
+            true,
+        ));
+    }
+
     // Statistics
     let tracer = disp.register_module(Tracer::new());
     disp.register_module(CounterCollector::new());
@@ -436,14 +444,6 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     disp.register_module(MemoryBasedThrottler::new(options.memory_overhead_watermark));
     disp.register_module(NrSegmentsBasedThrottler::new(options.max_nr_live_segments));
     disp.register_module(CheckpointSyncThrottler::new());
-
-    if options.checker_cpu_set.len() > 0 {
-        disp.register_module(NrCheckersBasedThrottler::new(
-            &options.checker_cpu_set,
-            &options.checker_emerg_cpu_set,
-            true,
-        ));
-    }
 
     // Dirty page trackers
     match options.dirty_page_tracker {
