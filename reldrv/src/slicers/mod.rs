@@ -9,8 +9,8 @@ pub mod fixed_interval;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default, Serialize, Deserialize)]
 pub enum ReferenceType {
-    #[default]
     Instructions,
+    #[default]
     Cycles,
 }
 
