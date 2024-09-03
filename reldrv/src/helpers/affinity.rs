@@ -140,9 +140,15 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         's: 'disp,
         'disp: 'scope,
     {
+        let checker_status = checker.segment.checker_status.lock();
+        let checker_cpu_set = checker_status.cpu_set().unwrap();
+
         checker
-            .process_mut()
-            .set_cpu_affinity(self.checker_cpu_set)?;
+            .process
+            .as_mut()
+            .unwrap()
+            .set_cpu_affinity(checker_cpu_set)?;
+
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;
 
         checker
@@ -152,7 +158,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
             .lock()
             .as_mut()
             .unwrap()
-            .set_cpu_affinity(&self.checker_cpu_set)?;
+            .set_cpu_affinity(checker_cpu_set)?;
 
         Ok(())
     }
@@ -171,6 +177,8 @@ impl MigrationHandler for AffinitySetter<'_> {
             .as_mut()
             .unwrap()
             .set_cpu_affinity(new_cpu_set)?;
+
+        info!("{checker} New CPU set: {new_cpu_set:?}");
 
         Ok(())
     }

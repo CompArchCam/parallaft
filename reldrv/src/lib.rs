@@ -438,7 +438,11 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     disp.register_module(CheckpointSyncThrottler::new());
 
     if options.checker_cpu_set.len() > 0 {
-        disp.register_module(NrCheckersBasedThrottler::new(&options.checker_cpu_set));
+        disp.register_module(NrCheckersBasedThrottler::new(
+            &options.checker_cpu_set,
+            &options.checker_emerg_cpu_set,
+            true,
+        ));
     }
 
     // Dirty page trackers

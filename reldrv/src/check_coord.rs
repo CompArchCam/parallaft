@@ -575,7 +575,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 segment: segment.clone(),
             };
 
-            self.dispatcher.handle_segment_ready(&mut checker)?;
+            self.dispatcher
+                .handle_segment_ready(&mut checker, pctx(self, scope))?;
             checker_ready_hook_tracer.end();
 
             self.run_event_loop(Inferior::Checker(checker), ongoing_syscall, scope)?;

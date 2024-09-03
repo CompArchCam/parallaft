@@ -255,7 +255,11 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_segment_ready(
+        &self,
+        checker: &mut Checker<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         let segment_info_map = self.segment_info_map.lock();
 
         let mut segment_info = segment_info_map.get(&checker.segment.nr).unwrap().lock();

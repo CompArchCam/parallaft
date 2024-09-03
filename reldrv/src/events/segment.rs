@@ -90,7 +90,11 @@ pub trait SegmentEventHandler {
     /// Called when the current segment is ready to be executed by the checker.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_segment_ready(
+        &self,
+        checker: &mut Checker<Stopped>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
         Ok(())
     }
 

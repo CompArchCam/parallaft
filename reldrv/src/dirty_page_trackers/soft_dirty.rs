@@ -77,7 +77,11 @@ impl SegmentEventHandler for SoftDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_ready(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_segment_ready(
+        &self,
+        checker: &mut Checker<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         if !self.dont_clear_soft_dirty {
             checker.process_mut().clear_dirty_page_bits()?;
         }
