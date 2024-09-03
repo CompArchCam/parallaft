@@ -6,4 +6,5 @@ mod execution_points;
 mod instructions;
 mod limits;
 mod segmenter;
+mod signals;
 mod syscalls;

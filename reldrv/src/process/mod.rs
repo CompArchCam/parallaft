@@ -432,6 +432,16 @@ impl Process<Stopped> {
 
         Ok(self)
     }
+
+    pub fn get_sigmask(&self) -> Result<u64> {
+        let mask = ptrace::getsigmask(self.pid)?;
+        Ok(mask)
+    }
+
+    pub fn set_sigmask(&mut self, mask: u64) -> Result<()> {
+        ptrace::setsigmask(self.pid, mask)?;
+        Ok(())
+    }
 }
 
 impl Clone for Process<Unowned> {
