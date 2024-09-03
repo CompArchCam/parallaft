@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use parking_lot::Mutex;
 
 use crate::{
@@ -19,6 +21,20 @@ pub struct Checkpoint {
     pub process: Mutex<Option<Process<Detached>>>,
     pub caller: CheckpointCaller,
     pub epoch: EpochId,
+}
+
+impl PartialEq for Checkpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.epoch == other.epoch
+    }
+}
+
+impl Eq for Checkpoint {}
+
+impl Hash for Checkpoint {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.epoch.hash(state);
+    }
 }
 
 impl Checkpoint {

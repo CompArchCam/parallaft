@@ -1,5 +1,6 @@
 use log::{debug, info};
 use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::time::Duration;
@@ -55,17 +56,24 @@ impl ProcessLifetimeHook for MemoryCollector {
                 let segments = context.check_coord.segments.read();
                 let mut processes = vec![context.check_coord.main.clone()];
 
+                let mut checkpoints = HashSet::new();
+
                 for segment in &segments.list {
                     if let Some(p) = segment.checker_status.lock().process() {
                         processes.push(p.clone());
                     }
 
-                    if let Some(p) = segment
-                        .checkpoint_end()
-                        .map(|c| c.process.lock().as_ref().unwrap().unowned_copy())
-                    {
-                        processes.push(p);
+                    if let Some(p) = segment.checkpoint_end() {
+                        checkpoints.insert(p);
                     };
+
+                    checkpoints.insert(segment.checkpoint_start.clone());
+                }
+
+                for checkpoint in checkpoints {
+                    if let Some(p) = checkpoint.process.lock().as_ref() {
+                        processes.push(p.unowned_copy());
+                    }
                 }
 
                 if self.include_rt {
