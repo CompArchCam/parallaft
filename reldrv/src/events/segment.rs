@@ -10,6 +10,8 @@ use crate::{
     },
 };
 
+use super::process_lifetime::HandlerContext;
+
 #[allow(unused_variables)]
 ///
 /// Events overview WITHOUT intra-segment parallelism, i.e. the checker will
@@ -23,7 +25,7 @@ use crate::{
 ///             /             .
 /// Main  ---  0 ------------ 1 ---------- 2    ...
 ///            ^              ^
-/// checkpoint_created_pre  filled & chain_closed
+/// checkpoint_created_*  filled & chain_closed
 /// ```
 ///
 /// Events overview WITH intra-segment parallelism, i.e. the checker will start
@@ -40,11 +42,25 @@ use crate::{
 /// checkpoint_created_pre  filled & chain_closed
 /// ```
 pub trait SegmentEventHandler {
-    /// Called when a checkpoint is about to be created. At this point,
-    /// `main.segment` contains the last segment, if there is one.
+    /// Called when a checkpoint is about to be created, before forking. At this
+    /// point, `main.segment` contains the last segment, if there is one.
+    fn handle_checkpoint_created_pre_fork(
+        &self,
+        main: &mut Main<Stopped>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when a checkpoint is about to be created, after forking. At this
+    /// point, `main.segment` contains the last segment, if there is one.
     /// # States
     /// main: ptrace-stopped
-    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
+    fn handle_checkpoint_created_post_fork(
+        &self,
+        main: &mut Main<Stopped>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
         Ok(())
     }
 

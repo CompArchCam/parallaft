@@ -5,7 +5,7 @@ use crate::{
     error::{Error, Result},
     events::{
         signal::{SignalHandler, SignalHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{
         state::{ProcessState, Stopped},
@@ -24,7 +24,7 @@ impl SignalHandler for SliceSegmentHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

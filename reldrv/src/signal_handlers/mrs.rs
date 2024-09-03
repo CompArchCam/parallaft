@@ -10,7 +10,7 @@ use crate::{
     events::{
         insn_patching::InstructionPatchingEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     helpers::insn_patcher::{InstructionPatcher, Patch, PatchOwner, PatchPattern},
     process::{
@@ -68,7 +68,11 @@ impl MrsHandler {
 }
 
 impl InstructionPatchingEventHandler for MrsHandler {
-    fn should_instruction_patched(&self, patch: &Patch, _ctx: HandlerContext<Stopped>) -> bool {
+    fn should_instruction_patched(
+        &self,
+        patch: &Patch,
+        _ctx: HandlerContextWithInferior<Stopped>,
+    ) -> bool {
         if patch.pattern.owner != PatchOwner::Mrs {
             return false;
         }
@@ -80,7 +84,7 @@ impl InstructionPatchingEventHandler for MrsHandler {
     fn handle_instruction_patched(
         &self,
         patch: &Patch,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         if patch.pattern.owner != PatchOwner::Mrs {
             return Ok(());
@@ -104,7 +108,7 @@ impl InstructionPatchingEventHandler for MrsHandler {
     fn handle_instruction_patch_removed(
         &self,
         patch: &Patch,
-        _ctx: HandlerContext<Stopped>,
+        _ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         if patch.pattern.owner != PatchOwner::Mrs {
             return Ok(());
@@ -121,7 +125,7 @@ impl SignalHandler for MrsHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

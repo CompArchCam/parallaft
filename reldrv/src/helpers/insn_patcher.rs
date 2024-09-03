@@ -13,7 +13,7 @@ use crate::{
     error::Result,
     events::{
         hctx, insn_patching::InstructionPatchingEventHandler, memory::MemoryEventHandler,
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{
         memory::{Instruction, RawInstruction},
@@ -87,7 +87,7 @@ impl MemoryEventHandler for InstructionPatcher {
     fn handle_memory_map_created(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         if !map.perms.contains(MMPermissions::EXECUTE) {
             return Ok(());
@@ -174,7 +174,7 @@ impl MemoryEventHandler for InstructionPatcher {
     fn handle_memory_map_removed(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         if self.patterns.is_empty() {
             return Ok(());
@@ -214,7 +214,7 @@ impl MemoryEventHandler for InstructionPatcher {
     fn handle_memory_map_updated(
         &self,
         _map: &MemoryMap,
-        _ctx: HandlerContext<Stopped>,
+        _ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         todo!()
     }

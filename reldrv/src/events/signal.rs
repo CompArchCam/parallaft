@@ -1,6 +1,6 @@
 use nix::sys::signal::Signal;
 
-use super::HandlerContext;
+use super::HandlerContextWithInferior;
 
 use crate::{error::Result, process::state::Stopped};
 
@@ -25,7 +25,7 @@ pub trait SignalHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        _context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        _context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

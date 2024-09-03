@@ -10,7 +10,7 @@ impl CustomSyscallHandler for InProtectionAsserter {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: crate::events::HandlerContext<Stopped>,
+        context: crate::events::HandlerContextWithInferior<Stopped>,
     ) -> crate::error::Result<crate::events::syscall::SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) == Some(CustomSysno::AssertInProtection) {
             assert!(

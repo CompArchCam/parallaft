@@ -9,10 +9,10 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{CustomSyscallHandler, StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{
         state::{ProcessState, Stopped},
@@ -133,7 +133,7 @@ impl StandardSyscallHandler for FixedIntervalSlicer<'_> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
@@ -149,7 +149,7 @@ impl CustomSyscallHandler for FixedIntervalSlicer<'_> {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match CustomSysno::from_repr(sysno) {
             Some(CustomSysno::SlicingStart) => {
@@ -188,7 +188,7 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -261,7 +261,7 @@ impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

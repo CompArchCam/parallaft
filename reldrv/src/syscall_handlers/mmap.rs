@@ -11,13 +11,13 @@ use crate::{
     events::{
         hctx,
         memory::MemoryEventHandler,
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         syscall::{
             StandardSyscallEntryCheckerHandlerExitAction,
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
             SyscallHandlerExitAction,
         },
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{registers::RegisterAccess, state::Stopped},
     types::{
@@ -53,7 +53,7 @@ impl ProcessLifetimeHook for MmapHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -75,7 +75,7 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        mut context: HandlerContext<Stopped>,
+        mut context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let syscall = *syscall;
         let main = context.process_mut();
@@ -145,7 +145,7 @@ impl StandardSyscallHandler for MmapHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let syscall = *syscall;
         let checker = context.child.unwrap_checker_mut();
@@ -261,7 +261,7 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        mut context: HandlerContext<Stopped>,
+        mut context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         let child_id = context.child.id();
 
@@ -324,7 +324,7 @@ impl StandardSyscallHandler for MmapHandler {
         &self,
         _ret_val: isize,
         saved_syscall: &SavedSyscall,
-        mut context: HandlerContext<Stopped>,
+        mut context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match saved_syscall.syscall {
             Syscall::Mmap(_) | Syscall::Mremap(_) | Syscall::Mprotect(_) | Syscall::Munmap(_) => {

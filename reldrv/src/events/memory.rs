@@ -1,13 +1,13 @@
 use crate::{error::Result, process::state::Stopped, types::memory_map::MemoryMap};
 
-use super::HandlerContext;
+use super::HandlerContextWithInferior;
 
 #[allow(unused_variables)]
 pub trait MemoryEventHandler: Sync {
     fn handle_memory_map_created(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         Ok(())
     }
@@ -15,7 +15,7 @@ pub trait MemoryEventHandler: Sync {
     fn handle_memory_map_removed(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         Ok(())
     }
@@ -23,7 +23,7 @@ pub trait MemoryEventHandler: Sync {
     fn handle_memory_map_updated(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         Ok(())
     }

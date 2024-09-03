@@ -13,7 +13,7 @@ use crate::{
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     inferior_rtlib::ScheduleCheckpointReady,
     process::{
@@ -89,7 +89,7 @@ impl CustomSyscallHandler for RelRtLib {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         match CustomSysno::from_repr(sysno) {
             Some(CustomSysno::RelRtLibSetCounterAddr) => {
@@ -143,7 +143,7 @@ impl SignalHandler for RelRtLib {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

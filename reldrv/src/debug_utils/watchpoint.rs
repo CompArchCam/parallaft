@@ -10,10 +10,10 @@ use crate::{
     dispatcher::Module,
     error::Result,
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{memory::MemoryAccess, registers::RegisterAccess, state::Stopped, Process},
     syscall_handlers::is_execve_ok,
@@ -137,7 +137,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -151,7 +151,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
         &'s self,
         _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -164,7 +164,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -183,7 +183,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -199,7 +199,7 @@ impl StandardSyscallHandler for Watchpoint<'_> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if let InferiorRefMut::Main(main) = context.child {
             if is_execve_ok(syscall, ret_val) {
@@ -215,7 +215,7 @@ impl SignalHandler for Watchpoint<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

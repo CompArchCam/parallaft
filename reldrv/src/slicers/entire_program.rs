@@ -5,7 +5,7 @@ use crate::{
     error::Result,
     events::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::Stopped,
     signal_handlers::begin_protection::main_begin_protection_req,
@@ -25,7 +25,7 @@ impl StandardSyscallHandler for EntireProgramSlicer {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());

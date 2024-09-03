@@ -6,7 +6,7 @@ use crate::{
     error::Result,
     events::{
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     exec_point_providers::ExecutionPointProvider,
     process::state::Stopped,
@@ -22,7 +22,7 @@ impl CustomSyscallHandler for ExecutionPointDumper {
         &self,
         sysno: usize,
         _args: SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) == Some(CustomSysno::DumpExecPoint) {
             if context.child.segment().is_some() {

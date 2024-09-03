@@ -3,7 +3,7 @@ use reverie_syscalls::Syscall;
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::{Error, Result};
 use crate::events::syscall::{StandardSyscallHandler, SyscallHandlerExitAction};
-use crate::events::HandlerContext;
+use crate::events::HandlerContextWithInferior;
 use crate::process::state::Stopped;
 
 pub struct CloneHandler {}
@@ -24,7 +24,7 @@ impl StandardSyscallHandler for CloneHandler {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext<Stopped>,
+        _context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         #[cfg(target_arch = "x86_64")]
         if matches!(

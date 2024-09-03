@@ -21,9 +21,10 @@ use crate::{
     error::Result,
     events::{
         module_lifetime::ModuleLifetimeHook,
+        process_lifetime::HandlerContext,
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::{Running, Stopped},
     types::{
@@ -400,7 +401,11 @@ impl DynamicCpuFreqScaler<'_> {
 }
 
 impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
+    fn handle_checkpoint_created_post_fork(
+        &self,
+        main: &mut Main<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         let mut instructions_counter_option = self.main_instruction_counter.lock();
 
         let instructions_counter = instructions_counter_option.get_or_try_insert_with(|| {
@@ -555,7 +560,7 @@ impl SignalHandler for DynamicCpuFreqScaler<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         _signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,

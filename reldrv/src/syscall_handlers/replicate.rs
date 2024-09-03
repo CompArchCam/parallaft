@@ -9,7 +9,7 @@ use crate::{
             StandardSyscallEntryCheckerHandlerExitAction,
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
         },
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::Stopped,
     types::segment_record::saved_syscall::{
@@ -35,7 +35,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext<Stopped>,
+        _context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let action = || {
             StandardSyscallEntryMainHandlerExitAction::StoreSyscall(SavedIncompleteSyscall {
@@ -56,7 +56,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let action = || {
             let saved_syscall = context

@@ -1,7 +1,7 @@
 use crate::{
     dispatcher::Module,
     error::Result,
-    events::segment::SegmentEventHandler,
+    events::{process_lifetime::HandlerContext, segment::SegmentEventHandler},
     process::{dirty_pages::PageFlagType, state::Stopped},
     types::process_id::{Checker, InferiorId, Main},
 };
@@ -65,7 +65,11 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
 }
 
 impl SegmentEventHandler for SoftDirtyPageTracker {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
+    fn handle_checkpoint_created_post_fork(
+        &self,
+        main: &mut Main<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         if !self.dont_clear_soft_dirty {
             main.process_mut().clear_dirty_page_bits()?;
         }

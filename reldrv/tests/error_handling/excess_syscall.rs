@@ -27,7 +27,7 @@ impl StandardSyscallHandler for ExcessSyscallAfter {
     fn handle_standard_syscall_entry_checker(
         &self,
         _syscall: &reverie_syscalls::Syscall,
-        _context: reldrv::events::HandlerContext<Stopped>,
+        _context: reldrv::events::HandlerContextWithInferior<Stopped>,
     ) -> reldrv::error::Result<reldrv::events::syscall::StandardSyscallEntryCheckerHandlerExitAction>
     {
         if self

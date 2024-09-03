@@ -16,7 +16,7 @@ use crate::{
     types::process_id::InferiorRefMut,
 };
 
-pub struct HandlerContext<
+pub struct HandlerContextWithInferior<
     'ido,
     'id,
     'disp: 'scope,
@@ -35,8 +35,8 @@ pub fn hctx<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S: ProcessState>(
     child: &'ido mut InferiorRefMut<'id, S>,
     check_coord: &'disp CheckCoordinator<'disp, 'modules, 'tracer>,
     scope: &'scope Scope<'scope, 'env>,
-) -> HandlerContext<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S> {
-    HandlerContext {
+) -> HandlerContextWithInferior<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S> {
+    HandlerContextWithInferior {
         child,
         check_coord,
         scope,
@@ -44,7 +44,7 @@ pub fn hctx<'ido, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S: ProcessState>(
 }
 
 impl<'id, 'disp, 'scope, 'env, 'modules, 'tracer, S: ProcessState>
-    HandlerContext<'_, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S>
+    HandlerContextWithInferior<'_, 'id, 'disp, 'scope, 'env, 'modules, 'tracer, S>
 {
     pub fn process(&self) -> &Process<S> {
         self.child.process()

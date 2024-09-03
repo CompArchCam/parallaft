@@ -21,7 +21,7 @@ use crate::{
         memory::MemoryEventHandler,
         migration::MigrationHandler,
         module_lifetime::ModuleLifetimeHook,
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{
@@ -29,7 +29,7 @@ use crate::{
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
             SyscallHandlerExitAction,
         },
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     exec_point_providers::ExecutionPointProvider,
     helpers::insn_patcher::Patch,
@@ -283,7 +283,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -300,7 +300,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
         &'s self,
         main: &mut Main<Stopped>,
         exit_reason: &ExitReason,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -316,7 +316,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -332,7 +332,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -347,7 +347,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -365,7 +365,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry(
@@ -385,7 +385,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit(
@@ -405,7 +405,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_main(
@@ -425,7 +425,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_incomplete_syscall: &SavedIncompleteSyscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_main(
@@ -445,7 +445,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_entry_checker(
@@ -468,7 +468,7 @@ impl<'a, 'm> StandardSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         ret_val: isize,
         saved_syscall: &SavedSyscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().standard_syscall_handlers {
             let ret = handler.handle_standard_syscall_exit_checker(
@@ -491,7 +491,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
         &self,
         sysno: usize,
         args: SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_entry(
@@ -511,7 +511,7 @@ impl<'a, 'm> CustomSyscallHandler for Dispatcher<'a, 'm> {
     fn handle_custom_syscall_exit(
         &self,
         ret_val: isize,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         for handler in &self.subscribers.read().custom_syscall_handlers {
             let ret = handler.handle_custom_syscall_exit(
@@ -532,7 +532,7 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -553,7 +553,8 @@ impl<'a, 'm> SignalHandler for Dispatcher<'a, 'm> {
 }
 
 impl SegmentEventHandler for Dispatcher<'_, '_> {
-    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>));
+    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_pre_fork(&self, main: &mut Main<Stopped>, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checkpoint_created_post_fork(&self, main: &mut Main<Stopped>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, main: &mut Main<Running>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, main: &mut Main<Running>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main<Running>));
@@ -708,7 +709,7 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
     fn handle_memory_map_created(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_created(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
@@ -720,7 +721,7 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
     fn handle_memory_map_removed(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_removed(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
@@ -732,7 +733,7 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
     fn handle_memory_map_updated(
         &self,
         map: &MemoryMap,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         for handler in &self.subscribers.read().memory_event_handlers {
             handler.handle_memory_map_updated(map, hctx(ctx.child, ctx.check_coord, ctx.scope))?;
@@ -746,7 +747,7 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
     fn handle_instruction_patched(
         &self,
         patch: &Patch,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         for handler in &self.subscribers.read().instruction_patching_events_handlers {
             handler
@@ -756,7 +757,11 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
         Ok(())
     }
 
-    fn should_instruction_patched(&self, patch: &Patch, ctx: HandlerContext<Stopped>) -> bool {
+    fn should_instruction_patched(
+        &self,
+        patch: &Patch,
+        ctx: HandlerContextWithInferior<Stopped>,
+    ) -> bool {
         self.subscribers
             .read()
             .instruction_patching_events_handlers
@@ -769,7 +774,7 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
     fn handle_instruction_patch_removed(
         &self,
         patch: &Patch,
-        ctx: HandlerContext<Stopped>,
+        ctx: HandlerContextWithInferior<Stopped>,
     ) -> Result<()> {
         for handler in &self.subscribers.read().instruction_patching_events_handlers {
             handler.handle_instruction_patch_removed(
@@ -783,7 +788,7 @@ impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
 }
 
 impl MigrationHandler for Dispatcher<'_, '_> {
-    fn handle_checker_migration(&self, ctx: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_checker_migration(&self, ctx: HandlerContextWithInferior<Stopped>) -> Result<()> {
         for handler in &self.subscribers.read().migration_handlers {
             handler.handle_checker_migration(hctx(ctx.child, ctx.check_coord, ctx.scope))?;
         }

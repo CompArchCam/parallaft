@@ -6,7 +6,7 @@ use crate::{
     error::Result,
     events::{
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{registers::RegisterAccess, state::Stopped},
 };
@@ -31,7 +31,7 @@ impl StandardSyscallHandler for VdsoRemover {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        mut context: HandlerContext<Stopped>,
+        mut context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if ret_val == 0 {
             match syscall {

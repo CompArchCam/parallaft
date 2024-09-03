@@ -6,7 +6,9 @@ use parking_lot::{Condvar, Mutex};
 use crate::{
     dispatcher::Module,
     error::Result,
-    events::{migration::MigrationHandler, segment::SegmentEventHandler, HandlerContext},
+    events::{
+        migration::MigrationHandler, segment::SegmentEventHandler, HandlerContextWithInferior,
+    },
     process::state::{Running, Stopped},
     types::{
         checker::CheckFailReason,
@@ -82,7 +84,7 @@ impl SegmentEventHandler for NrCheckersBasedThrottler<'_> {
 }
 
 impl MigrationHandler for NrCheckersBasedThrottler<'_> {
-    fn handle_checker_migration(&self, _ctx: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_checker_migration(&self, _ctx: HandlerContextWithInferior<Stopped>) -> Result<()> {
         self.cvar.notify_all();
         Ok(())
     }

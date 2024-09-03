@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
-use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{HandlerContext, ProcessLifetimeHook};
 use crate::process::state::Stopped;
 use crate::statistics::StatisticsProvider;
 use crate::types::exit_reason::ExitReason;
@@ -163,7 +163,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -191,7 +191,7 @@ impl ProcessLifetimeHook for PerfStatsCollector {
         &'s self,
         _main: &mut Main<Stopped>,
         _exit_reason: &ExitReason,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

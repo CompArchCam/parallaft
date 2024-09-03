@@ -4,7 +4,10 @@ use log::info;
 use reldrv::{
     dispatcher::Module,
     error::Result,
-    events::{module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler, HandlerContext},
+    events::{
+        module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler,
+        HandlerContextWithInferior,
+    },
     exec_point_providers::{
         pmu::exec_point::BranchCounterBasedExecutionPoint, ExecutionPointProvider,
     },
@@ -48,7 +51,7 @@ impl CustomSyscallHandler for PmcTester {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<reldrv::events::syscall::SyscallHandlerExitAction> {
         if TestCustomSysno::from_repr(sysno) == Some(TestCustomSysno::TestPmc) {
             if context.child.is_checker() {

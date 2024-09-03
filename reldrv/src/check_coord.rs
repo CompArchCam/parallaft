@@ -290,7 +290,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     /// main inferior must not execute after the last saved event.
     fn take_main_checkpoint<'s, 'scope, 'env>(
         &'s self,
-        main: Main<Stopped>,
+        mut main: Main<Stopped>,
         is_finishing: bool,
         restart_old_syscall: bool,
         caller: CheckpointCaller,
@@ -318,13 +318,23 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let epoch_local = self.epoch.fetch_add(1, Ordering::SeqCst);
 
-        let forking_tracer = self.tracer.trace(timing::Event::MainForking);
+        let pre_fork_hook_tracer = self
+            .tracer
+            .trace(timing::Event::MainCheckpointingPreForkHook);
+        self.dispatcher
+            .handle_checkpoint_created_pre_fork(&mut main, pctx(self, scope))?;
+        pre_fork_hook_tracer.end();
+
+        let forking_tracer = self.tracer.trace(timing::Event::MainCheckpointingForking);
         let (mut main, reference) = main.try_map_process(|p| p.fork(restart_old_syscall, true))?;
         forking_tracer.end();
 
-        let dirty_page_tracking_tracer = self.tracer.trace(timing::Event::MainDirtyPageTracking);
-        self.dispatcher.handle_checkpoint_created_pre(&mut main)?;
-        dirty_page_tracking_tracer.end();
+        let post_fork_hook_tracer = self
+            .tracer
+            .trace(timing::Event::MainCheckpointingPostForkHook);
+        self.dispatcher
+            .handle_checkpoint_created_post_fork(&mut main, pctx(self, scope))?;
+        post_fork_hook_tracer.end();
 
         let throttler = if in_chain {
             self.dispatcher

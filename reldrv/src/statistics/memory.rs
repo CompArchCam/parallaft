@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::{RunningAverage, StatisticValue, StatisticsProvider};
 use crate::dispatcher::Subscribers;
 use crate::events::module_lifetime::ModuleLifetimeHook;
-use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{HandlerContext, ProcessLifetimeHook};
 use crate::process::state::Stopped;
 use crate::process::Process;
 use crate::statistics_list;
@@ -40,7 +40,7 @@ impl ProcessLifetimeHook for MemoryCollector {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         _main: &mut Main<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

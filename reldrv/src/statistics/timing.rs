@@ -15,10 +15,10 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::Stopped,
     types::{
@@ -51,8 +51,9 @@ use super::{StatisticValue, StatisticsProvider};
 pub enum Event {
     // Main events
     MainCheckpointing,
-    MainDirtyPageTracking,
-    MainForking,
+    MainCheckpointingPreForkHook,
+    MainCheckpointingPostForkHook,
+    MainCheckpointingForking,
     MainThrottling,
     MainSyscallEntryHandling,
     MainSyscallExitHandling,
@@ -87,8 +88,9 @@ impl Event {
     pub fn name(&self) -> &'static str {
         match self {
             Event::MainCheckpointing => "main_checkpointing",
-            Event::MainDirtyPageTracking => "main_dirty_page_tracking",
-            Event::MainForking => "main_forking",
+            Event::MainCheckpointingPreForkHook => "main_checkpointing_pre_fork_hook",
+            Event::MainCheckpointingPostForkHook => "main_checkpointing_post_fork_hook",
+            Event::MainCheckpointingForking => "main_checkpointing_forking",
             Event::MainThrottling => "main_throttling",
             Event::MainSyscallEntryHandling => "main_syscall_entry_handling",
             Event::MainSyscallExitHandling => "main_syscall_exit_handling",
@@ -201,7 +203,7 @@ impl StandardSyscallHandler for Tracer {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if !context.child.is_main() {
             return Ok(SyscallHandlerExitAction::NextHandler);
@@ -232,7 +234,7 @@ impl ProcessLifetimeHook for Tracer {
         &'s self,
         _main: &mut Main<Stopped>,
         exit_reason: &ExitReason,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -244,7 +246,7 @@ impl ProcessLifetimeHook for Tracer {
 
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

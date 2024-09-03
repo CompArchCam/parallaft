@@ -5,7 +5,10 @@ use reldrv::{
     check_coord::CheckCoordinatorOptions,
     dispatcher::Module,
     error::Result,
-    events::{module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler, HandlerContext},
+    events::{
+        module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler,
+        HandlerContextWithInferior,
+    },
     process::state::Stopped,
     types::{perf_counter::cpu_info::pmu::PMUS, process_id::InferiorRefMut},
     RelShellOptionsBuilder,
@@ -36,7 +39,7 @@ impl CustomSyscallHandler for MigrationHelper {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<reldrv::events::syscall::SyscallHandlerExitAction> {
         match context.child {
             InferiorRefMut::Main(main) => {

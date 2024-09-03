@@ -18,10 +18,10 @@ use crate::{
     error::Result,
     events::{
         module_lifetime::ModuleLifetimeHook,
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{
         state::{Stopped, Unowned},
@@ -158,7 +158,11 @@ impl DynamicSlicer {
 }
 
 impl SegmentEventHandler for DynamicSlicer {
-    fn handle_checkpoint_created_pre(&self, main: &mut Main<Stopped>) -> Result<()> {
+    fn handle_checkpoint_created_post_fork(
+        &self,
+        main: &mut Main<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         self.main_cycles_counter
             .lock()
             .get_or_try_insert_with(|| -> Result<_> {
@@ -180,7 +184,7 @@ impl StandardSyscallHandler for DynamicSlicer {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             assert!(context.child.is_main());
@@ -195,7 +199,7 @@ impl ProcessLifetimeHook for DynamicSlicer {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'scope + 'disp,

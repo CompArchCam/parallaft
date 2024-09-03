@@ -337,6 +337,9 @@ impl Segment {
             extra_writable_ranges,
         )?);
 
+        debug!("Main dirty pages: {}", dpa_main.nr_dirty_pages());
+        debug!("Checker dirty pages: {}", dpa_checker.nr_dirty_pages());
+
         let result = (|| {
             let checkpoint_end = self
                 .status

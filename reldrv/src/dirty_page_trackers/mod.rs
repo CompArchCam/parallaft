@@ -11,7 +11,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, ops::Range};
 
-use crate::{error::Result, types::process_id::InferiorId};
+use crate::{error::Result, process::PAGESIZE, types::process_id::InferiorId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum DirtyPageAddressTrackerType {
@@ -46,6 +46,19 @@ pub struct DirtyPageAddressFlags {
 pub struct DirtyPageAddressesWithFlags {
     pub addresses: Vec<Range<usize>>,
     pub flags: DirtyPageAddressFlags,
+}
+
+impl DirtyPageAddressesWithFlags {
+    pub fn nr_dirty_pages(&self) -> usize {
+        self.addresses
+            .iter()
+            .map(|range| (range.end - range.start) / *PAGESIZE)
+            .sum()
+    }
+
+    pub fn nr_segments(&self) -> usize {
+        self.addresses.len()
+    }
 }
 
 impl DirtyPageAddressesWithFlags {

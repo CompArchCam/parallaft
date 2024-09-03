@@ -6,9 +6,9 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{registers::RegisterAccess, state::Stopped},
     types::process_id::Main,
@@ -32,7 +32,7 @@ impl StandardSyscallHandler for RseqHandler {
     fn handle_standard_syscall_entry(
         &self,
         syscall: &Syscall,
-        mut context: HandlerContext<Stopped>,
+        mut context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         let process = context.process_mut();
 
@@ -49,7 +49,7 @@ impl StandardSyscallHandler for RseqHandler {
         &self,
         _ret_val: isize,
         syscall: &Syscall,
-        _context: HandlerContext<Stopped>,
+        _context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         Ok(match syscall {
             Syscall::Rseq(_) => SyscallHandlerExitAction::ContinueInferior,
@@ -62,7 +62,7 @@ impl ProcessLifetimeHook for RseqHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

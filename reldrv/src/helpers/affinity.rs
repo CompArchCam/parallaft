@@ -7,8 +7,8 @@ use crate::{
     error::Result,
     events::{
         migration::MigrationHandler,
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
-        HandlerContext,
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
+        HandlerContextWithInferior,
     },
     process::{state::Stopped, Process},
     types::process_id::{Checker, Main},
@@ -58,7 +58,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -113,7 +113,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
     fn handle_checker_init<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -129,7 +129,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
 }
 
 impl MigrationHandler for AffinitySetter<'_> {
-    fn handle_checker_migration(&self, context: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_checker_migration(&self, context: HandlerContextWithInferior<Stopped>) -> Result<()> {
         let checker = context.child.unwrap_checker_mut();
 
         let checker_status = checker.segment.checker_status.lock();

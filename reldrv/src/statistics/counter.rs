@@ -6,9 +6,9 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::Stopped,
     statistics_list,
@@ -53,7 +53,7 @@ impl StandardSyscallHandler for CounterCollector {
     fn handle_standard_syscall_entry(
         &self,
         _syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if context.child.is_main() {
             self.syscall_count.fetch_add(1, Ordering::SeqCst);
@@ -65,7 +65,7 @@ impl StandardSyscallHandler for CounterCollector {
 impl ProcessLifetimeHook for CounterCollector {
     fn handle_all_fini<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

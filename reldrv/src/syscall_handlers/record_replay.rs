@@ -13,7 +13,7 @@ use crate::{
             StandardSyscallEntryCheckerHandlerExitAction,
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
         },
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{registers::RegisterAccess, state::Stopped},
     types::segment_record::{
@@ -42,7 +42,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         let process = context.process();
 
@@ -102,7 +102,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
     fn handle_standard_syscall_entry_checker(
         &self,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let checker = context.child.unwrap_checker_mut();
 

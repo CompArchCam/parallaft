@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dispatcher::Subscribers;
-use crate::events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext};
+use crate::events::process_lifetime::{HandlerContext, ProcessLifetimeHook};
 use crate::process::state::Stopped;
 use crate::process::PAGESIZE;
 use crate::statistics_list;
@@ -33,7 +33,7 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,

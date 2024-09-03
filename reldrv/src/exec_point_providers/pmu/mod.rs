@@ -23,11 +23,11 @@ use crate::{
     error::{Error, Result, UnexpectedEventReason},
     events::{
         migration::MigrationHandler,
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::{
         memory::instructions,
@@ -228,7 +228,11 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
 }
 
 impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
-    fn handle_checkpoint_created_pre(&self, _main: &mut Main<Stopped>) -> Result<()> {
+    fn handle_checkpoint_created_post_fork(
+        &self,
+        _main: &mut Main<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         let mut t = self.main_branch_counter.lock();
         let counter = t.as_mut().unwrap();
         counter.reset()?;
@@ -278,7 +282,7 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
         main: &mut Main<Stopped>,
-        _context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
@@ -331,7 +335,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -520,7 +524,7 @@ impl StandardSyscallHandler for PerfCounterBasedExecutionPointProvider<'_> {
         &self,
         _ret_val: isize,
         _syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if let InferiorRefMut::Checker(checker) = context.child {
             let segment_id = checker.segment.nr;
@@ -601,7 +605,7 @@ impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
 }
 
 impl MigrationHandler for PerfCounterBasedExecutionPointProvider<'_> {
-    fn handle_checker_migration(&self, context: HandlerContext<Stopped>) -> Result<()> {
+    fn handle_checker_migration(&self, context: HandlerContextWithInferior<Stopped>) -> Result<()> {
         let segment_info_map = self.segment_info_map.lock();
         let checker = context.child.unwrap_checker_mut();
         let segment_info = segment_info_map.get(&checker.segment.nr).unwrap();

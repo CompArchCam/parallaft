@@ -10,7 +10,7 @@ use crate::{
             StandardSyscallEntryMainHandlerExitAction, StandardSyscallHandler,
             SyscallHandlerExitAction,
         },
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::Stopped,
     types::memory_map::MemoryMap,
@@ -36,7 +36,7 @@ impl StandardSyscallHandler for ExecveHandler {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
-        _context: HandlerContext<Stopped>,
+        _context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryMainHandlerExitAction> {
         if matches!(syscall, Syscall::Execve(_) | Syscall::Execveat(_)) {
             return Err(Error::NotSupported(
@@ -51,7 +51,7 @@ impl StandardSyscallHandler for ExecveHandler {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             context.check_coord.dispatcher.handle_memory_map_removed(

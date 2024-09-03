@@ -9,7 +9,7 @@ use crate::{
     error::Error,
     events::{
         syscall::{CustomSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
     process::state::{Running, Stopped},
     types::{chains::SegmentChains, custom_sysno::CustomSysno, process_id::Main},
@@ -64,7 +64,7 @@ impl CustomSyscallHandler for CheckpointSyncThrottler {
         &self,
         sysno: usize,
         _args: syscalls::SyscallArgs,
-        context: HandlerContext<Stopped>,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> crate::error::Result<SyscallHandlerExitAction> {
         if CustomSysno::from_repr(sysno) != Some(CustomSysno::CheckpointSync) {
             return Ok(SyscallHandlerExitAction::NextHandler);
