@@ -11,6 +11,8 @@ pub struct MemoryStats {
     pub pss_pages: u64,
     pub rss: u64,
     pub rss_pages: u64,
+    pub swap_pss: u64,
+    pub swap_pss_pages: u64,
 }
 
 impl<S: ProcessState> Process<S> {
@@ -31,6 +33,9 @@ impl<S: ProcessState> Process<S> {
         let private_dirty = *map.extension.map.get("Private_Dirty").unwrap();
         let private_dirty_pages = private_dirty / *PAGESIZE as u64;
 
+        let swap_pss = *map.extension.map.get("SwapPss").unwrap();
+        let swap_pss_pages = swap_pss / *PAGESIZE as u64;
+
         Ok(MemoryStats {
             private_dirty,
             private_dirty_pages,
@@ -38,6 +43,8 @@ impl<S: ProcessState> Process<S> {
             pss_pages,
             rss,
             rss_pages,
+            swap_pss,
+            swap_pss_pages,
         })
     }
 }

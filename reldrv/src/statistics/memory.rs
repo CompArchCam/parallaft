@@ -116,13 +116,13 @@ impl ProcessLifetimeHook for MemoryCollector {
 
                 for process in processes {
                     if let Ok(stats) = process.memory_stats() {
-                        pss += stats.pss;
+                        pss += stats.pss + stats.swap_pss;
                     }
                 }
 
                 for process in checkpoint_processes {
                     if let Ok(stats) = process.memory_stats() {
-                        pss += stats.pss;
+                        pss += stats.pss + stats.swap_pss;
                         checkpoint_private_dirty += stats.private_dirty;
                     }
                 }
