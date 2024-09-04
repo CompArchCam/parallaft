@@ -440,6 +440,7 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
         disp.register_module(MemoryCollector::new(
             options.memory_sample_interval,
             options.memory_sample_includes_rt,
+            true,
         ));
     }
 

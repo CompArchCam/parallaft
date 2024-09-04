@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, info, warn};
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,6 +9,7 @@ use super::{RunningAverage, StatisticValue, StatisticsProvider};
 use crate::dispatcher::Subscribers;
 use crate::events::module_lifetime::ModuleLifetimeHook;
 use crate::events::process_lifetime::{HandlerContext, ProcessLifetimeHook};
+use crate::process::dirty_pages::PageCategory;
 use crate::process::state::Stopped;
 use crate::process::Process;
 use crate::statistics_list;
@@ -49,10 +50,11 @@ pub struct MemoryCollector {
     num_samples: AtomicUsize,
     worker: Mutex<Option<Sender<()>>>,
     include_rt: bool,
+    allow_pagemap_scan: bool,
 }
 
 impl MemoryCollector {
-    pub fn new(interval: Duration, include_rt: bool) -> Self {
+    pub fn new(interval: Duration, include_rt: bool, allow_pagemap_scan: bool) -> Self {
         Self {
             interval,
             pss: AverageAndPeak::new(),
@@ -61,6 +63,7 @@ impl MemoryCollector {
             num_samples: AtomicUsize::new(0),
             worker: Mutex::new(None),
             include_rt,
+            allow_pagemap_scan,
         }
     }
 }
@@ -123,7 +126,34 @@ impl ProcessLifetimeHook for MemoryCollector {
                 for process in checkpoint_processes {
                     if let Ok(stats) = process.memory_stats() {
                         pss += stats.pss + stats.swap_pss;
-                        checkpoint_private_dirty += stats.private_dirty;
+                        if stats.swap_pss > 0 {
+                            if self.allow_pagemap_scan {
+                                let mut s = 0;
+
+                                process.for_each_writable_map(|map| {
+                                    if let Ok(result) = process.pagemap_scan(
+                                        map.address.0 as _,
+                                        map.address.1 as _,
+                                        PageCategory::empty(),
+                                        PageCategory::UNIQUE,
+                                        PageCategory::empty(),
+                                        PageCategory::UNIQUE,
+                                    ) {
+                                        s += result.iter().map(|(r, _)| (r.end - r.start) as u64).sum::<u64>();
+                                    }
+
+                                    Ok(())
+                                }, &[]).ok();
+
+                                checkpoint_private_dirty += s;
+                            }
+                            else {
+                                warn!("Swap PSS detected for checkpointed process, but pagemap scan is disabled. This will lead to inaccurate checkpoint_private_dirty.");
+                                checkpoint_private_dirty += stats.private_dirty;
+                            }
+                        } else {
+                            checkpoint_private_dirty += stats.private_dirty;
+                        }
                     }
                 }
 
