@@ -45,6 +45,7 @@ pub struct MemoryCollector {
     interval: Duration,
     pss: AverageAndPeak,
     checkpoint_private_dirty: AverageAndPeak,
+    working_set_upper_lim: AverageAndPeak, // pss - checkpoint_private_dirty
     num_samples: AtomicUsize,
     worker: Mutex<Option<Sender<()>>>,
     include_rt: bool,
@@ -56,6 +57,7 @@ impl MemoryCollector {
             interval,
             pss: AverageAndPeak::new(),
             checkpoint_private_dirty: AverageAndPeak::new(),
+            working_set_upper_lim: AverageAndPeak::new(),
             num_samples: AtomicUsize::new(0),
             worker: Mutex::new(None),
             include_rt,
@@ -134,6 +136,8 @@ impl ProcessLifetimeHook for MemoryCollector {
                 self.pss.update(pss);
                 self.checkpoint_private_dirty
                     .update(checkpoint_private_dirty);
+                self.working_set_upper_lim
+                    .update(pss - checkpoint_private_dirty);
 
                 self.num_samples.fetch_add(1, Ordering::SeqCst);
             }
@@ -154,12 +158,16 @@ impl StatisticsProvider for MemoryCollector {
         let (pss_average, pss_peak) = self.pss.get();
         let (checkpoint_private_dirty_average, checkpoint_private_dirty_peak) =
             self.checkpoint_private_dirty.get();
+        let (working_set_upper_lim_average, working_set_upper_lim_peak) =
+            self.working_set_upper_lim.get();
 
         statistics_list!(
             pss_average = pss_average,
             pss_peak = pss_peak,
             checkpoint_private_dirty_average = checkpoint_private_dirty_average,
             checkpoint_private_dirty_peak = checkpoint_private_dirty_peak,
+            working_set_upper_lim_average = working_set_upper_lim_average,
+            working_set_upper_lim_peak = working_set_upper_lim_peak,
             num_samples = self.num_samples.load(Ordering::SeqCst)
         )
     }
