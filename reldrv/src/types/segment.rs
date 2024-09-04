@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
@@ -96,6 +96,12 @@ impl PartialOrd for Segment {
 impl Ord for Segment {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.nr.cmp(&other.nr)
+    }
+}
+
+impl Display for Segment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[S{:>6}]", self.nr)
     }
 }
 

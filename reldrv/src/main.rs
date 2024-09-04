@@ -43,6 +43,10 @@ struct CliArgs {
     #[arg(long, use_value_delimiter = true)]
     checker_emerg_cpu_set: Option<Vec<usize>>,
 
+    /// Booster CPU set used by checkers (usually the big cores) after the main finishes
+    #[arg(long, use_value_delimiter = true)]
+    checker_booster_cpu_set: Option<Vec<usize>>,
+
     /// Shell CPU set
     #[arg(short, long, use_value_delimiter = true)]
     shell_cpu_set: Option<Vec<usize>>,
@@ -363,6 +367,11 @@ fn main() {
     // checker_emerg_cpu_set
     apply_if_some(&mut config, cli.checker_emerg_cpu_set, |config, val| {
         config.checker_emerg_cpu_set = val;
+    });
+
+    // checker_booster_cpu_set
+    apply_if_some(&mut config, cli.checker_booster_cpu_set, |config, val| {
+        config.checker_booster_cpu_set = val;
     });
 
     // shell_cpu_set

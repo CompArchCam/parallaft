@@ -157,6 +157,7 @@ pub struct RelShellOptions {
     pub main_cpu_set: Vec<usize>,
     pub checker_cpu_set: Vec<usize>,
     pub checker_emerg_cpu_set: Vec<usize>,
+    pub checker_booster_cpu_set: Vec<usize>,
     pub shell_cpu_set: Vec<usize>,
     #[cfg(feature = "intel_cat")]
     pub cache_masks: Option<(u32, u32, u32)>,
@@ -416,6 +417,8 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
         disp.register_module(CheckerScheduler::new(
             &options.checker_cpu_set,
             &options.checker_emerg_cpu_set,
+            &options.checker_booster_cpu_set,
+            true,
             true,
         ));
     }

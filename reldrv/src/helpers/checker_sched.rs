@@ -9,7 +9,7 @@ use crate::{
     error::Result,
     events::{
         migration::MigrationHandler,
-        process_lifetime::HandlerContext,
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         signal::{SignalHandler, SignalHandlerExitAction},
         HandlerContextWithInferior,
@@ -17,16 +17,36 @@ use crate::{
     process::state::{Running, Stopped},
     types::{
         checker::{CheckFailReason, CheckerStatus},
+        exit_reason::ExitReason,
         process_id::{Checker, Main},
         segment::Segment,
     },
 };
 
+struct State {
+    live_checkers: BTreeSet<Arc<Segment>>,
+    main_finished: bool,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            live_checkers: BTreeSet::new(),
+            main_finished: false,
+        }
+    }
+}
+
 pub struct CheckerScheduler<'a> {
     checker_cpu_set: &'a [usize],
     checker_emerg_cpu_set: &'a [usize],
-    allow_checker_migration: bool,
-    live_checkers: Mutex<BTreeSet<Arc<Segment>>>,
+    checker_booster_cpu_set: &'a [usize],
+
+    allow_checker_migration_to_emerg: bool,
+    allow_checker_migration_to_booster: bool, // allow checkers to migrate to booster CPU set after the main finishes
+
+    state: Mutex<State>,
+
     cvar: Condvar,
 }
 
@@ -36,22 +56,62 @@ impl<'a> CheckerScheduler<'a> {
     pub fn new(
         checker_cpu_set: &'a [usize],
         checker_emerg_cpu_set: &'a [usize],
-        allow_checker_migration: bool,
+        checker_booster_cpu_set: &'a [usize],
+        allow_checker_migration_to_emerg: bool,
+        allow_checker_migration_to_booster: bool,
     ) -> Self {
         Self {
             checker_cpu_set,
             checker_emerg_cpu_set,
-            allow_checker_migration,
-            live_checkers: Mutex::new(BTreeSet::new()),
+            checker_booster_cpu_set,
+            allow_checker_migration_to_emerg,
+            allow_checker_migration_to_booster,
+            state: Mutex::new(State::new()),
             cvar: Condvar::new(),
         }
+    }
+
+    fn migrate_checker_to_booster_if_needed(&self) -> Result<()> {
+        let state = self.state.lock();
+
+        if !state.main_finished || !self.allow_checker_migration_to_booster {
+            return Ok(());
+        }
+
+        for segment in state
+            .live_checkers
+            .iter()
+            .rev()
+            .take(self.checker_booster_cpu_set.len())
+        {
+            let mut checker_status = segment.checker_status.lock();
+
+            if let Some(cpu_set) = checker_status.cpu_set() {
+                if cpu_set == self.checker_booster_cpu_set {
+                    continue;
+                }
+
+                info!("{} Migrating to booster CPU set", segment);
+                match &mut *checker_status {
+                    CheckerStatus::Executing { process, cpu_set } => {
+                        *cpu_set = self.checker_booster_cpu_set.to_vec();
+                        process.sigqueue(Self::SIGVAL_MIGRATE_CHECKER)?;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl SegmentEventHandler for CheckerScheduler<'_> {
     fn handle_segment_created(&self, main: &mut Main<Running>) -> Result<()> {
-        let mut live_checkers = self.live_checkers.lock();
-        live_checkers.insert(main.segment.as_ref().unwrap().clone());
+        let mut state = self.state.lock();
+        state
+            .live_checkers
+            .insert(main.segment.as_ref().unwrap().clone());
         Ok(())
     }
 
@@ -64,12 +124,12 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
             return Ok(());
         }
 
-        let mut live_checkers = self.live_checkers.lock();
-
+        let mut state = self.state.lock();
         let mut printed = false;
 
         loop {
-            if live_checkers
+            if state
+                .live_checkers
                 .iter()
                 .filter(|x| {
                     x.nr < checker.segment.nr
@@ -81,8 +141,10 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
                 break;
             }
 
-            if self.allow_checker_migration
-                && live_checkers
+            if self.allow_checker_migration_to_emerg
+                && !state.main_finished
+                && state
+                    .live_checkers
                     .iter()
                     .filter(|x| {
                         x.nr < checker.segment.nr
@@ -91,8 +153,9 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
                     .count()
                     < self.checker_emerg_cpu_set.len()
             {
-                info!("{} Migrating to emergency CPU set", checker);
-                if let Some(segment) = live_checkers.iter().find(|x| {
+                info!("{} Migrating oldest checker to emergency CPU set", checker);
+
+                if let Some(segment) = state.live_checkers.iter().find(|x| {
                     x.nr < checker.segment.nr
                         && x.checker_status.lock().cpu_set() == Some(self.checker_cpu_set)
                 }) {
@@ -114,7 +177,7 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
                 printed = true;
             }
 
-            self.cvar.wait(&mut live_checkers);
+            self.cvar.wait(&mut state);
         }
 
         Ok(())
@@ -125,14 +188,33 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
         checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,
     ) -> Result<()> {
-        self.live_checkers.lock().remove(&checker.segment);
+        self.state.lock().live_checkers.remove(&checker.segment);
+        self.migrate_checker_to_booster_if_needed()?;
         self.cvar.notify_all();
         Ok(())
     }
 
     fn handle_segment_removed(&self, segment: &Arc<Segment>) -> Result<()> {
-        self.live_checkers.lock().remove(segment);
+        self.state.lock().live_checkers.remove(segment);
+        self.migrate_checker_to_booster_if_needed()?;
         self.cvar.notify_all();
+        Ok(())
+    }
+}
+
+impl ProcessLifetimeHook for CheckerScheduler<'_> {
+    fn handle_main_fini<'s, 'scope, 'disp>(
+        &'s self,
+        _main: &mut Main<Stopped>,
+        _exit_reason: &ExitReason,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
+    ) -> Result<()>
+    where
+        's: 'disp,
+        'disp: 'scope,
+    {
+        self.state.lock().main_finished = true;
+        self.migrate_checker_to_booster_if_needed()?;
         Ok(())
     }
 }
@@ -160,8 +242,14 @@ impl SignalHandler for CheckerScheduler<'_> {
             return Ok(SignalHandlerExitAction::NextHandler);
         }
 
+        let cpu_set = if self.state.lock().main_finished {
+            self.checker_booster_cpu_set
+        } else {
+            self.checker_emerg_cpu_set
+        };
+
         context.check_coord.migrate_checker(
-            self.checker_emerg_cpu_set.to_vec(),
+            cpu_set.to_vec(),
             context.child.unwrap_checker_mut(),
             context.scope,
         )?;
@@ -178,5 +266,6 @@ impl Module for CheckerScheduler<'_> {
         subs.install_segment_event_handler(self);
         subs.install_migration_handler(self);
         subs.install_signal_handler(self);
+        subs.install_process_lifetime_hook(self);
     }
 }
