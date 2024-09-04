@@ -133,7 +133,7 @@ impl DynamicSlicer {
         if main_cycles > 0 {
             let memory_stats = main.memory_stats()?;
 
-            let fork_cow_cost_fraction = (memory_stats.dirty_pages as f64
+            let fork_cow_cost_fraction = (memory_stats.private_dirty_pages as f64
                 * self.params.nr_cycles_per_cow_op
                 + memory_stats.rss_pages as f64 * self.params.nr_cycles_per_fork_per_page)
                 / main_cycles as f64;

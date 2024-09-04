@@ -15,10 +15,36 @@ use crate::statistics_list;
 use crate::types::process_id::Main;
 use crate::{dispatcher::Module, error::Result};
 
+struct AverageAndPeak {
+    average: RunningAverage,
+    peak: Mutex<u64>,
+}
+
+impl AverageAndPeak {
+    fn new() -> Self {
+        Self {
+            average: RunningAverage::new(),
+            peak: Mutex::new(0),
+        }
+    }
+
+    fn update(&self, value: u64) {
+        self.average.update(value as _);
+        let mut peak = self.peak.lock();
+        if value > *peak {
+            *peak = value;
+        }
+    }
+
+    fn get(&self) -> (f64, u64) {
+        (self.average.get(), *self.peak.lock())
+    }
+}
+
 pub struct MemoryCollector {
     interval: Duration,
-    pss_average: RunningAverage,
-    pss_peak: Mutex<usize>,
+    pss: AverageAndPeak,
+    checkpoint_private_dirty: AverageAndPeak,
     num_samples: AtomicUsize,
     worker: Mutex<Option<Sender<()>>>,
     include_rt: bool,
@@ -28,8 +54,8 @@ impl MemoryCollector {
     pub fn new(interval: Duration, include_rt: bool) -> Self {
         Self {
             interval,
-            pss_average: RunningAverage::new(),
-            pss_peak: Mutex::new(0),
+            pss: AverageAndPeak::new(),
+            checkpoint_private_dirty: AverageAndPeak::new(),
             num_samples: AtomicUsize::new(0),
             worker: Mutex::new(None),
             include_rt,
@@ -55,6 +81,7 @@ impl ProcessLifetimeHook for MemoryCollector {
                 // TODO: join handle
                 let segments = context.check_coord.segments.read();
                 let mut processes = vec![context.check_coord.main.clone()];
+                let mut checkpoint_processes = vec![];
 
                 let mut checkpoints = HashSet::new();
 
@@ -72,7 +99,7 @@ impl ProcessLifetimeHook for MemoryCollector {
 
                 for checkpoint in checkpoints {
                     if let Some(p) = checkpoint.process.lock().as_ref() {
-                        processes.push(p.unowned_copy());
+                        checkpoint_processes.push(p.unowned_copy());
                     }
                 }
 
@@ -82,19 +109,31 @@ impl ProcessLifetimeHook for MemoryCollector {
 
                 drop(segments);
 
-                let pss = processes
-                    .iter()
-                    .map(|p| p.memory_stats().map(|x| x.pss).unwrap_or(0)) // Process may die at this point
-                    .sum::<usize>();
+                let mut pss = 0;
+                let mut checkpoint_private_dirty = 0;
+
+                for process in processes {
+                    if let Ok(stats) = process.memory_stats() {
+                        pss += stats.pss;
+                    }
+                }
+
+                for process in checkpoint_processes {
+                    if let Ok(stats) = process.memory_stats() {
+                        pss += stats.pss;
+                        checkpoint_private_dirty += stats.private_dirty;
+                    }
+                }
 
                 debug!("Sampled PSS = {}", pss);
+                debug!(
+                    "Sampled checkpoint private dirty = {}",
+                    checkpoint_private_dirty
+                );
 
-                self.pss_average.update(pss as _);
-                let mut pss_peak = self.pss_peak.lock();
-
-                if pss > *pss_peak {
-                    *pss_peak = pss;
-                }
+                self.pss.update(pss);
+                self.checkpoint_private_dirty
+                    .update(checkpoint_private_dirty);
 
                 self.num_samples.fetch_add(1, Ordering::SeqCst);
             }
@@ -112,9 +151,15 @@ impl StatisticsProvider for MemoryCollector {
     }
 
     fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]> {
+        let (pss_average, pss_peak) = self.pss.get();
+        let (checkpoint_private_dirty_average, checkpoint_private_dirty_peak) =
+            self.checkpoint_private_dirty.get();
+
         statistics_list!(
-            pss_average = self.pss_average.get(),
-            pss_peak = *self.pss_peak.lock(),
+            pss_average = pss_average,
+            pss_peak = pss_peak,
+            checkpoint_private_dirty_average = checkpoint_private_dirty_average,
+            checkpoint_private_dirty_peak = checkpoint_private_dirty_peak,
             num_samples = self.num_samples.load(Ordering::SeqCst)
         )
     }

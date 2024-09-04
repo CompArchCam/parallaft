@@ -88,7 +88,7 @@ pub trait DirtyPageAddressTracker {
                     .process()
                     .unwrap()
                     .memory_stats()?
-                    .dirty_pages
+                    .private_dirty_pages as _
             }
             InferiorId::Checker(segment) => {
                 segment
@@ -97,7 +97,7 @@ pub trait DirtyPageAddressTracker {
                     .process()
                     .unwrap()
                     .memory_stats()?
-                    .dirty_pages
+                    .private_dirty_pages as _
             }
         })
     }
