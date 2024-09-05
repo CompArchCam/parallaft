@@ -187,6 +187,7 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
         &self,
         checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,
+        _ctx: HandlerContext,
     ) -> Result<()> {
         self.state.lock().live_checkers.remove(&checker.segment);
         self.migrate_checker_to_booster_if_needed()?;
@@ -235,7 +236,7 @@ impl SignalHandler for CheckerScheduler<'_> {
     where
         'disp: 'scope,
     {
-        if signal != Signal::SIGTRAP
+        if signal != Signal::SIGUSR1
             || context.process().get_sigval()? != Some(Self::SIGVAL_MIGRATE_CHECKER)
             || !context.child.is_checker()
         {

@@ -22,5 +22,6 @@ fn test_mrs() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

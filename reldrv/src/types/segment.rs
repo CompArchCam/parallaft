@@ -7,6 +7,7 @@ use itertools::Itertools;
 use log::{debug, error, info};
 use parking_lot::{Condvar, MappedMutexGuard, Mutex, MutexGuard};
 
+use crate::check_coord::SyscallType;
 use crate::dirty_page_trackers::{DirtyPageAddressTracker, DirtyPageAddressesWithFlags};
 use crate::error::{Error, Result};
 use crate::events::comparator::{
@@ -71,6 +72,8 @@ pub struct Segment {
     pub status_cvar: Condvar,
     pub record: SegmentRecord,
     pub checker_status: Mutex<CheckerStatus>,
+    pub pinned: Mutex<bool>,
+    pub ongoing_syscall: Option<SyscallType>,
 }
 
 impl Hash for Segment {
@@ -110,6 +113,7 @@ impl Segment {
         checkpoint_start: Arc<Checkpoint>,
         nr: SegmentId,
         main: Process<Unowned>,
+        ongoing_syscall: Option<SyscallType>,
         enable_async_events: bool,
     ) -> Self {
         Self {
@@ -122,6 +126,8 @@ impl Segment {
             status_cvar: Condvar::new(),
             record: SegmentRecord::new(enable_async_events),
             checker_status: Mutex::new(CheckerStatus::new()),
+            pinned: Mutex::new(false),
+            ongoing_syscall,
         }
     }
 
@@ -159,12 +165,11 @@ impl Segment {
         }
     }
 
-    // Locks: record -> checker
     pub fn start_checker(&self, checker_cpu_set: Vec<usize>) -> Result<Process<Stopped>> {
-        // self.record.rewind(self)?; // TODO:
-        self.checker_status
-            .lock()
-            .start(&self.checkpoint_start, checker_cpu_set)
+        let mut checker_status = self.checker_status.lock();
+        assert!(!matches!(&*checker_status, CheckerStatus::Executing { .. }));
+        self.record.rewind(self)?;
+        checker_status.start(&self.checkpoint_start, checker_cpu_set)
     }
 
     fn get_main_dirty_page_addresses_once(
@@ -422,6 +427,6 @@ impl Segment {
     }
 
     pub fn is_both_finished(&self) -> bool {
-        self.is_main_finished() && self.checker_status.lock().is_finished()
+        self.is_main_finished() && self.checker_status.lock().is_finished() && !*self.pinned.lock()
     }
 }

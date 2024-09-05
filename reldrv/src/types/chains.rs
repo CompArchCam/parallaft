@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use log::debug;
 
+use crate::check_coord::SyscallType;
 use crate::error::Result;
 use crate::process::state::Unowned;
 use crate::process::Process;
@@ -80,6 +81,7 @@ impl SegmentChains {
         checkpoint: Checkpoint,
         is_finishing: bool,
         main: Process<Unowned>,
+        ongoing_syscall: Option<SyscallType>,
         enable_async_events: bool,
     ) -> AddCheckpointResult {
         let checkpoint = Arc::new(checkpoint);
@@ -99,7 +101,14 @@ impl SegmentChains {
         }
 
         if !is_finishing {
-            let segment = Segment::new(checkpoint, self.next_id, main, enable_async_events);
+            let segment = Segment::new(
+                checkpoint,
+                self.next_id,
+                main,
+                ongoing_syscall,
+                enable_async_events,
+            );
+
             self.next_id += 1;
             self.in_chain = true;
 
@@ -128,7 +137,7 @@ impl SegmentChains {
             let front = self.list.front();
             if let Some(front) = front {
                 let status = front.status.lock();
-                if matches!(&*status, SegmentStatus::Filling { .. }) {
+                if matches!(&*status, SegmentStatus::Filling { .. }) || *front.pinned.lock() {
                     break;
                 }
                 drop(status);
@@ -174,15 +183,15 @@ impl SegmentChains {
         Ok(())
     }
 
-    pub fn collect_results(&self) -> Option<ExitReason> {
+    pub fn collect_results(&self) -> Option<Result<ExitReason>> {
         for segment in &self.list {
             let checker_status = segment.checker_status.lock();
             match &*checker_status {
                 CheckerStatus::Checked { result: None, .. } => (),
                 CheckerStatus::Checked {
                     result: Some(r), ..
-                } => return Some(ExitReason::StateMismatch(*r)),
-                CheckerStatus::Crashed(error) => return Some(ExitReason::Crashed(error.clone())),
+                } => return Some(Ok(ExitReason::StateMismatch(*r))),
+                CheckerStatus::Crashed(error) => return Some(Err(error.clone())),
                 _ => panic!("Unexpected status"),
             }
         }

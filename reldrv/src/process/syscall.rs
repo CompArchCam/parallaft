@@ -33,13 +33,8 @@ impl Process<Stopped> {
     ) -> Result<WithProcess<Stopped, i64>> {
         // save the old states
         let saved_regs;
-        let saved_sigmask;
-
-        (self, saved_regs, saved_sigmask) = Self::save_state(self)?;
+        (self, saved_regs) = Self::save_state(self)?;
         let mut saved_instr = None;
-
-        // block signals during our injected syscall
-        ptrace::setsigmask(self.pid, !0)?;
 
         let dir = self.syscall_dir()?;
 
@@ -127,7 +122,6 @@ impl Process<Stopped> {
         self = Self::restore_state(
             self,
             saved_regs,
-            saved_sigmask,
             restart_parent_old_syscall,
             saved_instr.clone(),
         )?;
@@ -143,13 +137,7 @@ impl Process<Stopped> {
                 matches!(status, WaitStatus::PtraceEvent(pid, sig, _ev) if pid == child_pid && sig == Signal::SIGTRAP)
             );
 
-            child = Self::restore_state(
-                child,
-                saved_regs,
-                saved_sigmask,
-                restart_child_old_syscall,
-                saved_instr,
-            )?;
+            child = Self::restore_state(child, saved_regs, restart_child_old_syscall, saved_instr)?;
 
             child.forget();
         }
@@ -200,17 +188,13 @@ impl Process<Stopped> {
         Ok(WithProcess(parent, child))
     }
 
-    fn save_state(process: Process<Stopped>) -> Result<(Process<Stopped>, Registers, u64)> {
-        let (process, regs) = process.read_registers_precisely()?;
-        let pid = process.pid;
-
-        Ok((process, regs, ptrace::getsigmask(pid)?))
+    fn save_state(process: Process<Stopped>) -> Result<(Process<Stopped>, Registers)> {
+        process.read_registers_precisely()
     }
 
     fn restore_state(
         mut process: Process<Stopped>,
         saved_regs: Registers,
-        saved_sigmask: u64,
         restart_old_syscall: bool,
         saved_instr: Option<ReplacedInstructionWithOldIp>,
     ) -> Result<Process<Stopped>> {
@@ -266,9 +250,6 @@ impl Process<Stopped> {
         } else {
             process.write_registers(saved_regs)?;
         }
-
-        // restore the signal mask
-        ptrace::setsigmask(process.pid, saved_sigmask)?;
 
         Ok(process)
     }

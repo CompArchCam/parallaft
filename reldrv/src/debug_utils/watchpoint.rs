@@ -183,6 +183,7 @@ impl ProcessLifetimeHook for Watchpoint<'_> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
+        _exit_reason: &ExitReason,
         _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where

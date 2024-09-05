@@ -20,5 +20,6 @@ fn brk() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

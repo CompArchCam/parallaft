@@ -344,7 +344,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
     where
         'disp: 'scope,
     {
-        if signal != Signal::SIGTRAP {
+        if signal != Signal::SIGTRAP && signal != Signal::SIGUSR1 {
             return Ok(SignalHandlerExitAction::NextHandler);
         }
 

@@ -69,6 +69,7 @@ pub trait ProcessLifetimeHook {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
+        exit_reason: &ExitReason,
         context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where

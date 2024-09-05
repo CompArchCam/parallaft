@@ -9,6 +9,7 @@ fn getpid_once() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -27,6 +28,7 @@ fn getpid_loop() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -44,6 +46,7 @@ fn checkpoint_getpid_loop() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -62,5 +65,6 @@ fn getpid_loop_large() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

@@ -6,8 +6,8 @@ use reldrv::{
     dispatcher::Module,
     error::Result,
     events::{
-        module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler,
-        HandlerContextWithInferior,
+        module_lifetime::ModuleLifetimeHook, process_lifetime::HandlerContext,
+        syscall::CustomSyscallHandler, HandlerContextWithInferior,
     },
     process::state::Stopped,
     types::{perf_counter::cpu_info::pmu::PMUS, process_id::InferiorRefMut},
@@ -72,10 +72,7 @@ impl CustomSyscallHandler for MigrationHelper {
 }
 
 impl ModuleLifetimeHook for MigrationHelper {
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -133,6 +130,7 @@ fn test_pmc_migration() -> Result<()> {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect();
 
     Ok(())

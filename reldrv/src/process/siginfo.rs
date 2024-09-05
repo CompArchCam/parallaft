@@ -43,7 +43,7 @@ impl SigInfoExt for siginfo_t {
     }
 
     fn sigval(&self) -> Option<usize> {
-        if self.si_signo == libc::SIGTRAP && self.si_code == -1
+        if self.si_signo == libc::SIGUSR1 && self.si_code == -1
         /* SI_QUEUE */
         {
             return Some(unsafe { self.si_value().sival_ptr } as usize);

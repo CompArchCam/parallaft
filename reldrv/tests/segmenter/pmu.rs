@@ -29,5 +29,6 @@ fn pmu_segmentation() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

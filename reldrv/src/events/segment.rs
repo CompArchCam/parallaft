@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     process::state::{Running, Stopped},
     types::{
         checker::CheckFailReason,
@@ -114,12 +114,33 @@ pub trait SegmentEventHandler {
         &self,
         checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
+        ctx: HandlerContext,
     ) -> Result<()> {
         Ok(())
     }
 
     /// Called when the segment is about to be removed.
     fn handle_segment_removed(&self, segment: &Arc<Segment>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when the segment encounters an error during checker execution.
+    fn handle_segment_checker_error(
+        &self,
+        segment: &Arc<Segment>,
+        error: &Error,
+        abort: &mut bool,
+        ctx: HandlerContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when the checker worker thread is about to exit.
+    fn handle_checker_worker_fini(
+        &self,
+        segment: &Arc<Segment>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
         Ok(())
     }
 }

@@ -7,7 +7,7 @@ use path_macro::path;
 use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
-    events::segment::SegmentEventHandler,
+    events::{process_lifetime::HandlerContext, segment::SegmentEventHandler},
     process::state::Stopped,
     types::{checker::CheckFailReason, process_id::Checker},
 };
@@ -45,6 +45,7 @@ impl SegmentEventHandler for CoreDumper {
         &self,
         checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
+        _ctx: HandlerContext,
     ) -> Result<()> {
         if check_fail_reason.is_some() {
             info!("Creating core dump");

@@ -1,18 +1,16 @@
 use nix::sys::signal::Signal;
 
-use crate::error::Error;
-
 use super::checker::CheckFailReason;
 
 pub type ExitCode = i32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitReason {
     NormalExit(ExitCode),
     Signalled(Signal),
     UnexpectedlyDies,
     StateMismatch(CheckFailReason),
-    Crashed(Error),
+    Cancelled,
 }
 
 // pub fn unwrap_result_with(f: impl FnOnce() -> Result<ExitReason>) -> ExitReason {
@@ -26,16 +24,12 @@ impl ExitReason {
             ExitReason::Signalled(sig) => 128 + (*sig as i32),
             ExitReason::StateMismatch(_) => 253,
             ExitReason::UnexpectedlyDies => 254,
-            ExitReason::Crashed(_) => 255,
+            ExitReason::Cancelled => 255,
         }
     }
 
     pub fn expect(self) {
         self.expect_exit_code(0);
-    }
-
-    pub fn expect_crash(self) {
-        assert!(matches!(self, ExitReason::Crashed(_)));
     }
 
     pub fn expect_exit_code(self, code: ExitCode) {

@@ -12,6 +12,7 @@ fn limit_1() {
 
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -31,5 +32,6 @@ fn limit_8_getpid_loop() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

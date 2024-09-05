@@ -5,8 +5,8 @@ use reldrv::{
     dispatcher::Module,
     error::Result,
     events::{
-        module_lifetime::ModuleLifetimeHook, syscall::CustomSyscallHandler,
-        HandlerContextWithInferior,
+        module_lifetime::ModuleLifetimeHook, process_lifetime::HandlerContext,
+        syscall::CustomSyscallHandler, HandlerContextWithInferior,
     },
     exec_point_providers::{
         pmu::exec_point::BranchCounterBasedExecutionPoint, ExecutionPointProvider,
@@ -100,10 +100,7 @@ impl CustomSyscallHandler for PmcTester {
 }
 
 impl ModuleLifetimeHook for PmcTester {
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -190,6 +187,7 @@ fn pmc_monotonicity() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }
 
@@ -260,5 +258,6 @@ fn pmc_consistency() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

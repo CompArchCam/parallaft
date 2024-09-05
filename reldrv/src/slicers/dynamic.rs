@@ -3,7 +3,6 @@ use std::{
         atomic::AtomicU32,
         mpsc::{channel, RecvTimeoutError, Sender},
     },
-    thread::Scope,
     time::Duration,
 };
 
@@ -236,7 +235,7 @@ impl ProcessLifetimeHook for DynamicSlicer {
 }
 
 impl ModuleLifetimeHook for DynamicSlicer {
-    fn fini<'s, 'scope, 'env>(&'s self, _scope: &'scope Scope<'scope, 'env>) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {

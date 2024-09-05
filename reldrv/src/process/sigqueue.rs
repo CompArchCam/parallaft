@@ -25,10 +25,10 @@ impl<S: ProcessState> Process<S> {
             nix::libc::syscall(
                 nix::libc::SYS_rt_sigqueueinfo,
                 self.pid.as_raw(),
-                nix::libc::SIGTRAP,
+                nix::libc::SIGUSR1,
                 &siginfo_t {
                     si: siginfo_t_inner {
-                        si_signo: nix::libc::SIGTRAP,
+                        si_signo: nix::libc::SIGUSR1,
                         si_errno: 0,
                         si_code: -1, /* SI_QUEUE */
                         si_pid: 0,

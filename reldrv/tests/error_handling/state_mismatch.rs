@@ -36,6 +36,7 @@ fn register_comparsion_failure_single() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect_state_mismatch()
 }
 
@@ -53,5 +54,6 @@ fn register_comparsion_failure_double() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect_state_mismatch()
 }

@@ -28,5 +28,6 @@ fn cpuid() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

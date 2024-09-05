@@ -3,6 +3,7 @@ use std::sync::Arc;
 use procfs::ProcError;
 
 use crate::types::{
+    exit_reason::ExitReason,
     perf_counter::symbolic_events::expr::PmuError,
     segment_record::saved_event::{SavedEvent, SavedEventType},
 };
@@ -53,6 +54,9 @@ pub enum Error {
 
     #[error("Other error")]
     Other,
+
+    #[error("Unexpected checker exit reason: `{0:?}`")]
+    UnexpectedCheckerExitReason(ExitReason),
 
     #[error("Panic")]
     Panic,

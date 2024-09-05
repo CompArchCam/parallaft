@@ -5,6 +5,7 @@ pub use super::governor::CpuFreqGovernor;
 use crate::dispatcher::{Module, Subscribers};
 use crate::error::Result;
 use crate::events::module_lifetime::ModuleLifetimeHook;
+use crate::events::process_lifetime::HandlerContext;
 
 pub struct FixedCpuFreqGovernorSetter<'a> {
     checker_cpu_set: &'a [usize],
@@ -44,10 +45,7 @@ impl<'a> FixedCpuFreqGovernorSetter<'a> {
 }
 
 impl<'a> ModuleLifetimeHook for FixedCpuFreqGovernorSetter<'a> {
-    fn init<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn init<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -60,10 +58,7 @@ impl<'a> ModuleLifetimeHook for FixedCpuFreqGovernorSetter<'a> {
         Ok(())
     }
 
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {

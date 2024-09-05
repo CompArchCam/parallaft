@@ -515,10 +515,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
 }
 
 impl ModuleLifetimeHook for DynamicCpuFreqScaler<'_> {
-    fn init<'s, 'scope, 'env>(
-        &'s self,
-        scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn init<'s, 'scope, 'env>(&'s self, ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -534,7 +531,7 @@ impl ModuleLifetimeHook for DynamicCpuFreqScaler<'_> {
 
         std::thread::Builder::new()
             .name("dvfs-scaler".to_string())
-            .spawn_scoped(scope, move || {
+            .spawn_scoped(ctx.scope, move || {
                 while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(self.adjustment_period) {
                     self.do_adjustment().expect("Failed to adjust frequency");
                 }
@@ -543,10 +540,7 @@ impl ModuleLifetimeHook for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {

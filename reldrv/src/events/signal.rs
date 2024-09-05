@@ -24,12 +24,14 @@ pub enum SignalHandlerExitAction {
 pub trait SignalHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
-        _signal: Signal,
-        _context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
+        signal: Signal,
+        context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
     {
+        let _ = signal;
+        let _ = context;
         Ok(SignalHandlerExitAction::NextHandler)
     }
 }

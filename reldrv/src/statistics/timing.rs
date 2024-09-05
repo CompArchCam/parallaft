@@ -272,6 +272,7 @@ impl SegmentEventHandler for Tracer {
         &self,
         checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,
+        _ctx: HandlerContext,
     ) -> Result<()> {
         let ticks_per_second = procfs::ticks_per_second();
         let stats = checker.process().stats()?;

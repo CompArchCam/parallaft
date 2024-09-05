@@ -46,6 +46,7 @@ fn limit() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 
     // TODO: assert that >= 256 / 16 = 16 checkpoints have been taken

@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc, thread::Scope};
+use std::{ops::Range, sync::Arc};
 
 use nix::sys::signal::Signal;
 use parking_lot::RwLock;
@@ -11,7 +11,7 @@ use crate::{
     dirty_page_trackers::{
         DirtyPageAddressTracker, DirtyPageAddressesWithFlags, ExtraWritableRangesProvider,
     },
-    error::Result,
+    error::{Error, Result},
     events::{
         comparator::{
             MemoryComparator, MemoryComparsionResult, RegisterComparator, RegisterComparsionResult,
@@ -332,6 +332,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
     fn handle_checker_fini<'s, 'scope, 'disp>(
         &'s self,
         checker: &mut Checker<Stopped>,
+        exit_reason: &ExitReason,
         context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
@@ -342,7 +343,7 @@ impl<'a, 'm> ProcessLifetimeHook for Dispatcher<'a, 'm> {
             .read()
             .process_lifetime_hooks
             .iter()
-            .try_for_each(|h| h.handle_checker_fini(checker, context))
+            .try_for_each(|h| h.handle_checker_fini(checker, exit_reason, context))
     }
 
     fn handle_all_fini<'s, 'scope, 'disp>(
@@ -560,8 +561,10 @@ impl SegmentEventHandler for Dispatcher<'_, '_> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main<Running>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker<Stopped>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker<Stopped>));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
+    generate_event_handler!(segment_event_handlers, fn handle_segment_checker_error(&self, segment: &Arc<Segment>, error: &Error, abort: &mut bool, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_worker_fini(&self, segment: &Arc<Segment>, ctx: HandlerContext));
 }
 
 impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
@@ -667,7 +670,7 @@ impl MemoryComparator for Dispatcher<'_, '_> {
 }
 
 impl ModuleLifetimeHook for Dispatcher<'_, '_> {
-    fn init<'s, 'scope, 'env>(&'s self, scope: &'scope Scope<'scope, 'env>) -> Result<()>
+    fn init<'s, 'scope, 'env>(&'s self, ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -675,10 +678,10 @@ impl ModuleLifetimeHook for Dispatcher<'_, '_> {
             .read()
             .module_lifetime_hooks
             .iter()
-            .try_for_each(|m| m.init(scope))
+            .try_for_each(|m| m.init(ctx))
     }
 
-    fn fini<'s, 'scope, 'env>(&'s self, scope: &'scope Scope<'scope, 'env>) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {
@@ -686,7 +689,7 @@ impl ModuleLifetimeHook for Dispatcher<'_, '_> {
             .read()
             .module_lifetime_hooks
             .iter()
-            .try_for_each(|m| m.fini(scope))
+            .try_for_each(|m| m.fini(ctx))
     }
 }
 

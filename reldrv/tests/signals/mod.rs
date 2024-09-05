@@ -3,12 +3,14 @@ use std::{
     time::Duration,
 };
 
+use log::info;
 use nix::sys::signal::Signal;
 use parking_lot::Mutex;
 use reldrv::{
     dispatcher::Module,
     events::{
-        module_lifetime::ModuleLifetimeHook, process_lifetime::ProcessLifetimeHook,
+        module_lifetime::ModuleLifetimeHook,
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         signal::SignalHandler,
     },
     RelShellOptionsBuilder,
@@ -51,7 +53,7 @@ impl ProcessLifetimeHook for SignalInjector {
             for segment in segments.list.iter() {
                 let checker_status = segment.checker_status.lock();
                 if let Some(process) = checker_status.process() {
-                    if process.kill_with_sig(Signal::SIGUSR2).is_ok() {
+                    if process.kill_with_sig(Signal::SIGUSR1).is_ok() {
                         n += 1;
                     }
                 }
@@ -60,13 +62,13 @@ impl ProcessLifetimeHook for SignalInjector {
             if context
                 .check_coord
                 .main
-                .kill_with_sig(Signal::SIGUSR2)
+                .kill_with_sig(Signal::SIGUSR1)
                 .is_ok()
             {
                 n += 1;
             }
 
-            println!("Injected SIGUSR2 to {} processes", n);
+            info!("Injected SIGUSR1 to {} processes", n);
         });
 
         *self.stop_tx.lock() = Some(tx);
@@ -78,7 +80,7 @@ impl ProcessLifetimeHook for SignalInjector {
 impl ModuleLifetimeHook for SignalInjector {
     fn fini<'s, 'scope, 'env>(
         &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
+        _ctx: HandlerContext<'_, 'scope, '_, '_, '_>,
     ) -> reldrv::error::Result<()>
     where
         's: 'scope,
@@ -92,7 +94,7 @@ impl SignalHandler for SignalInjector {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: nix::sys::signal::Signal,
-        _context: reldrv::events::HandlerContextWithInferior<
+        context: reldrv::events::HandlerContextWithInferior<
             '_,
             '_,
             'disp,
@@ -106,7 +108,8 @@ impl SignalHandler for SignalInjector {
     where
         'disp: 'scope,
     {
-        if signal == Signal::SIGUSR2 {
+        if signal == Signal::SIGUSR1 {
+            info!("{} Received SIGUSR1", context.child);
             Ok(reldrv::events::signal::SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step: false })
         } else {
             Ok(reldrv::events::signal::SignalHandlerExitAction::NextHandler)
@@ -140,5 +143,6 @@ fn test_signal_handling() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }

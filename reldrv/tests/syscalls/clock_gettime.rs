@@ -20,5 +20,6 @@ fn clock_gettime() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

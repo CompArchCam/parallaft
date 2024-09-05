@@ -560,5 +560,5 @@ fn main() {
 
     let exit_status = reldrv::run(Command::new(cli.command).args(cli.args), config);
 
-    std::process::exit(exit_status.exit_code());
+    std::process::exit(exit_status.map_or(255, |x| x.exit_code()));
 }

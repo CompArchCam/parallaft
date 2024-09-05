@@ -68,5 +68,5 @@ fn excess_syscall_on_1st() {
             .build()
             .unwrap(),
     )
-    .expect_crash()
+    .unwrap_err();
 }

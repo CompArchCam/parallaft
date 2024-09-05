@@ -47,6 +47,7 @@ fn mmap_anon() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -81,6 +82,7 @@ fn mmap_fd_read_dev_zero() {
 
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -122,6 +124,7 @@ fn mmap_fd_read_memfd() {
 
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -168,6 +171,7 @@ fn mmap_fd_write_shared_memfd() {
 
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -215,6 +219,7 @@ fn mremap_maymove() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -259,5 +264,6 @@ fn mremap_may_not_move() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

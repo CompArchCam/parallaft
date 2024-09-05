@@ -11,6 +11,7 @@ fn basic_checkpointing() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -22,6 +23,7 @@ fn basic_checkpointing_twice() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -39,6 +41,7 @@ fn basic_checkpointing_ten_times_parallel() {
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect()
 }
 
@@ -48,6 +51,7 @@ fn no_checkpoint_fini() {
         checkpoint_take();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -59,6 +63,7 @@ fn duplicated_checkpoint_fini() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -155,6 +160,7 @@ fn register_preservation_after_checkpoint() {
 
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -359,6 +365,7 @@ fn register_preservation_after_checkpoint() {
         0;
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 

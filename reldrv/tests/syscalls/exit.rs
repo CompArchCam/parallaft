@@ -8,6 +8,7 @@ fn exit() {
         unsafe { libc::syscall(libc::SYS_exit, 42) };
         unreachable!()
     })
+    .unwrap()
     .expect_exit_code(42)
 }
 
@@ -18,5 +19,6 @@ fn exit_group() {
         unsafe { libc::syscall(libc::SYS_exit_group, 42) };
         unreachable!()
     })
+    .unwrap()
     .expect_exit_code(42)
 }

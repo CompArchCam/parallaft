@@ -56,7 +56,7 @@ pub fn take_exec_point() {
 pub fn trace_w_options<E>(
     f: impl FnOnce() -> Result<(), E>,
     options: RelShellOptions,
-) -> ExitReason {
+) -> reldrv::error::Result<ExitReason> {
     setup();
 
     // TODO: ensure there are no leftover processes
@@ -75,7 +75,7 @@ pub fn trace_w_options<E>(
 }
 
 #[must_use]
-pub fn trace<E>(f: impl FnOnce() -> Result<(), E>) -> ExitReason {
+pub fn trace<E>(f: impl FnOnce() -> Result<(), E>) -> reldrv::error::Result<ExitReason> {
     trace_w_options(
         f,
         RelShellOptionsBuilder::test_serial_default()

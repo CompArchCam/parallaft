@@ -26,6 +26,7 @@ fn rdtsc() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -44,6 +45,7 @@ fn rdtsc_loop() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -53,6 +55,7 @@ fn rdtsc_outside_protected_region() {
         unsafe { _rdtsc() };
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -66,6 +69,7 @@ fn rdtscp() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -85,6 +89,7 @@ fn rdtscp_loop() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }
 
@@ -95,5 +100,6 @@ fn rdtscp_outside_protected_region() {
         unsafe { __rdtscp(aux.as_mut_ptr()) };
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

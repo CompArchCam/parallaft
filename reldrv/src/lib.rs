@@ -258,7 +258,10 @@ impl RelShellOptionsBuilder {
     }
 }
 
-pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
+pub fn parent_work(
+    child_pid: Pid,
+    mut options: RelShellOptions,
+) -> crate::error::Result<ExitReason> {
     info!("Starting with options {:#?}", &options);
 
     #[cfg(target_arch = "x86_64")]
@@ -529,7 +532,7 @@ pub fn parent_work(child_pid: Pid, mut options: RelShellOptions) -> ExitReason {
     exit_status
 }
 
-pub fn run(cmd: &mut Command, options: RelShellOptions) -> ExitReason {
+pub fn run(cmd: &mut Command, options: RelShellOptions) -> crate::error::Result<ExitReason> {
     if options.enable_odf {
         unsafe { syscall!(Sysno::prctl, 65, 0, 0, 0, 0) }
             .expect("Failed to initialise on-demand fork (ODF). Check your kernel support.");

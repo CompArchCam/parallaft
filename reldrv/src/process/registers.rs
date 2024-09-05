@@ -487,6 +487,32 @@ impl Registers {
         self.rsi = arg as _;
         self
     }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn with_one_random_bit_flipped(mut self) -> Registers {
+        use rand::Rng;
+
+        let reg = rand::thread_rng().gen_range(0..=33);
+        let bit = rand::thread_rng().gen_range(0..=63);
+
+        match reg {
+            0..=30 => {
+                self.regs[reg as usize] ^= 1 << bit;
+            }
+            31 => {
+                self.sp ^= 1 << bit;
+            }
+            32 => {
+                self.pc ^= 1 << bit;
+            }
+            33 => {
+                self.pstate ^= 1 << bit;
+            }
+            _ => unreachable!(),
+        }
+
+        self
+    }
 }
 
 pub trait RegisterAccess

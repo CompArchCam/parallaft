@@ -165,6 +165,7 @@ fn run_bench(
             .build()
             .unwrap(),
     )
+    .unwrap()
     .expect();
 
     let values = values.lock();

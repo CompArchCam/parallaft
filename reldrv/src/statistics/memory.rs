@@ -204,10 +204,7 @@ impl StatisticsProvider for MemoryCollector {
 }
 
 impl ModuleLifetimeHook for MemoryCollector {
-    fn fini<'s, 'scope, 'env>(
-        &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
-    ) -> Result<()>
+    fn fini<'s, 'scope, 'env>(&'s self, _ctx: HandlerContext<'_, 'scope, '_, '_, '_>) -> Result<()>
     where
         's: 'scope,
     {

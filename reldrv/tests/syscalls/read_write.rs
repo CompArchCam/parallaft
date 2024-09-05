@@ -23,5 +23,6 @@ fn read_write() {
         checkpoint_fini();
         Ok::<_, ()>(())
     })
+    .unwrap()
     .expect()
 }

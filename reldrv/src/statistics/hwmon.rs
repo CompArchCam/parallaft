@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     dispatcher::Module,
     error::{Error, Result},
-    events::module_lifetime::ModuleLifetimeHook,
+    events::{module_lifetime::ModuleLifetimeHook, process_lifetime::HandlerContext},
 };
 
 use super::{StatisticValue, StatisticsProvider};
@@ -156,7 +156,7 @@ impl HwmonCollector {
 impl ModuleLifetimeHook for HwmonCollector {
     fn init<'s, 'scope, 'env>(
         &'s self,
-        scope: &'scope std::thread::Scope<'scope, 'env>,
+        ctx: HandlerContext<'_, 'scope, '_, '_, '_>,
     ) -> crate::error::Result<()>
     where
         's: 'scope,
@@ -169,7 +169,7 @@ impl ModuleLifetimeHook for HwmonCollector {
         *self.stop_tx.lock() = Some(tx);
 
         debug!("Hwmon: Starting sampling thread");
-        scope.spawn(move || {
+        ctx.scope.spawn(move || {
             let result = catch_unwind(AssertUnwindSafe(|| loop {
                 self.sample();
                 if rx.recv_timeout(self.interval).is_ok() {
@@ -189,7 +189,7 @@ impl ModuleLifetimeHook for HwmonCollector {
 
     fn fini<'s, 'scope, 'env>(
         &'s self,
-        _scope: &'scope std::thread::Scope<'scope, 'env>,
+        _ctx: HandlerContext<'_, 'scope, '_, '_, '_>,
     ) -> crate::error::Result<()>
     where
         's: 'scope,
