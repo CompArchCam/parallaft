@@ -1,5 +1,6 @@
 #[cfg(feature = "dpt_fpt")]
 pub mod fpt;
+pub mod full;
 pub mod kpagecount;
 pub mod null;
 pub mod soft_dirty;
@@ -32,6 +33,7 @@ pub enum DirtyPageAddressTrackerType {
     KPageCount,
     PagemapScanUnique,
     PagemapScanSoftDirty,
+    Full,
     None,
 }
 
@@ -46,8 +48,8 @@ impl Default for DirtyPageAddressTrackerType {
                     Self::KPageCount
                 }
                 else {
-                    warn!("No dirty page address tracker available, disabling dirty page tracking");
-                    Self::None
+                    warn!("No dirty page address tracker available, checking all writable pages");
+                    Self::Full
                 }
             }
             else {
@@ -61,8 +63,8 @@ impl Default for DirtyPageAddressTrackerType {
                     Self::SoftDirty
                 }
                 else {
-                    warn!("No dirty page address tracker available, disabling dirty page tracking");
-                    Self::None
+                    warn!("No dirty page address tracker available, checking all writable pages");
+                    Self::Full
                 }
             }
         }

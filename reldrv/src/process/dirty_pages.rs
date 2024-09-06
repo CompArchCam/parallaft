@@ -368,7 +368,7 @@ impl<S: ProcessState> Process<S> {
         Ok(())
     }
 
-    pub fn get_writable_ranges(&self) -> Result<Box<[Range<usize>]>> {
+    pub fn get_writable_ranges(&self) -> Result<Vec<Range<usize>>> {
         let mut ranges = Vec::new();
 
         for map in self.procfs()?.maps()? {
@@ -382,7 +382,7 @@ impl<S: ProcessState> Process<S> {
 
         // stitch consecutive ranges
         if ranges.is_empty() {
-            return Ok(Vec::new().into_boxed_slice());
+            return Ok(Vec::new());
         }
 
         let mut result = Vec::new();
@@ -399,7 +399,7 @@ impl<S: ProcessState> Process<S> {
 
         result.push(current_range);
 
-        Ok(result.into_boxed_slice())
+        Ok(result)
     }
 
     pub fn dump_memory_maps(&self) -> Result<()> {

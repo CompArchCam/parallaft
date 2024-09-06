@@ -38,6 +38,7 @@ use debug_utils::in_protection_asserter::InProtectionAsserter;
 use debug_utils::watchpoint::Watchpoint;
 use derivative::Derivative;
 use derive_builder::Builder;
+use dirty_page_trackers::full::AllWritablePageTracker;
 use dirty_page_trackers::kpagecount::KPageCountDirtyPageTracker;
 use dirty_page_trackers::null::NullDirtyPageTracker;
 #[cfg(feature = "dpt_uffd")]
@@ -475,6 +476,9 @@ pub fn parent_work(
             disp.register_module(KPageCountDirtyPageTracker::new(
                 options.dirty_page_tracker == DirtyPageAddressTrackerType::KPageCount,
             ));
+        }
+        DirtyPageAddressTrackerType::Full => {
+            disp.register_module(AllWritablePageTracker::new());
         }
         DirtyPageAddressTrackerType::None => {
             disp.register_module(NullDirtyPageTracker::new());
