@@ -6,6 +6,7 @@ pub mod dispatcher;
 pub mod error;
 pub mod events;
 pub mod exec_point_providers;
+pub mod features;
 pub mod helpers;
 pub mod inferior_rtlib;
 pub mod process;
@@ -454,10 +455,11 @@ pub fn parent_work(
 
     // Dirty page trackers
     match options.dirty_page_tracker {
-        DirtyPageAddressTrackerType::SoftDirty => {
+        DirtyPageAddressTrackerType::SoftDirty
+        | DirtyPageAddressTrackerType::PagemapScanSoftDirty => {
             disp.register_module(SoftDirtyPageTracker::new(
                 options.dont_clear_soft_dirty,
-                options.dont_use_pagemap_scan,
+                options.dirty_page_tracker == DirtyPageAddressTrackerType::SoftDirty,
             ));
         }
         #[cfg(feature = "dpt_fpt")]
@@ -468,9 +470,10 @@ pub fn parent_work(
         DirtyPageAddressTrackerType::Uffd => {
             disp.register_module(UffdDirtyPageTracker::new(options.dont_clear_soft_dirty));
         }
-        DirtyPageAddressTrackerType::KPageCount => {
+        DirtyPageAddressTrackerType::KPageCount
+        | DirtyPageAddressTrackerType::PagemapScanUnique => {
             disp.register_module(KPageCountDirtyPageTracker::new(
-                options.dont_use_pagemap_scan,
+                options.dirty_page_tracker == DirtyPageAddressTrackerType::KPageCount,
             ));
         }
         DirtyPageAddressTrackerType::None => {

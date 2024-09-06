@@ -1,16 +1,16 @@
-use std::{ops::Range, os::fd::AsRawFd, slice};
+use std::{fmt::Display, ops::Range, os::fd::AsRawFd, slice};
 
 use bitflags::bitflags;
 use log::{debug, info, trace};
 
-use nix::ioctl_readwrite;
+use nix::{errno::Errno, ioctl_readwrite};
 use procfs::{
     process::{MMPermissions, MMapPath, MemoryMap, MemoryPageFlags, PageInfo, SwapPageFlags},
     KPageCount,
 };
 use try_insert_ext::OptionInsertExt;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::process::Process;
 
 use super::state::ProcessState;
@@ -118,7 +118,7 @@ bitflags! {
         const SWAPPED = 1 << 4;
         const PFNZERO = 1 << 5;
         const HUGE = 1 << 6;
-        const SORT_DIRTY = 1 << 7;
+        const SOFT_DIRTY = 1 << 7;
         const UNIQUE = 1 << 8;
     }
 }
@@ -128,6 +128,16 @@ pub enum PageFlagType {
     SoftDirty,
     UffdWp,
     KPageCountEqualsOne,
+}
+
+impl Display for PageFlagType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PageFlagType::SoftDirty => write!(f, "soft dirty"),
+            PageFlagType::UffdWp => write!(f, "uffd wp"),
+            PageFlagType::KPageCountEqualsOne => write!(f, "kpagecount1"),
+        }
+    }
 }
 
 impl<S: ProcessState> Process<S> {
@@ -238,7 +248,7 @@ impl<S: ProcessState> Process<S> {
                 );
 
                 let flag = match page_flag {
-                    PageFlagType::SoftDirty => PageCategory::SORT_DIRTY,
+                    PageFlagType::SoftDirty => PageCategory::SOFT_DIRTY,
                     PageFlagType::UffdWp => PageCategory::WRITTEN,
                     PageFlagType::KPageCountEqualsOne => PageCategory::UNIQUE,
                 };
@@ -313,7 +323,7 @@ impl<S: ProcessState> Process<S> {
                                     }
                                     let pfn = flags.get_page_frame_number();
                                     if pfn.0 == 0 {
-                                        panic!("Unexpected PFN, check your permissions");
+                                        return Err(Error::Nix(Errno::EPERM));
                                     }
                                     kpagecount
                                         .get_or_try_insert_with(|| KPageCount::new())?
@@ -495,6 +505,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires custom kernel"]
     fn test_pagemap_scan_unique() -> crate::error::Result<()> {
         let page_size = *PAGESIZE as usize;
 

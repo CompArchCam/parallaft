@@ -21,6 +21,8 @@ pub enum DirtyPageAddressTrackerType {
     #[cfg(feature = "dpt_uffd")]
     Uffd,
     KPageCount,
+    PagemapScanUnique,
+    PagemapScanSoftDirty,
     None,
 }
 
