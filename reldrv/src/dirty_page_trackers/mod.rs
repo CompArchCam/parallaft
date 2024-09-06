@@ -8,10 +8,19 @@ pub mod uffd;
 
 use cfg_if::cfg_if;
 use clap::ValueEnum;
+use log::warn;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, ops::Range};
 
-use crate::{error::Result, process::PAGESIZE, types::process_id::InferiorId};
+use crate::{
+    error::Result,
+    features::{
+        dirty_page_userspace_scan::KPAGECOUNT_FEATURE, pagemap_scan::PAGEMAP_SCAN_UNIQUE_FEATURE,
+        Feature,
+    },
+    process::PAGESIZE,
+    types::process_id::InferiorId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum DirtyPageAddressTrackerType {
@@ -30,10 +39,31 @@ impl Default for DirtyPageAddressTrackerType {
     fn default() -> Self {
         cfg_if! {
             if #[cfg(target_arch = "aarch64")] {
-                Self::KPageCount
+                if PAGEMAP_SCAN_UNIQUE_FEATURE.is_available().is_ok() {
+                    Self::PagemapScanUnique
+                }
+                else if KPAGECOUNT_FEATURE.is_available().is_ok() {
+                    Self::KPageCount
+                }
+                else {
+                    warn!("No dirty page address tracker available, disabling dirty page tracking");
+                    Self::None
+                }
             }
             else {
-                Self::SoftDirty
+                if PAGEMAP_SCAN_UNIQUE_FEATURE.is_available().is_ok() {
+                    Self::PagemapScanUnique
+                }
+                else if PAGEMAP_SCAN_SOFT_DIRTY_FEATURE.is_available().is_ok() {
+                    Self::PagemapScanSoftDirty
+                }
+                else if SOFT_DIRTY_FEATURE.is_available().is_ok() {
+                    Self::SoftDirty
+                }
+                else {
+                    warn!("No dirty page address tracker available, disabling dirty page tracking");
+                    Self::None
+                }
             }
         }
     }
