@@ -23,7 +23,7 @@ use reldrv::{
     },
     process::{registers::RegisterAccess, state::Stopped},
     types::{
-        checker::CheckFailReason,
+        checker::{CheckFailReason, CheckerStatus},
         exit_reason::ExitReason,
         process_id::Checker,
         segment::{Segment, SegmentId},
@@ -39,8 +39,12 @@ struct CliArgs {
     config: Option<PathBuf>,
 
     /// Number of error injection iterations per segment
-    #[arg(short, long, default_value = "10")]
+    #[arg(short = 'n', long, default_value = "10")]
     iters_per_segment: u64,
+
+    /// Don't actually inject errors
+    #[arg(short, long)]
+    dry_run: bool,
 
     command: String,
     args: Vec<String>,
@@ -70,6 +74,7 @@ enum SegmentStatus {
 struct SegmentState {
     counts: HashMap<ResultKind, u64>,
     total: u64,
+    injected: u64,
     status: SegmentStatus,
 }
 
@@ -78,6 +83,7 @@ impl SegmentState {
         Self {
             counts: HashMap::new(),
             total: 0,
+            injected: 0,
             status: SegmentStatus::Training {
                 started: Instant::now(),
             },
@@ -101,15 +107,17 @@ impl State {
 struct ErrorInjector {
     state: Arc<Mutex<State>>,
     iters_per_segment: u64,
+    dry_run: bool,
 }
 
 impl ErrorInjector {
     const SIGVAL_INJECT_ERROR: usize = 0xc8a0820d360efe8e;
 
-    fn new(iters_per_segment: u64, state: Arc<Mutex<State>>) -> Self {
+    fn new(iters_per_segment: u64, dry_run: bool, state: Arc<Mutex<State>>) -> Self {
         Self {
             state,
             iters_per_segment,
+            dry_run,
         }
     }
 }
@@ -178,7 +186,7 @@ impl SegmentEventHandler for ErrorInjector {
             *segment_counts.entry(ResultKind::Pass).or_default() += 1;
         }
 
-        if segment_state.total >= self.iters_per_segment {
+        if segment_state.injected >= self.iters_per_segment {
             *checker.segment.pinned.lock() = false;
         }
 
@@ -220,7 +228,7 @@ impl SegmentEventHandler for ErrorInjector {
 
         *segment_state.counts.entry(kind).or_default() += 1;
 
-        if segment_state.total >= self.iters_per_segment {
+        if segment_state.injected >= self.iters_per_segment {
             *segment.pinned.lock() = false;
             segment.checker_status.lock().assume_checked();
         }
@@ -259,10 +267,30 @@ impl SignalHandler for ErrorInjector {
             return Ok(SignalHandlerExitAction::NextHandler);
         }
 
-        info!("{} Injecting error", context.child);
-        context
-            .process_mut()
-            .modify_registers_with(|r| r.with_one_random_bit_flipped())?;
+        if !matches!(
+            &*context.child.segment().unwrap().checker_status.lock(),
+            CheckerStatus::Executing { .. }
+        ) {
+            return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                single_step: false,
+            });
+        }
+
+        if self.dry_run {
+            info!("{} Dry run: not injecting error", context.child);
+        } else {
+            info!("{} Injecting error", context.child);
+            context
+                .process_mut()
+                .modify_registers_with(|r| r.with_one_random_bit_flipped())?;
+        }
+
+        self.state
+            .lock()
+            .segments
+            .get_mut(&context.child.segment().unwrap().nr)
+            .unwrap()
+            .injected += 1;
 
         Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step: false })
     }
@@ -294,6 +322,7 @@ fn main() -> reldrv::error::Result<()> {
 
     config.extra_modules = vec![Box::new(ErrorInjector::new(
         cli.iters_per_segment,
+        cli.dry_run,
         state.clone(),
     ))];
 
