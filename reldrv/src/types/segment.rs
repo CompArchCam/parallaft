@@ -166,9 +166,9 @@ impl Segment {
     }
 
     pub fn start_checker(&self, checker_cpu_set: Vec<usize>) -> Result<Process<Stopped>> {
+        self.record.rewind(self)?;
         let mut checker_status = self.checker_status.lock();
         assert!(!matches!(&*checker_status, CheckerStatus::Executing { .. }));
-        self.record.rewind(self)?;
         checker_status.start(&self.checkpoint_start, checker_cpu_set)
     }
 

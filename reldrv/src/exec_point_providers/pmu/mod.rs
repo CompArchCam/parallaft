@@ -74,11 +74,21 @@ impl SegmentInfo {
         Ok(pmc + self.branch_count_offset)
     }
 
-    pub fn init_or_migrate_branch_counter(&mut self, pid: Pid, cpu_set: &[usize]) -> Result<()> {
+    pub fn init_or_migrate_branch_counter(
+        &mut self,
+        pid: Pid,
+        cpu_set: &[usize],
+        reset: bool,
+    ) -> Result<()> {
         let new_counter = BranchCounter::new(self.branch_type, Target::Pid(pid), true, cpu_set)?;
 
-        if let Some(mut old_counter) = self.checker_branch_counter.replace(new_counter) {
-            self.branch_count_offset += old_counter.read()?;
+        if reset {
+            self.branch_count_offset = 0;
+            self.checker_branch_counter = Some(new_counter);
+        } else {
+            if let Some(mut old_counter) = self.checker_branch_counter.replace(new_counter) {
+                self.branch_count_offset += old_counter.read()?;
+            }
         }
 
         Ok(())
@@ -89,7 +99,7 @@ impl SegmentInfo {
         checker_process: &mut Process<Stopped>,
         new_cpu_set: &[usize],
     ) -> Result<()> {
-        self.init_or_migrate_branch_counter(checker_process.pid, new_cpu_set)?;
+        self.init_or_migrate_branch_counter(checker_process.pid, new_cpu_set, false)?;
 
         if let Some((exec_point, state)) = self.active_exec_point.as_mut() {
             if let ExecutionPointReplayState::CountingBranches { .. } = state {
@@ -260,7 +270,11 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
         let checker_status = checker.segment.checker_status.lock();
         let checker_cpu_set = checker_status.cpu_set().unwrap();
 
-        segment_info.init_or_migrate_branch_counter(checker.process().pid, checker_cpu_set)?;
+        segment_info.init_or_migrate_branch_counter(
+            checker.process().pid,
+            checker_cpu_set,
+            true,
+        )?;
 
         drop(checker_status);
 
