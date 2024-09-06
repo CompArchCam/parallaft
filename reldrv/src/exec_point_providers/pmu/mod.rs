@@ -4,10 +4,7 @@ pub mod exec_point;
 use std::{
     collections::{HashMap, LinkedList},
     fmt::Debug,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use derivative::Derivative;
@@ -36,8 +33,6 @@ use crate::{
         state::{Running, Stopped},
         Process,
     },
-    statistics::StatisticsProvider,
-    statistics_list,
     types::{
         breakpoint::{breakpoint, Breakpoint},
         execution_point::ExecutionPoint,
@@ -182,7 +177,6 @@ pub struct PerfCounterBasedExecutionPointProvider<'a> {
     main_cpu_set: &'a [usize],
     #[cfg(target_arch = "x86_64")]
     main_cpu_model: CpuModel,
-    checkpoint_count: AtomicU64,
     branch_counter_type: BranchType,
     checker_never_use_branch_count_overflow: bool,
 }
@@ -203,7 +197,6 @@ impl<'a> PerfCounterBasedExecutionPointProvider<'a> {
             main_cpu_model: lookup_cpu_model_and_pmu_name_from_cpu_set(main_cpu_set)
                 .unwrap()
                 .0,
-            checkpoint_count: AtomicU64::new(0),
             branch_counter_type,
             checker_never_use_branch_count_overflow,
         }
@@ -559,16 +552,6 @@ impl StandardSyscallHandler for PerfCounterBasedExecutionPointProvider<'_> {
     }
 }
 
-impl StatisticsProvider for PerfCounterBasedExecutionPointProvider<'_> {
-    fn class_name(&self) -> &'static str {
-        "pmu_segmentor"
-    }
-
-    fn statistics(&self) -> Box<[(String, Box<dyn crate::statistics::StatisticValue>)]> {
-        statistics_list!(checkpoint_count = self.checkpoint_count.load(Ordering::Relaxed))
-    }
-}
-
 impl ExecutionPointProvider for PerfCounterBasedExecutionPointProvider<'_> {
     fn get_current_execution_point(
         &self,
@@ -632,7 +615,6 @@ impl Module for PerfCounterBasedExecutionPointProvider<'_> {
     {
         subs.install_segment_event_handler(self);
         subs.install_signal_handler(self);
-        subs.install_stats_providers(self);
         subs.set_execution_point_provider(self);
         subs.install_process_lifetime_hook(self);
         subs.install_standard_syscall_handler(self);
