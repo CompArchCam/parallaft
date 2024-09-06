@@ -686,6 +686,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     }
                 }
 
+                self.cleanup_committed_segments(&mut self.segments.write(), true).unwrap();
+
                 if abort {
                     self.aborting.store(true, Ordering::SeqCst);
                     self.main_thread.unpark();
@@ -745,8 +747,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         if is_finishing {
             self.dispatcher.handle_segment_chain_closed(main)?;
         }
-
-        self.cleanup_committed_segments(segments, true)?;
 
         Ok(())
     }
