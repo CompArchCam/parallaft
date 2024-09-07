@@ -42,9 +42,21 @@ struct CliArgs {
     #[arg(short = 'n', long, default_value = "10")]
     iters_per_segment: u64,
 
+    /// Ignore missed injections
+    #[arg(short = 'i', long)]
+    ignore_missed: bool,
+
     /// Don't actually inject errors
     #[arg(short, long)]
     dry_run: bool,
+
+    /// Start injection on or newer than the specified segment number
+    #[arg(short, long)]
+    since: Option<SegmentId>,
+
+    /// Stop injection on or older than the specified segment number
+    #[arg(short, long)]
+    until: Option<SegmentId>,
 
     command: String,
     args: Vec<String>,
@@ -108,16 +120,29 @@ struct ErrorInjector {
     state: Arc<Mutex<State>>,
     iters_per_segment: u64,
     dry_run: bool,
+    since: Option<SegmentId>,
+    until: Option<SegmentId>,
+    ignore_missed: bool,
 }
 
 impl ErrorInjector {
     const SIGVAL_INJECT_ERROR: usize = 0xc8a0820d360efe8e;
 
-    fn new(iters_per_segment: u64, dry_run: bool, state: Arc<Mutex<State>>) -> Self {
+    fn new(
+        iters_per_segment: u64,
+        dry_run: bool,
+        ignore_missed: bool,
+        since: Option<SegmentId>,
+        until: Option<SegmentId>,
+        state: Arc<Mutex<State>>,
+    ) -> Self {
         Self {
             state,
             iters_per_segment,
             dry_run,
+            since,
+            until,
+            ignore_missed,
         }
     }
 }
@@ -128,6 +153,19 @@ impl SegmentEventHandler for ErrorInjector {
         checker: &mut Checker<Stopped>,
         ctx: HandlerContext,
     ) -> reldrv::error::Result<()> {
+        if let Some(since) = self.since {
+            if checker.segment.nr < since {
+                return Ok(());
+            }
+        }
+
+        if let Some(until) = self.until {
+            if checker.segment.nr > until {
+                ctx.check_coord.abort_main();
+                return Ok(());
+            }
+        }
+
         let mut state = self.state.lock();
         let segment_state = state
             .segments
@@ -161,9 +199,19 @@ impl SegmentEventHandler for ErrorInjector {
         _ctx: HandlerContext,
     ) -> reldrv::error::Result<()> {
         let mut state = self.state.lock();
-        let segment_state = &mut state.segments.get_mut(&checker.segment.nr).unwrap();
+        let segment_state;
+
+        if let Some(s) = state.segments.get_mut(&checker.segment.nr) {
+            segment_state = s;
+        } else {
+            return Ok(());
+        }
 
         if let SegmentStatus::Training { started } = segment_state.status {
+            if let Some(reason) = check_fail_reason {
+                error!("{} Initial run failed: {:?}", checker.segment, reason);
+            }
+
             segment_state.status = SegmentStatus::Injecting {
                 length: started.elapsed(),
             };
@@ -186,7 +234,9 @@ impl SegmentEventHandler for ErrorInjector {
             *segment_counts.entry(ResultKind::Pass).or_default() += 1;
         }
 
-        if segment_state.injected >= self.iters_per_segment {
+        if segment_state.injected >= self.iters_per_segment
+            || (self.ignore_missed && segment_state.total >= self.iters_per_segment)
+        {
             *checker.segment.pinned.lock() = false;
         }
 
@@ -202,9 +252,16 @@ impl SegmentEventHandler for ErrorInjector {
     ) -> reldrv::error::Result<()> {
         let mut state = self.state.lock();
 
-        let segment_state = &mut state.segments.get_mut(&segment.nr).unwrap();
+        let segment_state;
+
+        if let Some(s) = state.segments.get_mut(&segment.nr) {
+            segment_state = s;
+        } else {
+            return Ok(());
+        }
 
         if let SegmentStatus::Training { .. } = segment_state.status {
+            error!("{} Initial run failed: {:?}", segment, error);
             return Ok(());
         }
 
@@ -228,7 +285,9 @@ impl SegmentEventHandler for ErrorInjector {
 
         *segment_state.counts.entry(kind).or_default() += 1;
 
-        if segment_state.injected >= self.iters_per_segment {
+        if segment_state.injected >= self.iters_per_segment
+            || (self.ignore_missed && segment_state.total >= self.iters_per_segment)
+        {
             *segment.pinned.lock() = false;
             segment.checker_status.lock().assume_checked();
         }
@@ -323,6 +382,9 @@ fn main() -> reldrv::error::Result<()> {
     config.extra_modules = vec![Box::new(ErrorInjector::new(
         cli.iters_per_segment,
         cli.dry_run,
+        cli.ignore_missed,
+        cli.since,
+        cli.until,
         state.clone(),
     ))];
 
