@@ -397,7 +397,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             _ => unreachable!(),
         }
 
-        debug!("{main} New checkpoint: {:#?}", checkpoint);
+        // debug!("{main} New checkpoint: {:#?}", checkpoint);
         segments.with_upgraded(|segments_mut| {
             self.add_checkpoint(
                 &mut main,

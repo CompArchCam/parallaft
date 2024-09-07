@@ -90,7 +90,7 @@ impl MemoryComparator for HashBasedMemoryComparator {
             MemoryComparsionResult::Pass
         } else {
             MemoryComparsionResult::Fail {
-                mismatching_pages: None,
+                first_mismatch: None,
             }
         };
 

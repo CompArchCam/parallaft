@@ -17,6 +17,7 @@ use crate::process::detach::Detached;
 use crate::process::dirty_pages::merge_page_addresses;
 use crate::process::state::{Stopped, Unowned, WithProcess};
 use crate::process::{Process, PAGESIZE};
+use crate::utils::compare_memory::compare_memory;
 
 use super::checker::{CheckFailReason, CheckerStatus};
 use super::checkpoint::Checkpoint;
@@ -208,7 +209,7 @@ impl Segment {
                 }
             }
         } else {
-            panic!("Invalid main status: {:?}", &*status)
+            panic!("{self} Invalid main status: {:?}", &*status)
         }
     }
 
@@ -235,10 +236,7 @@ impl Segment {
         let reference_writable_ranges = reference_process.get_writable_ranges()?;
 
         if checker_writable_ranges != reference_writable_ranges {
-            error!(
-                "Memory map differs for epoch {}",
-                self.checkpoint_start.epoch
-            );
+            error!("{self}: Memory map differs for epoch");
             return Ok((
                 checker_process,
                 reference_process,
@@ -257,16 +255,38 @@ impl Segment {
             todo!();
         }
 
-        debug!("Comparing {} dirty pages", dpa_merged.len());
+        debug!("{self} Comparing {} dirty pages", dpa_merged.len());
 
-        let result;
+        let mut result;
         (checker_process, reference_process, result) =
             comparator.compare_memory(&dpa_merged, checker_process, reference_process)?;
 
         match result {
             MemoryComparsionResult::Pass => Ok((checker_process, reference_process, None)),
-            MemoryComparsionResult::Fail { mismatching_pages } => {
-                error!("Memory differs, mismatching pages: {:?}", mismatching_pages);
+            MemoryComparsionResult::Fail { first_mismatch } => {
+                if first_mismatch.is_none() {
+                    debug!("{self} Unknown first mismatch, use the slow path to find out");
+                    result = compare_memory(&checker_process, &reference_process, &dpa_merged)?;
+                }
+
+                assert!(matches!(
+                    result,
+                    MemoryComparsionResult::Fail {
+                        first_mismatch: Some(_)
+                    }
+                ));
+
+                error!("{self} {result}");
+
+                error!(
+                    "{self} Checker memory map:\n{}",
+                    checker_process.dump_memory_maps()?
+                );
+                error!(
+                    "{self} Reference memory map:\n{}",
+                    reference_process.dump_memory_maps()?
+                );
+
                 return Ok((
                     checker_process,
                     reference_process,
@@ -295,9 +315,9 @@ impl Segment {
         let result = match reg_cmp_result {
             RegisterComparsionResult::NoResult => {
                 if checker_regs != reference_regs {
-                    error!("Register differs");
-                    error!("Checker registers:\n{}", checker_regs.dump());
-                    error!("Reference registers:\n{}", reference_regs.dump());
+                    error!("{self} Register differs");
+                    error!("{self} Checker registers:\n{}", checker_regs.dump());
+                    error!("{self} Reference registers:\n{}", reference_regs.dump());
 
                     Some(CheckFailReason::RegisterMismatch)
                 } else {
@@ -348,8 +368,11 @@ impl Segment {
             extra_writable_ranges,
         )?);
 
-        debug!("Main dirty pages: {}", dpa_main.nr_dirty_pages());
-        debug!("Checker dirty pages: {}", dpa_checker.nr_dirty_pages());
+        debug!("{self} Main dirty pages: {}", dpa_main.nr_dirty_pages());
+        debug!(
+            "{self} Checker dirty pages: {}",
+            dpa_checker.nr_dirty_pages()
+        );
 
         let result = (|| {
             let checkpoint_end = self

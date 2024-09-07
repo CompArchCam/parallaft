@@ -2,8 +2,6 @@ use std::collections::LinkedList;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use log::debug;
-
 use crate::check_coord::SyscallType;
 use crate::error::Result;
 use crate::process::state::Unowned;
@@ -112,7 +110,7 @@ impl SegmentChains {
             self.next_id += 1;
             self.in_chain = true;
 
-            debug!("New segment: {:?}", segment);
+            // debug!("New segment: {:?}", segment);
 
             let segment = Arc::new(segment);
             self.list.push_back(segment.clone());

@@ -1,7 +1,7 @@
 use std::{fmt::Display, ops::Range, os::fd::AsRawFd, slice};
 
 use bitflags::bitflags;
-use log::{debug, info, trace};
+use log::{debug, trace};
 
 use nix::{errno::Errno, ioctl_readwrite};
 use procfs::{
@@ -402,7 +402,9 @@ impl<S: ProcessState> Process<S> {
         Ok(result)
     }
 
-    pub fn dump_memory_maps(&self) -> Result<()> {
+    pub fn dump_memory_maps(&self) -> Result<String> {
+        let mut out: String = String::new();
+
         fn perm_to_str<'a>(
             perms: MMPermissions,
             bit: MMPermissions,
@@ -425,17 +427,13 @@ impl<S: ProcessState> Process<S> {
             perms_string += perm_to_str(map.perms, MMPermissions::PRIVATE, "p", "");
             perms_string += perm_to_str(map.perms, MMPermissions::SHARED, "s", "");
 
-            info!(
-                "{:?}-{:?} {}: {:?} @ {:p}",
-                map.address.0 as *const u8,
-                map.address.1 as *const u8,
-                perms_string,
-                map.pathname,
-                map.offset as *const u8
-            );
+            out.push_str(&format!(
+                "{:#0x}-{:#0x} {}: {:?} @ {:#0x}\n",
+                map.address.0, map.address.1, perms_string, map.pathname, map.offset
+            ));
         }
 
-        Ok(())
+        Ok(out)
     }
 }
 
