@@ -52,6 +52,7 @@ use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
 use helpers::insn_patcher::InstructionPatcher;
 use helpers::madviser::Madviser;
+use nix::sys::personality;
 use nix::sys::signal::{raise, Signal};
 use nix::sys::wait::{WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, getpid, ForkResult, Pid};
@@ -226,6 +227,9 @@ pub struct RelShellOptions {
 
     // memory comparator options
     pub memory_comparator: MemoryComparatorType,
+
+    // disable ASLR
+    pub no_aslr: bool,
 
     // integration test
     #[serde(skip)]
@@ -550,6 +554,12 @@ pub fn run(cmd: &mut Command, options: RelShellOptions) -> crate::error::Result<
         Ok(ForkResult::Child) => {
             let err = unsafe {
                 cmd.pre_exec(move || {
+                    if options.no_aslr {
+                        let mut p = personality::get().unwrap();
+                        p.set(personality::Persona::ADDR_NO_RANDOMIZE, true);
+                        personality::set(p).unwrap();
+                    }
+
                     raise(Signal::SIGSTOP).unwrap();
                     Ok(())
                 })

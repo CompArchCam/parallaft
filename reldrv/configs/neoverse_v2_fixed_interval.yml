@@ -5,3 +5,4 @@ max_nr_live_segments: 80
 exec_point_replay: true
 slicer: !FixedInterval
 dump_stats: !StdOut
+no_aslr: true

@@ -121,6 +121,10 @@ struct CliArgs {
     #[arg(long)]
     dont_trap_mrs: Option<bool>,
 
+    /// Disable address space layout randomization (ASLR).
+    #[arg(long)]
+    no_aslr: Option<bool>,
+
     /// File to dump stats to.
     #[arg(long)]
     stats_output: Option<PathBuf>,
@@ -307,6 +311,10 @@ fn main() {
     #[cfg(target_arch = "aarch64")]
     apply_if_some(&mut config, cli.dont_trap_mrs, |config, val| {
         config.no_mrs_trap = val;
+    });
+
+    apply_if_some(&mut config, cli.no_aslr, |config, val| {
+        config.no_aslr = val;
     });
 
     apply_if_some(&mut config, cli.dump_stats, |config, val| {
