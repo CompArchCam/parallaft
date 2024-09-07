@@ -689,8 +689,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 self.cleanup_committed_segments(&mut self.segments.write(), true).unwrap();
 
                 if abort {
-                    self.aborting.store(true, Ordering::SeqCst);
-                    self.main_thread.unpark();
+                    self.abort_main();
                 }
 
                 self.dispatcher.handle_checker_worker_fini(&segment, pctx(self, scope)).unwrap();
@@ -705,6 +704,11 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         );
 
         Ok(())
+    }
+
+    pub fn abort_main(&self) {
+        self.aborting.store(true, Ordering::SeqCst);
+        self.main_thread.unpark();
     }
 
     fn add_checkpoint<'s, 'scope, 'env>(

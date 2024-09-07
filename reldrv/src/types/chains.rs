@@ -192,7 +192,7 @@ impl SegmentChains {
                     result: Some(r), ..
                 } => return Some(Ok(ExitReason::StateMismatch(*r))),
                 CheckerStatus::Crashed(error) => return Some(Err(error.clone())),
-                _ => panic!("Unexpected status"),
+                _ => return Some(Ok(ExitReason::Cancelled)),
             }
         }
 
