@@ -147,6 +147,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             x.resume()
         })?;
 
+        let mut single_step_saved_sigmask = None;
+
         // Main loop
         let exit_reason = loop {
             let status;
@@ -184,7 +186,13 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 }
                 WaitStatus::Stopped(_, sig) => {
                     let pre_resume_cb = get_pre_resume_cb(&mut child)?;
-                    child_running = self.handle_signal(child, sig, scope, pre_resume_cb)?;
+                    child_running = self.handle_signal(
+                        child,
+                        sig,
+                        scope,
+                        pre_resume_cb,
+                        &mut single_step_saved_sigmask,
+                    )?;
                 }
                 WaitStatus::PtraceSyscall(_) => {
                     let pre_resume_cb = get_pre_resume_cb(&mut child)?;
@@ -1220,6 +1228,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         sig: Signal,
         scope: &'scope Scope<'scope, 'env>,
         pre_resume_cb: impl FnOnce(&mut Process<Stopped>) -> Result<()>,
+        single_step_saved_sigmask: &mut Option<u64>,
     ) -> Result<Inferior<Running>>
     where
         's: 'scope + 'disp,
@@ -1230,6 +1239,15 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         };
 
         let signal_handling_tracer = self.tracer.trace(tracing_event);
+
+        let restore_sigmask =
+            |process: &mut Process<Stopped>, old_mask: &mut Option<u64>| -> Result<()> {
+                if let Some(old_mask) = old_mask {
+                    process.set_sigmask(*old_mask)
+                } else {
+                    Ok(())
+                }
+            };
 
         let result = self
             .dispatcher
@@ -1242,12 +1260,14 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step } => {
                 if single_step {
                     Ok(child.try_map_process_noret(|mut p| {
-                        pre_resume_cb(&mut p)?;
+                        *single_step_saved_sigmask = Some(p.get_sigmask()?);
+                        p.set_sigmask(!0)?;
                         p.single_step()
                     })?)
                 } else {
                     Ok(child.try_map_process_noret(|mut p| {
                         pre_resume_cb(&mut p)?;
+                        restore_sigmask(&mut p, single_step_saved_sigmask)?;
                         p.resume()
                     })?)
                 }
@@ -1256,12 +1276,14 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 info!("{child} Signal: {:}", sig);
                 Ok(child.try_map_process_noret(|mut p| {
                     pre_resume_cb(&mut p)?;
+                    restore_sigmask(&mut p, single_step_saved_sigmask)?;
                     p.resume_with_signal(sig)
                 })?)
             }
             SignalHandlerExitAction::ContinueInferior => {
                 Ok(child.try_map_process_noret(|mut p| {
                     pre_resume_cb(&mut p)?;
+                    restore_sigmask(&mut p, single_step_saved_sigmask)?;
                     p.resume_with_signal(sig)
                 })?)
             }
@@ -1272,7 +1294,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 CheckpointCaller::Shell,
                 None,
                 scope,
-                pre_resume_cb,
+                |p| {
+                    pre_resume_cb(p)?;
+                    restore_sigmask(p, single_step_saved_sigmask)
+                },
             )?),
         }
     }
