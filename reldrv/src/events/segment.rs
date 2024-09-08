@@ -135,6 +135,11 @@ pub trait SegmentEventHandler {
         Ok(())
     }
 
+    /// Called when the checker process is about to be forked.
+    fn handle_checker_pre_fork(&self, segment: &Arc<Segment>, ctx: HandlerContext) -> Result<()> {
+        Ok(())
+    }
+
     /// Called when the checker worker thread is about to exit.
     fn handle_checker_worker_fini(
         &self,

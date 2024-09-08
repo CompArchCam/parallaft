@@ -564,6 +564,7 @@ impl SegmentEventHandler for Dispatcher<'_, '_> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_checker_error(&self, segment: &Arc<Segment>, error: &Error, abort: &mut bool, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_pre_fork(&self, segment: &Arc<Segment>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_checker_worker_fini(&self, segment: &Arc<Segment>, ctx: HandlerContext));
 }
 

@@ -119,6 +119,13 @@ impl SegmentInfo {
 
         Ok(())
     }
+
+    pub fn clear(&mut self) {
+        self.branch_count_offset = 0;
+        self.checker_branch_counter = None;
+        self.active_exec_point = None;
+        self.upcoming_exec_points.clear();
+    }
 }
 
 enum ExecutionPointReplayState {
@@ -255,6 +262,18 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
             })),
         );
 
+        Ok(())
+    }
+
+    fn handle_checker_pre_fork(
+        &self,
+        segment: &Arc<crate::types::segment::Segment>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
+        let segment_info_map = self.segment_info_map.lock();
+        let segment_info = segment_info_map.get(&segment.nr).unwrap();
+        let mut segment_info = segment_info.lock();
+        segment_info.clear();
         Ok(())
     }
 
