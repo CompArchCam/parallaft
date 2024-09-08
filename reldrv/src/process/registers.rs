@@ -1,6 +1,6 @@
 use crate::error::Result;
 
-use nix::libc::{self, user_regs_struct};
+use nix::libc::{self, user_fpsimd_struct, user_regs_struct};
 use std::{
     fmt::Display,
     mem::MaybeUninit,
@@ -80,6 +80,7 @@ cfg_if::cfg_if! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Registers {
     pub inner: user_regs_struct,
+    pub fpr: user_fpsimd_struct,
 
     #[cfg(target_arch = "aarch64")]
     pub sysno: libc::c_int,
@@ -106,8 +107,12 @@ impl Registers {
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn new(gpr: user_regs_struct, sysno: libc::c_int) -> Self {
-        Self { inner: gpr, sysno }
+    pub fn new(gpr: user_regs_struct, fpr: user_fpsimd_struct, sysno: libc::c_int) -> Self {
+        Self {
+            inner: gpr,
+            fpr,
+            sysno,
+        }
     }
 
     pub fn sysno(&self) -> Option<Sysno> {
@@ -492,11 +497,11 @@ impl Registers {
     pub fn with_one_random_bit_flipped(mut self) -> Registers {
         use rand::Rng;
 
-        let reg = rand::thread_rng().gen_range(0..=33);
+        let reg = rand::thread_rng().gen_range(0..99);
         let bit = rand::thread_rng().gen_range(0..=63);
 
         match reg {
-            0..=30 => {
+            0..31 => {
                 self.regs[reg as usize] ^= 1 << bit;
             }
             31 => {
@@ -507,6 +512,16 @@ impl Registers {
             }
             33 => {
                 self.pstate ^= 1 << bit;
+            }
+            a @ 34..98 => {
+                self.fpr.vregs[(a as usize - 34) / 2] ^= 1_u128 << (bit * 2 + a % 2);
+            }
+            98 => {
+                if bit < 32 {
+                    self.fpr.fpsr ^= 1 << bit;
+                } else {
+                    self.fpr.fpcr ^= 1 << (bit - 32);
+                }
             }
             _ => unreachable!(),
         }
@@ -601,6 +616,7 @@ impl RegisterAccess for Process<Stopped> {
     fn read_registers(&self) -> Result<Registers> {
         Ok(Registers::new(
             self.get_reg_set(libc::NT_PRSTATUS)?,
+            self.get_reg_set(libc::NT_PRFPREG)?,
             self.get_reg_set(0x404 /* NT_ARM_SYSTEM_CALL */)?,
         ))
     }
@@ -627,6 +643,7 @@ impl RegisterAccess for Process<Stopped> {
     #[cfg(target_arch = "aarch64")]
     fn write_registers(&mut self, regs: Registers) -> Result<()> {
         self.set_reg_set(libc::NT_PRSTATUS, &regs.inner)?;
+        self.set_reg_set(libc::NT_PRFPREG, &regs.fpr)?;
         self.set_reg_set(0x404 /* NT_ARM_SYSTEM_CALL */, &regs.sysno)?;
 
         Ok(())
@@ -648,7 +665,7 @@ impl RegisterAccess for Process<Stopped> {
 #[cfg(target_arch = "aarch64")]
 #[cfg(test)]
 mod tests {
-    use super::RegisterAccess;
+    use super::{RegisterAccess, Registers};
     use crate::process::memory::instructions;
     use crate::process::state::Stopped;
     use crate::process::{Process, SyscallDir};
@@ -656,6 +673,7 @@ mod tests {
     use crate::{error::Result, process::state::WithProcess};
     use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
     use std::arch::asm;
+    use std::mem::MaybeUninit;
 
     fn run_syscall_followed_by_breakpoint() -> Process<Stopped> {
         ptraced(|| {
@@ -831,5 +849,18 @@ mod tests {
         assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_register_random_bit_flip() {
+        let mut regs = Registers::new(
+            unsafe { MaybeUninit::zeroed().assume_init() },
+            unsafe { MaybeUninit::zeroed().assume_init() },
+            Default::default(),
+        );
+
+        for _ in 0..10000 {
+            regs = regs.with_one_random_bit_flipped();
+        }
     }
 }
