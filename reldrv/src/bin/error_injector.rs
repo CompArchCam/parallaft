@@ -1,5 +1,8 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
+    fs::File,
+    io::Write,
     path::PathBuf,
     process::Command,
     sync::Arc,
@@ -30,6 +33,7 @@ use reldrv::{
     },
     RelShellOptions,
 };
+use serde::Serialize;
 
 #[derive(Parser, Debug)]
 #[command(version = git_version!())]
@@ -58,11 +62,15 @@ struct CliArgs {
     #[arg(short, long)]
     until: Option<SegmentId>,
 
+    /// Result output filename
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
     command: String,
     args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 enum ResultKind {
     Pass,
     ControlFlowViolation, // excess syscalls/traps/etc.
@@ -82,17 +90,33 @@ enum SegmentStatus {
     Injecting { length: Duration },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct SegmentState {
+    nr: SegmentId,
     counts: HashMap<ResultKind, u64>,
     total: u64,
     injected: u64,
+    #[serde(skip)]
     status: SegmentStatus,
 }
 
+impl Display for SegmentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Error injection statistics for segment {}", self.nr)?;
+        for (kind, count) in self.counts.iter() {
+            writeln!(f, "- {kind:?}: {count}")?;
+        }
+        writeln!(f, "- [total injection attempts]: {}", self.total)?;
+        writeln!(f, "- [total successful injections]: {}", self.injected)?;
+
+        Ok(())
+    }
+}
+
 impl SegmentState {
-    fn new() -> Self {
+    fn new(nr: SegmentId) -> Self {
         Self {
+            nr,
             counts: HashMap::new(),
             total: 0,
             injected: 0,
@@ -123,6 +147,7 @@ struct ErrorInjector {
     since: Option<SegmentId>,
     until: Option<SegmentId>,
     ignore_missed: bool,
+    output: Option<Mutex<File>>,
 }
 
 impl ErrorInjector {
@@ -135,6 +160,7 @@ impl ErrorInjector {
         since: Option<SegmentId>,
         until: Option<SegmentId>,
         state: Arc<Mutex<State>>,
+        output: Option<File>,
     ) -> Self {
         Self {
             state,
@@ -143,7 +169,18 @@ impl ErrorInjector {
             since,
             until,
             ignore_missed,
+            output: output.map(Mutex::new),
         }
+    }
+
+    fn write_to_output_file(&self, state: &SegmentState) -> std::io::Result<()> {
+        if let Some(output) = &self.output {
+            output
+                .lock()
+                .write_all(&rmp_serde::to_vec(state).expect("Failed to serialize data"))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -170,7 +207,7 @@ impl SegmentEventHandler for ErrorInjector {
         let segment_state = state
             .segments
             .entry(checker.segment.nr)
-            .or_insert_with(SegmentState::new);
+            .or_insert_with(|| SegmentState::new(checker.segment.nr));
 
         match &segment_state.status {
             SegmentStatus::Training { .. } => (),
@@ -237,6 +274,8 @@ impl SegmentEventHandler for ErrorInjector {
         if segment_state.injected >= self.iters_per_segment
             || (self.ignore_missed && segment_state.total >= self.iters_per_segment)
         {
+            println!("{}", segment_state);
+            self.write_to_output_file(segment_state)?;
             *checker.segment.pinned.lock() = false;
         }
 
@@ -288,6 +327,8 @@ impl SegmentEventHandler for ErrorInjector {
         if segment_state.injected >= self.iters_per_segment
             || (self.ignore_missed && segment_state.total >= self.iters_per_segment)
         {
+            println!("{}", segment_state);
+            self.write_to_output_file(segment_state)?;
             *segment.pinned.lock() = false;
             segment.checker_status.lock().assume_checked();
         }
@@ -377,6 +418,10 @@ fn main() -> reldrv::error::Result<()> {
         None => RelShellOptions::default(),
     };
 
+    let output = cli
+        .output
+        .map(|filename| File::create(filename).expect("Failed to open output file"));
+
     let state = Arc::new(Mutex::new(State::new()));
 
     config.extra_modules = vec![Box::new(ErrorInjector::new(
@@ -386,13 +431,12 @@ fn main() -> reldrv::error::Result<()> {
         cli.since,
         cli.until,
         state.clone(),
+        output,
     ))];
 
     config.check_coord_flags.ignore_miscmp = true;
 
     reldrv::run(Command::new(cli.command).args(cli.args), config)?;
-
-    dbg!(&*state.lock());
 
     Ok(())
 }
