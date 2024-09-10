@@ -99,10 +99,8 @@ impl PerfCounter for BasePerfCounterWithInterrupt {
 
 impl PerfCounterWithInterrupt for BasePerfCounterWithInterrupt {
     fn is_interrupt(&self, sig_info: &nix::libc::siginfo_t) -> crate::error::Result<bool> {
-        // TODO: check si_perf
-        let _ = self.sig_data;
-        Ok(
-            sig_info.si_signo == nix::libc::SIGTRAP && sig_info.si_code == 0x6, /* TRAP_PERF */
-        )
+        Ok(sig_info.si_signo == nix::libc::SIGTRAP
+            && sig_info.si_code == 0x6 /* TRAP_PERF */
+            && unsafe { sig_info.si_value().sival_ptr as u64 } == self.sig_data)
     }
 }
