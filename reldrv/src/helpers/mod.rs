@@ -1,5 +1,6 @@
 pub mod affinity;
 pub mod checker_sched;
+pub mod checker_timeout_killer;
 #[cfg(feature = "helper_checkpoint_size_limiter")]
 pub mod checkpoint_size_limiter;
 pub mod cpufreq;

@@ -58,6 +58,9 @@ pub enum Error {
     #[error("Unexpected checker exit reason: `{0:?}`")]
     UnexpectedCheckerExitReason(ExitReason),
 
+    #[error("Checker timed out")]
+    CheckerTimeout,
+
     #[error("Panic")]
     Panic,
 

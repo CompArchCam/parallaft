@@ -47,6 +47,7 @@ use dirty_page_trackers::DirtyPageAddressTrackerType;
 use dispatcher::Module;
 
 use helpers::checker_sched::CheckerScheduler;
+use helpers::checker_timeout_killer::CheckerTimeoutKiller;
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
@@ -230,6 +231,9 @@ pub struct RelShellOptions {
 
     // disable ASLR
     pub no_aslr: bool,
+
+    // enable checker timeout killer
+    pub checker_timeout_killer: bool,
 
     // integration test
     #[serde(skip)]
@@ -430,6 +434,10 @@ pub fn parent_work(
             true,
             true,
         ));
+    }
+
+    if options.checker_timeout_killer {
+        disp.register_module(CheckerTimeoutKiller::new(&options.main_cpu_set));
     }
 
     // Statistics

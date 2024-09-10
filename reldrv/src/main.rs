@@ -210,6 +210,10 @@ struct CliArgs {
     #[arg(long)]
     madviser: Option<bool>,
 
+    /// Kill checker on timeout
+    #[arg(long)]
+    checker_timeout_killer: bool,
+
     #[cfg(target_arch = "x86_64")]
     /// Enable Intel hybrid CPU workaround
     #[arg(long)]
@@ -507,6 +511,15 @@ fn main() {
     apply_if_some(&mut config, cli.madviser, |config, val| {
         config.enable_madviser = val;
     });
+
+    // checker_timeout_killer
+    apply_if_some(
+        &mut config,
+        Some(cli.checker_timeout_killer),
+        |config, val| {
+            config.checker_timeout_killer = val;
+        },
+    );
 
     #[cfg(target_arch = "x86_64")]
     // enable_intel_hybrid_workaround

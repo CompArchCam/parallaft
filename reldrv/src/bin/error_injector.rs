@@ -81,6 +81,7 @@ enum ResultKind {
     UnexpectedSegmentationFault,
     UnexpectedIllegalInstruction,
     UnexpectedBusError,
+    Timeout,
     OtherFailure,
 }
 
@@ -315,6 +316,7 @@ impl SegmentEventHandler for ErrorInjector {
                 ExitReason::Signalled(Signal::SIGBUS) => ResultKind::UnexpectedBusError,
                 _ => ResultKind::OtherFailure,
             },
+            Error::CheckerTimeout => ResultKind::Timeout,
             _ => ResultKind::OtherFailure,
         };
 
@@ -417,6 +419,8 @@ fn main() -> reldrv::error::Result<()> {
         }
         None => RelShellOptions::default(),
     };
+
+    config.checker_timeout_killer = true;
 
     let output = cli
         .output
