@@ -16,7 +16,7 @@ impl DirtyPageAddressTracker for AllWritablePageTracker {
     fn take_dirty_pages_addresses(
         &self,
         inferior_id: crate::types::process_id::InferiorId,
-        extra_writable_ranges: &[std::ops::Range<usize>],
+        _extra_writable_ranges: &[std::ops::Range<usize>],
     ) -> crate::error::Result<super::DirtyPageAddressesWithFlags> {
         let mut addresses = Vec::new();
 
@@ -38,7 +38,7 @@ impl DirtyPageAddressTracker for AllWritablePageTracker {
                         addresses.push(m.address.0 as _..m.address.1 as _);
                         Ok(())
                     },
-                    extra_writable_ranges,
+                    &[],
                 )?,
             InferiorId::Checker(segment) => segment
                 .checker_status
@@ -53,7 +53,7 @@ impl DirtyPageAddressTracker for AllWritablePageTracker {
                         addresses.push(m.address.0 as _..m.address.1 as _);
                         Ok(())
                     },
-                    extra_writable_ranges,
+                    &[],
                 )?,
         };
 
