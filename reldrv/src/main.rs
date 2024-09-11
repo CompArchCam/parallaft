@@ -70,10 +70,6 @@ struct CliArgs {
     #[arg(long)]
     cpu_freq_scaler: Option<CpuFreqScalerTypeCli>,
 
-    /// Disallow frequency change (while allowing checkers to be migrated to emergency CPU set, if configured) when dynamic CPU frequency scaler is used.
-    #[arg(long)]
-    no_freq_change: Option<bool>,
-
     /// When `cpu_freq_scaler` is set to "fixed", the CPU freqeuncy governor to use. Possible values: userspace:<freq_in_khz>, ondemand, ondemand:<max_freq_in_khz>. Requires `--checker-cpu-set` set.
     #[arg(long)]
     checker_cpu_freq_governor: Option<CpuFreqGovernor>,
@@ -400,11 +396,6 @@ fn main() {
         CpuFreqScalerTypeCli::Dynamic => {
             config.cpu_freq_scaler_type = CpuFreqScalerType::Dynamic;
         }
-    });
-
-    // no_freq_change
-    apply_if_some(&mut config, cli.no_freq_change, |config, val| {
-        config.dynamic_cpu_freq_scaler_no_freq_change = val;
     });
 
     // checkpoint_size_watermark

@@ -168,7 +168,6 @@ pub struct RelShellOptions {
 
     // cpufreq setter plugin options
     pub cpu_freq_scaler_type: CpuFreqScalerType,
-    pub dynamic_cpu_freq_scaler_no_freq_change: bool,
 
     // checkpoint size limiter plugin options
     pub checkpoint_size_watermark: usize,
@@ -400,11 +399,7 @@ pub fn parent_work(
             ));
         }
         CpuFreqScalerType::Dynamic => {
-            disp.register_module(DynamicCpuFreqScaler::new(
-                &options.checker_cpu_set,
-                &options.checker_emerg_cpu_set,
-                options.dynamic_cpu_freq_scaler_no_freq_change,
-            ));
+            disp.register_module(DynamicCpuFreqScaler::new(&options.checker_cpu_set));
         }
     }
 
