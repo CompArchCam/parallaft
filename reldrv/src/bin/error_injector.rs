@@ -306,9 +306,8 @@ impl SegmentEventHandler for ErrorInjector {
         }
 
         let kind = match error {
-            Error::UnexpectedEvent(UnexpectedEventReason::Excess) => {
-                ResultKind::ControlFlowViolation
-            }
+            Error::UnexpectedEvent(UnexpectedEventReason::Excess)
+            | Error::ExecPointReplayUnexpectedSkid => ResultKind::ControlFlowViolation,
             Error::UnexpectedEvent(_) => ResultKind::EventMismatch,
             Error::UnexpectedCheckerExitReason(reason) => match reason {
                 ExitReason::Signalled(Signal::SIGSEGV) => ResultKind::UnexpectedSegmentationFault,

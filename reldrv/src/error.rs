@@ -70,6 +70,9 @@ pub enum Error {
     #[error("PMU error: `{0}`")]
     PmuError(#[from] PmuError),
 
+    #[error("Unexpected skid during execution point replay")]
+    ExecPointReplayUnexpectedSkid,
+
     #[cfg(feature = "dpt_uffd")]
     #[error("Userfaultfd error: `{0}`")]
     Userfaultfd(Arc<userfaultfd::Error>),

@@ -492,8 +492,8 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                         }
                                         std::cmp::Ordering::Greater => {
                                             breakpoint.disable(checker.process_mut())?;
-
-                                            unreachable!("Unexpected skid");
+                                            error!("{checker} Unexpected skid during execution point replay");
+                                            return Err(Error::ExecPointReplayUnexpectedSkid);
                                         }
                                     }
 
