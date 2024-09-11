@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    fs::File,
+    fs::{File, OpenOptions},
     io::Write,
     path::PathBuf,
     process::Command,
@@ -65,6 +65,10 @@ struct CliArgs {
     /// Result output filename
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Append instead of rewriting to the output file
+    #[arg(long)]
+    append: bool,
 
     command: String,
     args: Vec<String>,
@@ -421,9 +425,14 @@ fn main() -> reldrv::error::Result<()> {
 
     config.checker_timeout_killer = true;
 
-    let output = cli
-        .output
-        .map(|filename| File::create(filename).expect("Failed to open output file"));
+    let output = cli.output.map(|filename| {
+        OpenOptions::new()
+            .append(cli.append)
+            .write(true)
+            .create(true)
+            .open(filename)
+            .expect("Failed to open output file")
+    });
 
     let state = Arc::new(Mutex::new(State::new()));
 
