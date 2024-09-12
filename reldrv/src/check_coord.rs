@@ -72,6 +72,7 @@ pub struct CheckCoordinator<'disp, 'modules, 'tracer: 'disp> {
 
 #[derive(Debug, Default, Clone, Builder, Serialize, Deserialize)]
 #[builder(default)]
+#[serde(default)]
 pub struct CheckCoordinatorOptions {
     /// Don't compare state between a completed checker and the checkpoint. Assume their state matches.
     pub no_state_cmp: bool,
