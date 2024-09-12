@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::atomic::AtomicU64};
 
 use log::debug;
 use nix::{sys::signal::Signal, unistd::Pid};
@@ -19,6 +19,8 @@ use crate::{
         Process,
     },
     signal_handlers::begin_protection::main_begin_protection_req,
+    statistics::StatisticsProvider,
+    statistics_list,
     syscall_handlers::is_execve_ok,
     types::{
         custom_sysno::CustomSysno,
@@ -54,6 +56,7 @@ pub struct FixedIntervalSlicer<'a> {
     main_cpu_set: &'a [usize],
     is_test: bool,
     auto_start: bool,
+    nr_slices: AtomicU64,
 }
 
 impl<'a> FixedIntervalSlicer<'a> {
@@ -73,6 +76,7 @@ impl<'a> FixedIntervalSlicer<'a> {
             main_cpu_set,
             is_test,
             auto_start,
+            nr_slices: AtomicU64::new(0),
         }
     }
 
@@ -247,7 +251,11 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
                 .push_curr_exec_point_to_event_log(main, true);
 
             match ret {
-                Ok(()) => return Ok(SignalHandlerExitAction::Checkpoint),
+                Ok(()) => {
+                    self.nr_slices
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Ok(SignalHandlerExitAction::Checkpoint);
+                }
                 Err(Error::InvalidState) => return Ok(SignalHandlerExitAction::ContinueInferior),
                 Err(e) => return Err(e),
             };
@@ -275,6 +283,16 @@ impl ProcessLifetimeHook for FixedIntervalSlicer<'_> {
     }
 }
 
+impl StatisticsProvider for FixedIntervalSlicer<'_> {
+    fn class_name(&self) -> &'static str {
+        "fixed_interval_slicer"
+    }
+
+    fn statistics(&self) -> Box<[(String, Box<dyn crate::statistics::StatisticValue>)]> {
+        statistics_list!(nr_slices = self.nr_slices.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
 impl Module for FixedIntervalSlicer<'_> {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -284,5 +302,6 @@ impl Module for FixedIntervalSlicer<'_> {
         subs.install_signal_handler(self);
         subs.install_process_lifetime_hook(self);
         subs.install_custom_syscall_handler(self);
+        subs.install_stats_providers(self);
     }
 }
