@@ -15,6 +15,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::Result,
     events::{
+        migration::MigrationHandler,
         process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
@@ -22,9 +23,9 @@ use crate::{
     },
     process::state::Stopped,
     types::{
-        checker::CheckFailReason,
         exit_reason::ExitReason,
         process_id::{Checker, Main},
+        segment::SegmentId,
     },
 };
 
@@ -47,7 +48,9 @@ use super::{StatisticValue, StatisticsProvider};
 //   * CheckerSignalHandling
 //   * CheckerComparing
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Hash)]
+type CpuSet = Vec<usize>;
+
+#[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord, Hash)]
 pub enum Event {
     // Main events
     MainCheckpointing,
@@ -76,6 +79,9 @@ pub enum Event {
     CheckerSys,
     CheckerWall,
 
+    CheckerUserOnCpu(CpuSet),
+    CheckerSysOnCpu(CpuSet),
+
     // Misc
     AllWall,
 
@@ -85,43 +91,54 @@ pub enum Event {
 }
 
 impl Event {
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Event::MainCheckpointing => "main_checkpointing",
-            Event::MainCheckpointingPreForkHook => "main_checkpointing_pre_fork_hook",
-            Event::MainCheckpointingPostForkHook => "main_checkpointing_post_fork_hook",
-            Event::MainCheckpointingForking => "main_checkpointing_forking",
-            Event::MainThrottling => "main_throttling",
-            Event::MainSyscallEntryHandling => "main_syscall_entry_handling",
-            Event::MainSyscallExitHandling => "main_syscall_exit_handling",
-            Event::MainSignalHandling => "main_signal_handling",
+            Event::MainCheckpointing => "main_checkpointing".into(),
+            Event::MainCheckpointingPreForkHook => "main_checkpointing_pre_fork_hook".into(),
+            Event::MainCheckpointingPostForkHook => "main_checkpointing_post_fork_hook".into(),
+            Event::MainCheckpointingForking => "main_checkpointing_forking".into(),
+            Event::MainThrottling => "main_throttling".into(),
+            Event::MainSyscallEntryHandling => "main_syscall_entry_handling".into(),
+            Event::MainSyscallExitHandling => "main_syscall_exit_handling".into(),
+            Event::MainSignalHandling => "main_signal_handling".into(),
 
-            Event::MainUser => "main_user",
-            Event::MainSys => "main_sys",
-            Event::MainWall => "main_wall",
+            Event::MainUser => "main_user".into(),
+            Event::MainSys => "main_sys".into(),
+            Event::MainWall => "main_wall".into(),
 
-            Event::CheckerStarting => "checker_starting",
-            Event::CheckerForking => "checker_forking",
-            Event::CheckerReadyHook => "checker_ready_hook",
-            Event::CheckerSyscallEntryHandling => "checker_syscall_entry_handling",
-            Event::CheckerSyscallExitHandling => "checker_syscall_exit_handling",
-            Event::CheckerSignalHandling => "checker_signal_handling",
-            Event::CheckerComparing => "checker_comparing",
+            Event::CheckerStarting => "checker_starting".into(),
+            Event::CheckerForking => "checker_forking".into(),
+            Event::CheckerReadyHook => "checker_ready_hook".into(),
+            Event::CheckerSyscallEntryHandling => "checker_syscall_entry_handling".into(),
+            Event::CheckerSyscallExitHandling => "checker_syscall_exit_handling".into(),
+            Event::CheckerSignalHandling => "checker_signal_handling".into(),
+            Event::CheckerComparing => "checker_comparing".into(),
 
-            Event::CheckerUser => "checker_user",
-            Event::CheckerSys => "checker_sys",
-            Event::CheckerWall => "checker_wall",
+            Event::CheckerUser => "checker_user".into(),
+            Event::CheckerSys => "checker_sys".into(),
+            Event::CheckerWall => "checker_wall".into(),
 
-            Event::AllWall => "all_wall",
+            Event::CheckerUserOnCpu(cpuset) => format!("checker_user[{}]", cpuset.iter().join(",")),
+            Event::CheckerSysOnCpu(cpuset) => format!("checker_sys[{}]", cpuset.iter().join(",")),
 
-            Event::ShellUser => "shell_user",
-            Event::ShellSys => "shell_sys",
+            Event::AllWall => "all_wall".into(),
+
+            Event::ShellUser => "shell_user".into(),
+            Event::ShellSys => "shell_sys".into(),
         }
     }
 }
 
+#[derive(Debug)]
+struct CheckerState {
+    last_cpu_set: CpuSet,
+    last_user_time: Duration,
+    last_sys_time: Duration,
+}
+
 pub struct Tracer {
     durations: Mutex<HashMap<Event, Duration>>,
+    checker_states: Mutex<HashMap<SegmentId, CheckerState>>,
     exit_status: Mutex<Option<i32>>,
 }
 
@@ -137,7 +154,8 @@ impl TracingGuard<'_> {
 
 impl Drop for TracingGuard<'_> {
     fn drop(&mut self) {
-        self.tracer.add(self.event, self.start_instant.elapsed());
+        self.tracer
+            .add(self.event.clone(), self.start_instant.elapsed());
     }
 }
 
@@ -145,6 +163,7 @@ impl Tracer {
     pub fn new() -> Self {
         Self {
             durations: Mutex::new(HashMap::new()),
+            checker_states: Mutex::new(HashMap::new()),
             exit_status: Mutex::new(None),
         }
     }
@@ -164,6 +183,37 @@ impl Tracer {
     pub fn add(&self, event: Event, elapsed: Duration) {
         let mut durations = self.durations.lock();
         *durations.entry(event).or_insert(Duration::ZERO) += elapsed;
+    }
+
+    fn account_checker_cpu_time(&self, checker: &Checker<Stopped>) -> Result<()> {
+        let mut checker_states = self.checker_states.lock();
+        let checker_state = checker_states.get_mut(&checker.segment.nr).unwrap();
+
+        let ticks_per_second = procfs::ticks_per_second();
+        let stats = checker.process().stats()?;
+        let total_utime = ticks_to_duration(stats.utime, ticks_per_second);
+        let total_stime = ticks_to_duration(stats.stime, ticks_per_second);
+
+        self.add(
+            Event::CheckerUserOnCpu(checker_state.last_cpu_set.clone()),
+            total_utime - checker_state.last_user_time,
+        );
+        self.add(
+            Event::CheckerSysOnCpu(checker_state.last_cpu_set.clone()),
+            total_stime - checker_state.last_sys_time,
+        );
+
+        checker_state.last_cpu_set = checker
+            .segment
+            .checker_status
+            .lock()
+            .cpu_set()
+            .unwrap()
+            .into();
+        checker_state.last_user_time = total_utime;
+        checker_state.last_sys_time = total_stime;
+
+        Ok(())
     }
 }
 
@@ -185,10 +235,7 @@ impl StatisticsProvider for Tracer {
         )];
 
         for (event, duration) in self.durations.lock().iter().sorted() {
-            stats.push((
-                event.name().to_owned() + "_time",
-                Box::new(duration.as_secs_f64()),
-            ));
+            stats.push((event.name() + "_time", Box::new(duration.as_secs_f64())));
         }
 
         stats.into_boxed_slice()
@@ -268,12 +315,32 @@ impl ProcessLifetimeHook for Tracer {
 }
 
 impl SegmentEventHandler for Tracer {
-    fn handle_segment_checked(
+    fn handle_segment_ready(
         &self,
         checker: &mut Checker<Stopped>,
-        _check_fail_reason: &Option<CheckFailReason>,
         _ctx: HandlerContext,
     ) -> Result<()> {
+        self.checker_states.lock().insert(
+            checker.segment.nr,
+            CheckerState {
+                last_cpu_set: checker
+                    .segment
+                    .checker_status
+                    .lock()
+                    .cpu_set()
+                    .unwrap()
+                    .into(),
+                last_user_time: Duration::ZERO,
+                last_sys_time: Duration::ZERO,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+        self.account_checker_cpu_time(checker)?;
+
         let ticks_per_second = procfs::ticks_per_second();
         let stats = checker.process().stats()?;
 
@@ -290,6 +357,12 @@ impl SegmentEventHandler for Tracer {
     }
 }
 
+impl MigrationHandler for Tracer {
+    fn handle_checker_migration(&self, ctx: HandlerContextWithInferior<Stopped>) -> Result<()> {
+        self.account_checker_cpu_time(ctx.child.unwrap_checker())
+    }
+}
+
 impl Module for Tracer {
     fn subscribe_all<'s, 'd>(&'s self, subs: &mut Subscribers<'d>)
     where
@@ -299,5 +372,6 @@ impl Module for Tracer {
         subs.install_process_lifetime_hook(self);
         subs.install_stats_providers(self);
         subs.install_segment_event_handler(self);
+        subs.install_migration_handler(self);
     }
 }
