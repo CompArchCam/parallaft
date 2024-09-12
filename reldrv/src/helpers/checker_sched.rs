@@ -1,4 +1,10 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use log::{debug, info};
 use nix::sys::signal::Signal;
@@ -15,6 +21,8 @@ use crate::{
         HandlerContextWithInferior,
     },
     process::state::{Running, Stopped},
+    statistics::StatisticsProvider,
+    statistics_list,
     types::{
         checker::{CheckFailReason, CheckerStatus},
         exit_reason::ExitReason,
@@ -45,6 +53,8 @@ pub struct CheckerScheduler<'a> {
     allow_checker_migration_to_emerg: bool,
     allow_checker_migration_to_booster: bool, // allow checkers to migrate to booster CPU set after the main finishes
 
+    nr_migrations: AtomicU64,
+
     state: Mutex<State>,
 
     cvar: Condvar,
@@ -66,6 +76,7 @@ impl<'a> CheckerScheduler<'a> {
             checker_booster_cpu_set,
             allow_checker_migration_to_emerg,
             allow_checker_migration_to_booster,
+            nr_migrations: AtomicU64::new(0),
             state: Mutex::new(State::new()),
             cvar: Condvar::new(),
         }
@@ -255,7 +266,19 @@ impl SignalHandler for CheckerScheduler<'_> {
             context.scope,
         )?;
 
+        self.nr_migrations.fetch_add(1, Ordering::SeqCst);
+
         Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior { single_step: false })
+    }
+}
+
+impl StatisticsProvider for CheckerScheduler<'_> {
+    fn class_name(&self) -> &'static str {
+        "checker_sched"
+    }
+
+    fn statistics(&self) -> Box<[(String, Box<dyn crate::statistics::StatisticValue>)]> {
+        statistics_list!(nr_migrations = self.nr_migrations.load(Ordering::SeqCst))
     }
 }
 
@@ -268,5 +291,6 @@ impl Module for CheckerScheduler<'_> {
         subs.install_migration_handler(self);
         subs.install_signal_handler(self);
         subs.install_process_lifetime_hook(self);
+        subs.install_stats_providers(self);
     }
 }
