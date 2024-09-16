@@ -2,7 +2,6 @@
 
 members = [
     "reldrv",
-    "libfpt-rs",
     "reverie-memory",
     "reverie-syscalls",
 ]

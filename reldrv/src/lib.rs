@@ -77,14 +77,10 @@ use types::perf_counter::symbolic_events::BranchType;
 use crate::check_coord::{CheckCoordinator, CheckCoordinatorOptions};
 #[cfg(target_arch = "x86_64")]
 use crate::comparators::intel_hybrid_workaround::IntelHybridWorkaround;
-#[cfg(feature = "dpt_fpt")]
-use crate::dirty_page_trackers::fpt::FptDirtyPageTracker;
 use crate::dirty_page_trackers::soft_dirty::SoftDirtyPageTracker;
 use crate::dispatcher::Dispatcher;
 
 use crate::helpers::affinity::AffinitySetter;
-#[cfg(feature = "helper_checkpoint_size_limiter")]
-use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 #[cfg(target_arch = "x86_64")]
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
@@ -166,9 +162,6 @@ pub struct RelShellOptions {
 
     // cpufreq setter plugin options
     pub cpu_freq_scaler_type: CpuFreqScalerType,
-
-    // checkpoint size limiter plugin options
-    pub checkpoint_size_watermark: usize,
 
     // perf counter plugin options
     pub enabled_perf_counters: Vec<CounterKind>,
@@ -401,11 +394,6 @@ pub fn parent_work(
         }
     }
 
-    #[cfg(feature = "helper_checkpoint_size_limiter")]
-    disp.register_module(CheckpointSizeLimiter::new(
-        options.checkpoint_size_watermark,
-    ));
-
     #[cfg(target_arch = "x86_64")]
     disp.register_module(SpecCtrlSetter::new(
         options.enable_speculative_store_bypass_misfeature,
@@ -467,10 +455,6 @@ pub fn parent_work(
                 options.dont_clear_soft_dirty,
                 options.dirty_page_tracker == DirtyPageAddressTrackerType::SoftDirty,
             ));
-        }
-        #[cfg(feature = "dpt_fpt")]
-        DirtyPageAddressTrackerType::Fpt => {
-            disp.register_module(FptDirtyPageTracker::new());
         }
         #[cfg(feature = "dpt_uffd")]
         DirtyPageAddressTrackerType::Uffd => {

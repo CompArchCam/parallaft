@@ -1,5 +1,4 @@
 pub mod custom_sysno;
-pub mod relrt;
 
 use custom_sysno::TestCustomSysno;
 use nix::{

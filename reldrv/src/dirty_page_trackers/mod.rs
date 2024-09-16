@@ -1,5 +1,3 @@
-#[cfg(feature = "dpt_fpt")]
-pub mod fpt;
 pub mod full;
 pub mod kpagecount;
 pub mod null;
@@ -26,8 +24,6 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum DirtyPageAddressTrackerType {
     SoftDirty,
-    #[cfg(feature = "dpt_fpt")]
-    Fpt,
     #[cfg(feature = "dpt_uffd")]
     Uffd,
     KPageCount,

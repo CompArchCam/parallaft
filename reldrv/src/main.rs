@@ -137,10 +137,6 @@ struct CliArgs {
     #[arg(long)]
     max_memory_overhead: Option<usize>,
 
-    /// Checkpoint size watermark in number of pages (0 = unlimited).
-    #[arg(long)]
-    checkpoint_size_watermark: Option<usize>,
-
     /// Checkpoint period in number of instructions. Used by librelrt and PMU-based segmentor.
     #[arg(short = 'P', long)]
     checkpoint_period: Option<u64>,
@@ -396,11 +392,6 @@ fn main() {
         CpuFreqScalerTypeCli::Dynamic => {
             config.cpu_freq_scaler_type = CpuFreqScalerType::Dynamic;
         }
-    });
-
-    // checkpoint_size_watermark
-    apply_if_some(&mut config, cli.checkpoint_size_watermark, |config, val| {
-        config.checkpoint_size_watermark = val;
     });
 
     // cache_masks

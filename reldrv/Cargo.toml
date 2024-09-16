@@ -17,7 +17,6 @@ perf-event2 = "0.7.2"
 thiserror = "1.0.43"
 human_bytes = "0.4.2"
 lazy_static = "1.4.0"
-libfpt-rs = { path = "../libfpt-rs", optional = true }
 clap-num = "1.1"
 parking_lot = { git = "https://github.com/mbyzhang/parking_lot.git", features = ["arc_lock"] }
 typed-arena = "2.0.2"
@@ -51,5 +50,3 @@ dbg_hex = "0.2.0"
 default = ["intel_cat"]
 intel_cat = []
 dpt_uffd = ["dep:userfaultfd", "dep:pidfd_getfd"]
-dpt_fpt = ["dep:libfpt-rs"]
-helper_checkpoint_size_limiter = ["dep:libfpt-rs"]
