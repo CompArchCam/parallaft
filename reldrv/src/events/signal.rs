@@ -21,7 +21,7 @@ pub enum SignalHandlerExitAction {
     Checkpoint,
 }
 
-pub trait SignalHandler {
+pub trait SignalHandler: Sync {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,

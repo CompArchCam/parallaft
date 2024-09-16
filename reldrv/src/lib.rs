@@ -232,7 +232,7 @@ pub struct RelShellOptions {
     // extra modules
     #[serde(skip)]
     #[derivative(Debug = "ignore")]
-    pub extra_modules: Vec<Box<dyn Module + Sync>>,
+    pub extra_modules: Vec<Box<dyn Module>>,
 }
 
 impl RelShellOptionsBuilder {

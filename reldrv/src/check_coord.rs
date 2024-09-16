@@ -286,7 +286,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     fn wait_until_unthrottled(
         &self,
         main: &mut Main<Running>,
-        throttler: &(dyn Throttler + Sync),
+        throttler: &dyn Throttler,
         segments: &mut RwLockUpgradableReadGuard<SegmentChains>, // TODO: changeme
     ) {
         loop {

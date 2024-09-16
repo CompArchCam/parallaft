@@ -101,7 +101,7 @@ impl DirtyPageAddressesWithFlags {
 }
 
 #[allow(unused_variables)]
-pub trait DirtyPageAddressTracker {
+pub trait DirtyPageAddressTracker: Sync {
     fn take_dirty_pages_addresses(
         &self,
         inferior_id: InferiorId,
@@ -134,6 +134,6 @@ pub trait DirtyPageAddressTracker {
 }
 
 #[allow(unused_variables)]
-pub trait ExtraWritableRangesProvider {
+pub trait ExtraWritableRangesProvider: Sync {
     fn get_extra_writable_ranges(&self) -> Box<[Range<usize>]>;
 }

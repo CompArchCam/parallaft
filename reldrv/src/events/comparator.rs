@@ -52,7 +52,7 @@ impl Display for MemoryComparsionResult {
     }
 }
 
-pub trait RegisterComparator {
+pub trait RegisterComparator: Sync {
     fn compare_registers(
         &self,
         chk_registers: &mut Registers,

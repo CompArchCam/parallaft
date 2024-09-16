@@ -24,7 +24,7 @@ pub fn pctx<'disp, 'scope, 'env, 'modules, 'tracer>(
 }
 
 #[allow(unused_variables)]
-pub trait ProcessLifetimeHook {
+pub trait ProcessLifetimeHook: Sync {
     /// Called after spawning the main process
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,

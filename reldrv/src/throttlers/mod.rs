@@ -8,7 +8,7 @@ pub mod checkpoint_sync;
 pub mod memory;
 pub mod nr_segments;
 
-pub trait Throttler {
+pub trait Throttler: Sync {
     fn should_throttle(
         &self,
         main: &mut Main<Stopped>,

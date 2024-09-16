@@ -74,17 +74,17 @@ macro_rules! generate_event_handler_option {
 }
 
 pub struct Subscribers<'a> {
-    process_lifetime_hooks: Vec<&'a (dyn ProcessLifetimeHook + Sync)>,
-    standard_syscall_handlers: Vec<&'a (dyn StandardSyscallHandler + Sync)>,
-    custom_syscall_handlers: Vec<&'a (dyn CustomSyscallHandler + Sync)>,
-    signal_handlers: Vec<&'a (dyn SignalHandler + Sync)>,
-    segment_event_handlers: Vec<&'a (dyn SegmentEventHandler + Sync)>,
-    ignored_pages_providers: Vec<&'a (dyn IgnoredPagesProvider + Sync)>,
-    throttlers: Vec<&'a (dyn Throttler + Sync)>,
-    dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
-    extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
-    stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
-    register_comparators: Vec<&'a (dyn RegisterComparator + Sync)>,
+    process_lifetime_hooks: Vec<&'a dyn ProcessLifetimeHook>,
+    standard_syscall_handlers: Vec<&'a dyn StandardSyscallHandler>,
+    custom_syscall_handlers: Vec<&'a dyn CustomSyscallHandler>,
+    signal_handlers: Vec<&'a dyn SignalHandler>,
+    segment_event_handlers: Vec<&'a dyn SegmentEventHandler>,
+    ignored_pages_providers: Vec<&'a dyn IgnoredPagesProvider>,
+    throttlers: Vec<&'a dyn Throttler>,
+    dirty_page_tracker: Option<&'a dyn DirtyPageAddressTracker>,
+    extra_writable_ranges_providers: Vec<&'a dyn ExtraWritableRangesProvider>,
+    stats_providers: Vec<&'a dyn StatisticsProvider>,
+    register_comparators: Vec<&'a dyn RegisterComparator>,
     memory_comparators: Vec<&'a dyn MemoryComparator>,
     module_lifetime_hooks: Vec<&'a dyn ModuleLifetimeHook>,
     exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
@@ -122,59 +122,50 @@ impl<'a> Subscribers<'a> {
         }
     }
 
-    pub fn install_process_lifetime_hook(&mut self, handler: &'a (dyn ProcessLifetimeHook + Sync)) {
+    pub fn install_process_lifetime_hook(&mut self, handler: &'a dyn ProcessLifetimeHook) {
         self.process_lifetime_hooks.push(handler)
     }
 
-    pub fn install_standard_syscall_handler(
-        &mut self,
-        handler: &'a (dyn StandardSyscallHandler + Sync),
-    ) {
+    pub fn install_standard_syscall_handler(&mut self, handler: &'a dyn StandardSyscallHandler) {
         self.standard_syscall_handlers.push(handler)
     }
 
-    pub fn install_custom_syscall_handler(
-        &mut self,
-        handler: &'a (dyn CustomSyscallHandler + Sync),
-    ) {
+    pub fn install_custom_syscall_handler(&mut self, handler: &'a dyn CustomSyscallHandler) {
         self.custom_syscall_handlers.push(handler)
     }
 
-    pub fn install_signal_handler(&mut self, handler: &'a (dyn SignalHandler + Sync)) {
+    pub fn install_signal_handler(&mut self, handler: &'a dyn SignalHandler) {
         self.signal_handlers.push(handler)
     }
 
-    pub fn install_segment_event_handler(&mut self, handler: &'a (dyn SegmentEventHandler + Sync)) {
+    pub fn install_segment_event_handler(&mut self, handler: &'a dyn SegmentEventHandler) {
         self.segment_event_handlers.push(handler)
     }
 
-    pub fn install_throttler(&mut self, throttler: &'a (dyn Throttler + Sync)) {
+    pub fn install_throttler(&mut self, throttler: &'a dyn Throttler) {
         self.throttlers.push(throttler)
     }
 
-    pub fn install_ignored_pages_provider(
-        &mut self,
-        provider: &'a (dyn IgnoredPagesProvider + Sync),
-    ) {
+    pub fn install_ignored_pages_provider(&mut self, provider: &'a dyn IgnoredPagesProvider) {
         self.ignored_pages_providers.push(provider)
     }
 
-    pub fn set_dirty_page_tracker(&mut self, tracker: &'a (dyn DirtyPageAddressTracker + Sync)) {
+    pub fn set_dirty_page_tracker(&mut self, tracker: &'a dyn DirtyPageAddressTracker) {
         self.dirty_page_tracker = Some(tracker);
     }
 
     pub fn install_extra_writable_ranges_provider(
         &mut self,
-        provider: &'a (dyn ExtraWritableRangesProvider + Sync),
+        provider: &'a dyn ExtraWritableRangesProvider,
     ) {
         self.extra_writable_ranges_providers.push(provider)
     }
 
-    pub fn install_stats_providers(&mut self, provider: &'a (dyn StatisticsProvider + Sync)) {
+    pub fn install_stats_providers(&mut self, provider: &'a dyn StatisticsProvider) {
         self.stats_providers.push(provider)
     }
 
-    pub fn install_register_comparator(&mut self, comparator: &'a (dyn RegisterComparator + Sync)) {
+    pub fn install_register_comparator(&mut self, comparator: &'a dyn RegisterComparator) {
         self.register_comparators.push(comparator)
     }
 
@@ -230,7 +221,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
         main: &mut Main<Stopped>,
         segments: &SegmentChains,
         check_coord: &CheckCoordinator,
-    ) -> Option<&'a (dyn Throttler + Sync)> {
+    ) -> Option<&'a dyn Throttler> {
         self.subscribers
             .read()
             .throttlers

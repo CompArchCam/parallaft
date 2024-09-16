@@ -41,7 +41,7 @@ use super::process_lifetime::HandlerContext;
 ///            ^              ^
 /// checkpoint_created_pre  filled & chain_closed
 /// ```
-pub trait SegmentEventHandler {
+pub trait SegmentEventHandler: Sync {
     /// Called when a checkpoint is about to be created, before forking. At this
     /// point, `main.segment` contains the last segment, if there is one.
     fn handle_checkpoint_created_pre_fork(

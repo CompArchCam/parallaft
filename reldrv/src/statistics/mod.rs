@@ -22,7 +22,7 @@ macro_rules! statistics_list {
     };
 }
 
-pub trait StatisticsProvider {
+pub trait StatisticsProvider: Sync {
     fn class_name(&self) -> &'static str;
 
     fn statistics(&self) -> Box<[(String, Box<dyn StatisticValue>)]>;

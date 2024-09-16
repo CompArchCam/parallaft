@@ -45,7 +45,7 @@ pub enum SyscallHandlerExitAction {
 }
 
 #[allow(unused_variables)]
-pub trait StandardSyscallHandler {
+pub trait StandardSyscallHandler: Sync {
     fn handle_standard_syscall_entry_main(
         &self,
         syscall: &Syscall,
@@ -99,7 +99,7 @@ pub trait StandardSyscallHandler {
 }
 
 #[allow(unused_variables)]
-pub trait CustomSyscallHandler {
+pub trait CustomSyscallHandler: Sync {
     fn handle_custom_syscall_entry(
         &self,
         sysno: usize,

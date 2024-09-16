@@ -452,7 +452,7 @@ impl AsIoSlice for MemoryMap {
     }
 }
 
-pub trait IgnoredPagesProvider {
+pub trait IgnoredPagesProvider: Sync {
     fn get_ignored_pages(&self) -> Box<[usize]>;
 }
 
