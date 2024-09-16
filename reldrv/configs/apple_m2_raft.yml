@@ -1,0 +1,21 @@
+main_cpu_set: [4]
+checker_cpu_set: [5]
+slicer: !EntireProgram
+dump_stats: !StdOut
+check_coord_flags:
+  no_state_cmp: true
+dirty_page_tracker: !None
+sample_memory_usage: true
+hwmon_sensor_paths:
+- hwmon: macsmc_hwmon
+  sensor: CPU P-cores Power
+- hwmon: macsmc_hwmon
+  sensor: CPU E-cores Power
+- hwmon: macsmc_hwmon
+  sensor: SoC Power
+- hwmon: macsmc_hwmon
+  sensor: DRAM VDD2H Power
+- hwmon: macsmc_hwmon
+  sensor: CPU SRAM 1 Power
+- hwmon: macsmc_hwmon
+  sensor: CPU SRAM 2 Power
