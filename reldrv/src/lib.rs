@@ -8,7 +8,6 @@ pub mod events;
 pub mod exec_point_providers;
 pub mod features;
 pub mod helpers;
-pub mod inferior_rtlib;
 pub mod process;
 pub mod signal_handlers;
 pub mod slicers;
@@ -89,7 +88,6 @@ use crate::helpers::checkpoint_size_limiter::CheckpointSizeLimiter;
 #[cfg(target_arch = "x86_64")]
 use crate::helpers::spec_ctrl::SpecCtrlSetter;
 use crate::helpers::vdso::VdsoRemover;
-// use crate::inferior_rtlib::pmu::PmuSegmentor;
 
 #[cfg(target_arch = "x86_64")]
 use crate::signal_handlers::cpuid;

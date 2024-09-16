@@ -33,7 +33,6 @@ use crate::{
     },
     exec_point_providers::ExecutionPointProvider,
     helpers::insn_patcher::Patch,
-    inferior_rtlib::{ScheduleCheckpoint, ScheduleCheckpointReady},
     process::{
         dirty_pages::IgnoredPagesProvider,
         registers::Registers,
@@ -82,8 +81,6 @@ pub struct Subscribers<'a> {
     segment_event_handlers: Vec<&'a (dyn SegmentEventHandler + Sync)>,
     ignored_pages_providers: Vec<&'a (dyn IgnoredPagesProvider + Sync)>,
     throttlers: Vec<&'a (dyn Throttler + Sync)>,
-    schedule_checkpoint: Vec<&'a (dyn ScheduleCheckpoint + Sync)>,
-    schedule_checkpoint_ready_handlers: Vec<&'a (dyn ScheduleCheckpointReady + Sync)>,
     dirty_page_tracker: Option<&'a (dyn DirtyPageAddressTracker + Sync)>,
     extra_writable_ranges_providers: Vec<&'a (dyn ExtraWritableRangesProvider + Sync)>,
     stats_providers: Vec<&'a (dyn StatisticsProvider + Sync)>,
@@ -112,8 +109,6 @@ impl<'a> Subscribers<'a> {
             segment_event_handlers: Vec::new(),
             ignored_pages_providers: Vec::new(),
             throttlers: Vec::new(),
-            schedule_checkpoint: Vec::new(),
-            schedule_checkpoint_ready_handlers: Vec::new(),
             dirty_page_tracker: None,
             extra_writable_ranges_providers: Vec::new(),
             stats_providers: Vec::new(),
@@ -162,17 +157,6 @@ impl<'a> Subscribers<'a> {
         provider: &'a (dyn IgnoredPagesProvider + Sync),
     ) {
         self.ignored_pages_providers.push(provider)
-    }
-
-    pub fn install_schedule_checkpoint(&mut self, scheduler: &'a (dyn ScheduleCheckpoint + Sync)) {
-        self.schedule_checkpoint.push(scheduler)
-    }
-
-    pub fn install_schedule_checkpoint_ready_handler(
-        &mut self,
-        handler: &'a (dyn ScheduleCheckpointReady + Sync),
-    ) {
-        self.schedule_checkpoint_ready_handlers.push(handler)
     }
 
     pub fn set_dirty_page_tracker(&mut self, tracker: &'a (dyn DirtyPageAddressTracker + Sync)) {
@@ -578,14 +562,6 @@ impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {
 
         pages.into_boxed_slice()
     }
-}
-
-impl<'a, 'm> ScheduleCheckpoint for Dispatcher<'a, 'm> {
-    generate_event_handler!(schedule_checkpoint, fn schedule_checkpoint(&self, main: &mut Main<Stopped>, check_coord: &CheckCoordinator));
-}
-
-impl<'a, 'm> ScheduleCheckpointReady for Dispatcher<'a, 'm> {
-    generate_event_handler!(schedule_checkpoint_ready_handlers, fn handle_ready_to_schedule_checkpoint(&self, check_coord: &CheckCoordinator));
 }
 
 impl<'a, 'm> DirtyPageAddressTracker for Dispatcher<'a, 'm> {
