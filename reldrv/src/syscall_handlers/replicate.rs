@@ -48,7 +48,10 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         Ok(match syscall {
             #[cfg(target_arch = "x86_64")]
             Syscall::ArchPrctl(_) => action(),
-            Syscall::Brk(_) => action(),
+            Syscall::Brk(_)
+            | Syscall::RtSigreturn(_)
+            | Syscall::Exit(_)
+            | Syscall::ExitGroup(_) => action(),
             _ => StandardSyscallEntryMainHandlerExitAction::NextHandler,
         })
     }
@@ -58,7 +61,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         syscall: &Syscall,
         context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
-        let action = || {
+        let action_complete_syscall = || {
             let saved_syscall = context
                 .child
                 .unwrap_checker()
@@ -80,10 +83,33 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
             Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
         };
 
+        let action_incomplete_syscall = || {
+            let saved_syscall = context
+                .child
+                .unwrap_checker()
+                .segment
+                .record
+                .pop_incomplete_syscall()?;
+
+            if &saved_syscall.value.syscall != syscall {
+                error!(
+                    "Unexpected syscall {:?}, expecting {:?}",
+                    syscall, saved_syscall.value.syscall
+                );
+
+                return Err(Error::UnexpectedEvent(
+                    UnexpectedEventReason::IncorrectValue,
+                ));
+            }
+
+            Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
+        };
+
         match syscall {
             #[cfg(target_arch = "x86_64")]
             Syscall::ArchPrctl(_) => action(),
-            Syscall::Brk(_) => action(),
+            Syscall::Brk(_) | Syscall::RtSigreturn(_) => action_complete_syscall(),
+            Syscall::Exit(_) | Syscall::ExitGroup(_) => action_incomplete_syscall(),
             _ => Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler),
         }
     }

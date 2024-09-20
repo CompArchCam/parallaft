@@ -39,4 +39,8 @@ impl ExitReason {
     pub fn expect_state_mismatch(self) {
         assert!(matches!(self, ExitReason::StateMismatch(_)));
     }
+
+    pub fn expect_signalled(self, sig: Signal) {
+        assert!(matches!(self, ExitReason::Signalled(s) if s == sig));
+    }
 }

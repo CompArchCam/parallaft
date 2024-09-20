@@ -38,7 +38,7 @@ pub enum SegmentStatus {
     /// The main process finished this segment, so that the record is fully
     /// filled.
     Filled {
-        checkpoint: Arc<Checkpoint>,
+        checkpoint: Option<Arc<Checkpoint>>,
         dirty_page_addresses: Option<Arc<DirtyPageAddressesWithFlags>>,
     },
 
@@ -49,7 +49,7 @@ pub enum SegmentStatus {
 impl SegmentStatus {
     pub fn checkpoint_end(&self) -> Option<Arc<Checkpoint>> {
         match self {
-            SegmentStatus::Filled { checkpoint, .. } => Some(checkpoint.clone()),
+            SegmentStatus::Filled { checkpoint, .. } => checkpoint.clone(),
             _ => None,
         }
     }
@@ -57,9 +57,9 @@ impl SegmentStatus {
     pub fn process(&self) -> Option<Process<Unowned>> {
         match self {
             SegmentStatus::Filling { process, .. } => Some(process.clone()),
-            SegmentStatus::Filled { checkpoint, .. } => {
-                Some(checkpoint.process.lock().as_ref().unwrap().unowned_copy())
-            }
+            SegmentStatus::Filled { checkpoint, .. } => checkpoint
+                .as_ref()
+                .map(|p| p.process.lock().as_ref().unwrap().unowned_copy()),
             SegmentStatus::Crashed => None,
         }
     }
@@ -132,7 +132,7 @@ impl Segment {
         }
     }
 
-    pub fn mark_main_as_completed(&self, checkpoint_end: Arc<Checkpoint>) {
+    pub fn mark_main_as_completed(&self, checkpoint_end: Option<Arc<Checkpoint>>) {
         let mut status = self.status.lock();
         assert!(matches!(&*status, SegmentStatus::Filling { .. }));
         *status = SegmentStatus::Filled {

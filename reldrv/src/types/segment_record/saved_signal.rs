@@ -1,12 +1,30 @@
+use std::sync::Arc;
+
 use nix::libc::siginfo_t;
 
-use crate::types::execution_point::ExecutionPoint;
+use crate::{
+    error::{Error, Result, UnexpectedEventReason},
+    types::execution_point::ExecutionPoint,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SignalInfo(siginfo_t);
+use super::saved_event::SavedEventType;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SavedSignal {
-    Internal(SignalInfo),
-    External(SignalInfo, Box<dyn ExecutionPoint>),
+    Internal(siginfo_t),
+    External(siginfo_t, Arc<dyn ExecutionPoint>),
+}
+
+impl SavedSignal {
+    pub fn get_internal_signal(&self) -> Result<siginfo_t> {
+        match self {
+            Self::Internal(siginfo) => Ok(*siginfo),
+            _ => Err(Error::UnexpectedEvent(
+                UnexpectedEventReason::IncorrectType {
+                    expected: SavedEventType::InternalSignal,
+                    got: self.clone().into(),
+                },
+            )),
+        }
+    }
 }

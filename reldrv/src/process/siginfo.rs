@@ -15,6 +15,10 @@ impl Process<Stopped> {
     pub fn get_sigval(&self) -> Result<Option<usize>> {
         Ok(self.get_siginfo()?.sigval())
     }
+
+    pub fn set_siginfo(&mut self, siginfo: &siginfo_t) -> Result<()> {
+        Ok(ptrace::setsiginfo(self.pid, siginfo)?)
+    }
 }
 
 pub trait SigInfoExt {

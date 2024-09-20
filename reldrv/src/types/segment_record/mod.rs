@@ -1,4 +1,5 @@
 pub mod manual_checkpoint;
+pub mod program_exit;
 pub mod saved_event;
 pub mod saved_memory;
 pub mod saved_signal;
@@ -7,8 +8,13 @@ pub mod saved_trap_event;
 
 use std::sync::Arc;
 
+use log::{error, info};
 use manual_checkpoint::ManualCheckpointRequest;
+use nix::libc::siginfo_t;
 use parking_lot::{Condvar, Mutex, MutexGuard};
+use program_exit::ProgramExit;
+use saved_event::SavedEventType;
+use saved_signal::SavedSignal;
 
 use self::{
     saved_event::SavedEvent,
@@ -19,9 +25,10 @@ use self::{
 use crate::{
     error::{Error, Result, UnexpectedEventReason},
     events::signal::SignalHandlerExitAction,
+    process::state::Stopped,
 };
 
-use super::{execution_point::ExecutionPoint, segment::Segment};
+use super::{execution_point::ExecutionPoint, process_id::Checker, segment::Segment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum MainStatus {
@@ -108,8 +115,12 @@ impl SegmentRecord {
         let mut state = self.state.lock();
         state.event_pos = 0;
         for event in state.event_log.iter() {
-            if let SavedEvent::ExecutionPoint(execution_point) = event {
-                execution_point.prepare(segment)?;
+            match event {
+                SavedEvent::ExecutionPoint(exec_point)
+                | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
+                    exec_point.prepare(segment)?;
+                }
+                _ => (),
             }
         }
         self.cvar.notify_all();
@@ -185,17 +196,16 @@ impl SegmentRecord {
         let event: SavedEvent = event.into();
 
         match &event {
-            SavedEvent::ExecutionPoint(exec_point) => {
+            SavedEvent::ExecutionPoint(exec_point)
+            | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
                 exec_point.prepare(segment)?;
                 assert!(self.enable_async_events);
             }
-
             _ => (),
         };
 
         let mut state = self.state.lock();
         assert_eq!(state.main_status, MainStatus::Filling);
-        state.event_log.push(event);
 
         if is_last {
             if let Some(incomplete_syscall) = state.last_incomplete_syscall.take() {
@@ -206,6 +216,8 @@ impl SegmentRecord {
 
             state.main_status = MainStatus::Completed;
         }
+
+        state.event_log.push(event);
 
         self.cvar.notify_all();
 
@@ -279,8 +291,82 @@ impl SegmentRecord {
         self.pop_event_with(|event| event.get_incomplete_syscall())
     }
 
+    pub fn pop_event(&self) -> Result<WithIsLastEvent<SavedEvent>> {
+        self.pop_event_with(|event| Ok(event.clone()))
+    }
+
+    pub fn pop_signal(&self) -> Result<WithIsLastEvent<SavedSignal>> {
+        self.pop_event_with(|event| event.get_signal())
+    }
+
+    pub fn pop_internal_signal(&self) -> Result<WithIsLastEvent<siginfo_t>> {
+        self.pop_event_with(|event| event.get_signal()?.get_internal_signal())
+    }
+
+    pub fn pop_program_exit(&self) -> Result<WithIsLastEvent<ProgramExit>> {
+        self.pop_event_with(|event| event.get_program_exit())
+    }
+
     pub fn peek_event_blocking(&self) -> Result<SavedEvent> {
         let state = self.wait_until_event_available()?;
         Ok(state.event_log.get(state.event_pos).unwrap().clone())
+    }
+
+    pub fn handle_exec_point_reached(
+        &self,
+        exec_point: &impl ExecutionPoint,
+        checker: &mut Checker<Stopped>,
+    ) -> Result<SignalHandlerExitAction> {
+        let next_event = self.pop_event()?;
+
+        match &next_event.value {
+            SavedEvent::Signal(SavedSignal::External(siginfo, exec_point_expected)) => {
+                info!("{checker} Replaying external signal");
+
+                if !exec_point_expected.do_eq(exec_point) {
+                    error!(
+                        "{checker} Exec point mismatch: {:?} != {:?}",
+                        exec_point, exec_point_expected
+                    );
+
+                    return Err(Error::UnexpectedEvent(
+                        UnexpectedEventReason::IncorrectValue,
+                    ));
+                }
+
+                checker.process_mut().set_siginfo(&siginfo)?;
+
+                assert!(!next_event.is_last_event);
+
+                let sig = siginfo.si_signo.try_into()?;
+                Ok(SignalHandlerExitAction::ContinueInferiorWithSignal(sig))
+            }
+            SavedEvent::ExecutionPoint(exec_point_expected) => {
+                if !exec_point_expected.do_eq(exec_point) {
+                    error!(
+                        "{checker} Exec point mismatch: {:?} != {:?}",
+                        exec_point, exec_point_expected
+                    );
+
+                    return Err(Error::UnexpectedEvent(
+                        UnexpectedEventReason::IncorrectValue,
+                    ));
+                }
+
+                if next_event.is_last_event {
+                    Ok(SignalHandlerExitAction::Checkpoint)
+                } else {
+                    Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                        single_step: false,
+                    })
+                }
+            }
+            _ => Err(Error::UnexpectedEvent(
+                UnexpectedEventReason::IncorrectType {
+                    expected: SavedEventType::ExecutionPoint,
+                    got: next_event.value,
+                },
+            )),
+        }
     }
 }

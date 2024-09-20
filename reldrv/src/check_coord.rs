@@ -47,7 +47,9 @@ use crate::types::exit_reason::ExitReason;
 use crate::types::process_id::{Checker, Inferior, InferiorRole, Main};
 use crate::types::segment::{Segment, SegmentId, SegmentStatus};
 use crate::types::segment_record::manual_checkpoint::ManualCheckpointRequest;
+use crate::types::segment_record::program_exit::ProgramExit;
 use crate::types::segment_record::saved_memory::SavedMemory;
+use crate::types::segment_record::saved_signal::SavedSignal;
 use crate::types::segment_record::saved_syscall::{
     SavedIncompleteSyscallKind, SavedSyscallKind, SyscallExitAction,
 };
@@ -114,6 +116,32 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         }
     }
 
+    fn handle_exiting_event(&self, child: &Inferior<Stopped>, event: ProgramExit) -> Result<()> {
+        match child {
+            Inferior::Main(main) => {
+                if let Some(segment) = &main.segment {
+                    segment.record.push_event(event, true, segment)?;
+                    segment.mark_main_as_completed(None);
+                }
+            }
+            Inferior::Checker(checker) => {
+                let expected_event = checker.segment.record.pop_program_exit()?;
+                assert!(expected_event.is_last_event);
+
+                if expected_event.value != event {
+                    error!("{child} Exit status mismatch: {expected_event:?} != {event:?}");
+                    return Err(Error::UnexpectedEvent(
+                        UnexpectedEventReason::IncorrectValue,
+                    ));
+                } else {
+                    checker.segment.checker_status.lock().assume_checked();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn run_event_loop<'s, 'scope, 'env>(
         &'s self,
         mut child: Inferior<Stopped>,
@@ -142,11 +170,11 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let wall_time_tracer = self.tracer.trace(wall_time_event);
 
-        let mut child_running = child.try_map_process_noret(|mut x| {
-            let sigmask = x.get_sigmask()?;
-            x.set_sigmask(sigmask & !(1 << (nix::libc::SIGUSR1 - 1)))?; // SIGUSR1 is used by Process::sigqueue
-            x.resume()
-        })?;
+        let sigmask = child.process().get_sigmask()? & !(1 << (nix::libc::SIGUSR1 - 1)); // SIGUSR1 is used by Process::sigqueue
+        let sigmask = *child.process_mut().ambient_sigmask.get_or_insert(sigmask);
+        child.process_mut().set_sigmask(sigmask)?;
+
+        let mut child_running = child.try_map_process_noret(Process::resume)?;
 
         let mut single_step_saved_sigmask = None;
 
@@ -165,6 +193,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 child: &mut Inferior<Stopped>,
             ) -> Result<impl FnOnce(&mut Process<Stopped>) -> Result<()>> {
                 let old_sigmask = child.process().get_sigmask()?;
+                // assert!(old_sigmask & (1 << (nix::libc::SIGUSR1 - 1)) == 0);
+                child.process_mut().ambient_sigmask = Some(old_sigmask);
                 child.process_mut().set_sigmask(!0)?;
 
                 Ok(move |p: &mut Process<Stopped>| p.set_sigmask(old_sigmask))
@@ -175,6 +205,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     if child.is_main() {
                         info!("{child} Exit: {status}");
                     }
+
+                    self.handle_exiting_event(&child, ProgramExit::Exited(status))?;
                     break ExitReason::NormalExit(status);
                 }
                 WaitStatus::Signaled(_, sig, _) => {
@@ -182,6 +214,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         break ExitReason::NormalExit(0);
                     }
 
+                    self.handle_exiting_event(&child, ProgramExit::Killed(sig))?;
                     info!("{child} Killed: {sig}");
                     break ExitReason::Signalled(sig);
                 }
@@ -554,13 +587,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         's: 'scope + 'disp,
     {
         defer! {
-            if let Some(last_segment) = self.segments.read().last_segment() {
-                if !last_segment.is_main_finished() {
-                    error!("Main worker crashed without marking segment as finished");
-                    last_segment.mark_as_crashed();
-                }
-            }
-
             self.dispatcher.fini(pctx(self, scope)).unwrap();
         }
         self.dispatcher.init(pctx(self, scope))?;
@@ -584,6 +610,13 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 return Err(err);
             }
         };
+
+        if let Some(last_segment) = self.segments.read().last_segment() {
+            if !last_segment.is_main_finished() {
+                error!("Main worker crashed without marking segment as finished");
+                last_segment.mark_as_crashed();
+            }
+        }
 
         self.wait_until_and_handle_completion(scope)?;
 
@@ -630,12 +663,12 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 .handle_segment_ready(&mut checker, pctx(self, scope))?;
             checker_ready_hook_tracer.end();
 
-            let exit_reason =
-                self.run_event_loop(Inferior::Checker(checker), segment.ongoing_syscall, scope)?;
+            self.run_event_loop(Inferior::Checker(checker), segment.ongoing_syscall, scope)?;
 
-            if exit_reason != ExitReason::NormalExit(0) {
-                return Err(Error::UnexpectedCheckerExitReason(exit_reason));
-            }
+            // check checker exit reason?
+            // if exit_reason != ExitReason::NormalExit(0) {
+            //     return Err(Error::UnexpectedCheckerExitReason(exit_reason));
+            // }
         } else {
             segment.checker_status.lock().assume_checked();
         }
@@ -1275,19 +1308,95 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             }
             SignalHandlerExitAction::NextHandler => {
                 info!("{child} Signal: {:}", sig);
-                Ok(child.try_map_process_noret(|mut p| {
+
+                if *&[
+                    Signal::SIGBUS,
+                    Signal::SIGFPE,
+                    Signal::SIGILL,
+                    Signal::SIGSEGV,
+                    Signal::SIGTRAP,
+                ]
+                .contains(&sig)
+                {
+                    // Internal signal
+                    match &mut child {
+                        Inferior::Main(main) => {
+                            if let Some(segment) = main.segment.clone() {
+                                let siginfo = main.process().get_siginfo()?;
+
+                                segment.record.push_event(
+                                    SavedSignal::Internal(siginfo),
+                                    false,
+                                    &segment,
+                                )?;
+                            }
+
+                            Ok(child.try_map_process_noret(|mut p| {
+                                pre_resume_cb(&mut p)?;
+                                restore_sigmask(&mut p, single_step_saved_sigmask)?;
+                                p.resume_with_signal(sig)
+                            })?)
+                        }
+                        Inferior::Checker(checker) => {
+                            let siginfo_expected = checker.segment.record.pop_internal_signal()?;
+                            let siginfo = checker.process().get_siginfo()?;
+
+                            if siginfo_expected.value != siginfo {
+                                error!(
+                                    "{checker} Unexpected signal: {:?} != {:?}",
+                                    siginfo, siginfo_expected
+                                );
+                                return Err(Error::UnexpectedEvent(
+                                    UnexpectedEventReason::IncorrectValue,
+                                ));
+                            }
+
+                            assert!(!siginfo_expected.is_last_event);
+
+                            Ok(child.try_map_process_noret(|mut p| {
+                                pre_resume_cb(&mut p)?;
+                                restore_sigmask(&mut p, single_step_saved_sigmask)?;
+                                p.resume_with_signal(sig)
+                            })?)
+                        }
+                    }
+                } else {
+                    // External signal
+                    match &mut child {
+                        Inferior::Main(main) => {
+                            if let Some(segment) = main.segment.clone() {
+                                let siginfo = main.process().get_siginfo()?;
+                                let exec_point = self
+                                    .dispatcher
+                                    .get_current_execution_point(&mut main.into())?;
+
+                                segment.record.push_event(
+                                    SavedSignal::External(siginfo, exec_point),
+                                    false,
+                                    &segment,
+                                )?;
+                            }
+
+                            Ok(child.try_map_process_noret(|mut p| {
+                                pre_resume_cb(&mut p)?;
+                                restore_sigmask(&mut p, single_step_saved_sigmask)?;
+                                p.resume_with_signal(sig)
+                            })?)
+                        }
+                        Inferior::Checker(_) => Ok(child.try_map_process_noret(|mut p| {
+                            pre_resume_cb(&mut p)?;
+                            restore_sigmask(&mut p, single_step_saved_sigmask)?;
+                            p.resume()
+                        })?),
+                    }
+                }
+            }
+            SignalHandlerExitAction::ContinueInferiorWithSignal(sig) => Ok(child
+                .try_map_process_noret(|mut p| {
                     pre_resume_cb(&mut p)?;
                     restore_sigmask(&mut p, single_step_saved_sigmask)?;
                     p.resume_with_signal(sig)
-                })?)
-            }
-            SignalHandlerExitAction::ContinueInferior => {
-                Ok(child.try_map_process_noret(|mut p| {
-                    pre_resume_cb(&mut p)?;
-                    restore_sigmask(&mut p, single_step_saved_sigmask)?;
-                    p.resume_with_signal(sig)
-                })?)
-            }
+                })?),
             SignalHandlerExitAction::Checkpoint => Ok(self.take_checkpoint(
                 child,
                 false,

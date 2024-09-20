@@ -17,7 +17,7 @@ use reverie_syscalls::Syscall;
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    error::{Error, Result, UnexpectedEventReason},
+    error::{Error, Result},
     events::{
         migration::MigrationHandler,
         process_lifetime::{HandlerContext, ProcessLifetimeHook},
@@ -344,6 +344,12 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
             let branch_count_curr = segment_info.current_branch_count()?;
             assert!(exec_point.branch_count >= branch_count_curr);
 
+            if exec_point.branch_count == branch_count_curr
+                && exec_point.instruction_pointer == checker.process().read_registers()?.ip()
+            {
+                return self.activate_first_exec_point_in_queue(checker, segment_info);
+            }
+
             let replay_state = ExecutionPointReplayState::setup(
                 &exec_point,
                 branch_count_curr,
@@ -518,18 +524,11 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                         if replay_done {
                             debug!("{checker} Execution point replay finished");
                             self.activate_first_exec_point_in_queue(checker, &mut segment_info)?;
-                            let result = checker.segment.record.pop_execution_point()?;
-
-                            if !result.value.do_eq(&exec_point) {
-                                error!("{checker} Execution point is not equal ({exec_point:?} != {:?})", result.value);
-                                return Err(Error::UnexpectedEvent(
-                                    UnexpectedEventReason::IncorrectValue,
-                                ));
-                            }
-
-                            if result.is_last_event {
-                                return Ok(SignalHandlerExitAction::Checkpoint);
-                            }
+                            return checker
+                                .segment
+                                .clone()
+                                .record
+                                .handle_exec_point_reached(&exec_point, checker);
                         } else {
                             segment_info.active_exec_point = Some((exec_point, state));
                         }

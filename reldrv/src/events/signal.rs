@@ -9,7 +9,7 @@ pub enum SignalHandlerExitAction {
     NextHandler,
 
     /// Continue the inferior without suppresing the signal.
-    ContinueInferior,
+    ContinueInferiorWithSignal(Signal),
 
     /// Suppress the signal and continue the inferior
     SuppressSignalAndContinueInferior { single_step: bool },

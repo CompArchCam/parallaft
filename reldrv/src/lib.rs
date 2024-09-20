@@ -96,7 +96,6 @@ use crate::statistics::StatisticsProvider;
 
 use crate::syscall_handlers::clone::CloneHandler;
 use crate::syscall_handlers::execve::ExecveHandler;
-use crate::syscall_handlers::exit::ExitHandler;
 use crate::syscall_handlers::mmap::MmapHandler;
 use crate::syscall_handlers::record_replay::RecordReplaySyscallHandler;
 use crate::syscall_handlers::replicate::ReplicatedSyscallHandler;
@@ -256,6 +255,12 @@ impl RelShellOptionsBuilder {
             .max_nr_live_segments(8)
             .is_test(true)
     }
+
+    pub fn test_with_exec_point_replay(self) -> Self {
+        self.exec_point_replay(true)
+            .main_cpu_set(vec![0])
+            .checker_cpu_set(vec![0])
+    }
 }
 
 pub fn parent_work(
@@ -338,7 +343,6 @@ pub fn parent_work(
     disp.register_module(RseqHandler::new());
     disp.register_module(CloneHandler::new());
     disp.register_module(ExecveHandler::new());
-    disp.register_module(ExitHandler::new());
     disp.register_module(MmapHandler::new(options.is_test));
     disp.register_module(ReplicatedSyscallHandler::new());
     disp.register_module(RecordReplaySyscallHandler::new());

@@ -7,6 +7,7 @@ use crate::{
 
 use super::{
     manual_checkpoint::ManualCheckpointRequest,
+    program_exit::ProgramExit,
     saved_signal::SavedSignal,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     saved_trap_event::SavedTrapEvent,
@@ -17,9 +18,10 @@ pub enum SavedEvent {
     Syscall(Arc<SavedSyscall>),
     IncompleteSyscall(Arc<SavedIncompleteSyscall>),
     TrapEvent(Arc<SavedTrapEvent>),
-    Signal(Arc<SavedSignal>),
+    Signal(SavedSignal),
     ExecutionPoint(Arc<dyn ExecutionPoint>),
     ManualCheckpointRequest(ManualCheckpointRequest),
+    ProgramExit(ProgramExit),
 }
 
 impl From<SavedSyscall> for SavedEvent {
@@ -42,7 +44,7 @@ impl From<SavedTrapEvent> for SavedEvent {
 
 impl From<SavedSignal> for SavedEvent {
     fn from(signal: SavedSignal) -> Self {
-        SavedEvent::Signal(Arc::new(signal))
+        SavedEvent::Signal(signal)
     }
 }
 
@@ -58,14 +60,23 @@ impl From<ManualCheckpointRequest> for SavedEvent {
     }
 }
 
+impl From<ProgramExit> for SavedEvent {
+    fn from(program_exit: ProgramExit) -> Self {
+        SavedEvent::ProgramExit(program_exit)
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum SavedEventType {
     Syscall,
     IncompleteSyscall,
     TrapEvent,
     Signal,
+    InternalSignal,
+    ExternalSignal,
     ExecutionPoint,
     ManualCheckpointRequest,
+    ProgramExit,
 }
 
 impl From<&SavedEvent> for SavedEventType {
@@ -77,6 +88,7 @@ impl From<&SavedEvent> for SavedEventType {
             SavedEvent::Signal(_) => SavedEventType::Signal,
             SavedEvent::ExecutionPoint(_) => SavedEventType::ExecutionPoint,
             SavedEvent::ManualCheckpointRequest(_) => SavedEventType::ManualCheckpointRequest,
+            SavedEvent::ProgramExit(_) => SavedEventType::ProgramExit,
         }
     }
 }
@@ -106,11 +118,12 @@ impl SavedEvent {
         Arc<SavedIncompleteSyscall>
     );
     impl_getter!(get_trap_event, TrapEvent, Arc<SavedTrapEvent>);
-    impl_getter!(get_signal, Signal, Arc<SavedSignal>);
+    impl_getter!(get_signal, Signal, SavedSignal);
     impl_getter!(get_execution_point, ExecutionPoint, Arc<dyn ExecutionPoint>);
     impl_getter!(
         get_manual_checkpoint_request,
         ManualCheckpointRequest,
         ManualCheckpointRequest
     );
+    impl_getter!(get_program_exit, ProgramExit, ProgramExit);
 }

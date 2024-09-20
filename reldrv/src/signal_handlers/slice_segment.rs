@@ -38,7 +38,9 @@ impl SignalHandler for SliceSegmentHandler {
                 match ret {
                     Ok(_) => return Ok(SignalHandlerExitAction::Checkpoint),
                     Err(Error::InvalidState) => {
-                        return Ok(SignalHandlerExitAction::ContinueInferior)
+                        return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                            single_step: false,
+                        })
                     }
                     Err(e) => return Err(e),
                 }

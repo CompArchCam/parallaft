@@ -168,7 +168,8 @@ impl Process<Stopped> {
             panic!("Unexpected pid returned from clone: {}", child_pid);
         }
 
-        let child = Process::new(Pid::from_raw(child_pid as _), Stopped);
+        let mut child = Process::new(Pid::from_raw(child_pid as _), Stopped);
+        child.ambient_sigmask = parent.ambient_sigmask;
 
         Ok(WithProcess(parent, child))
     }

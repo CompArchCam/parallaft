@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::{backtrace::Backtrace, sync::Arc};
 
+use log::info;
 use procfs::ProcError;
 
 use crate::types::{
@@ -31,7 +32,7 @@ pub enum Error {
     #[error("std::io error: `{0}`")]
     StdIO(Arc<std::io::Error>),
     #[error("nix error: `{0}`")]
-    Nix(#[from] nix::errno::Errno),
+    Nix(nix::errno::Errno),
     #[error("Proc error: `{0}`")]
     Proc(Arc<ProcError>),
     #[error("Reverie error: `{0}`")]
@@ -94,6 +95,13 @@ impl From<ProcError> for Error {
 impl From<userfaultfd::Error> for Error {
     fn from(value: userfaultfd::Error) -> Self {
         Self::Userfaultfd(Arc::new(value))
+    }
+}
+
+impl From<nix::errno::Errno> for Error {
+    fn from(value: nix::errno::Errno) -> Self {
+        info!("Backtrace: {}", Backtrace::capture());
+        Self::Nix(value)
     }
 }
 

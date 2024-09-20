@@ -167,6 +167,13 @@ impl<S: ProcessState> Inferior<S> {
         }
     }
 
+    pub fn segment(&self) -> Option<&Arc<Segment>> {
+        match self {
+            Inferior::Main(main) => main.segment.as_ref(),
+            Inferior::Checker(checker) => Some(&checker.segment),
+        }
+    }
+
     pub fn take_process(&mut self) -> Process<S> {
         match self {
             Inferior::Main(main) => main.process.take().unwrap(),

@@ -256,7 +256,11 @@ impl SignalHandler for FixedIntervalSlicer<'_> {
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     return Ok(SignalHandlerExitAction::Checkpoint);
                 }
-                Err(Error::InvalidState) => return Ok(SignalHandlerExitAction::ContinueInferior),
+                Err(Error::InvalidState) => {
+                    return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                        single_step: false,
+                    })
+                }
                 Err(e) => return Err(e),
             };
         }

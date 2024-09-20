@@ -52,6 +52,7 @@ pub struct Process<S: ProcessState> {
     handles: Option<ProcessHandles>,
     state: S,
     owned: bool,
+    pub ambient_sigmask: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -89,6 +90,7 @@ impl<S: ProcessState> Process<S> {
             }),
             state,
             owned,
+            ambient_sigmask: None,
         }
     }
 
@@ -102,6 +104,7 @@ impl<S: ProcessState> Process<S> {
             handles: self.handles.take(),
             state,
             owned,
+            ambient_sigmask: self.ambient_sigmask,
         }
     }
 
@@ -122,6 +125,7 @@ impl<S: ProcessState> Process<S> {
             }),
             state: Unowned,
             owned: false,
+            ambient_sigmask: None,
         }
     }
 
@@ -206,7 +210,7 @@ impl Process<Stopped> {
     }
 
     pub fn resume_with_signal(self, signal: Signal) -> Result<Process<Running>> {
-        ptrace::cont(self.pid, Some(signal))?;
+        ptrace::syscall(self.pid, Some(signal))?;
         Ok(unsafe { self.assume_running() })
     }
 
@@ -454,6 +458,7 @@ impl Clone for Process<Unowned> {
             }),
             state: Unowned,
             owned: false,
+            ambient_sigmask: None,
         }
     }
 }

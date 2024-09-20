@@ -4,7 +4,10 @@ use std::{
 };
 
 use log::info;
-use nix::sys::signal::Signal;
+use nix::{
+    libc,
+    sys::signal::{raise, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
+};
 use parking_lot::Mutex;
 use reldrv::{
     dispatcher::Module,
@@ -129,7 +132,7 @@ impl Module for SignalInjector {
 }
 
 #[test]
-fn test_signal_handling() {
+fn test_module_signal_handling() {
     trace_w_options(
         || {
             for _ in 0..2000 {
@@ -145,4 +148,71 @@ fn test_signal_handling() {
     )
     .unwrap()
     .expect()
+}
+
+#[test]
+fn test_external_signal_handling() {
+    extern "C" fn handler(
+        signum: i32,
+        siginfo: *mut libc::siginfo_t,
+        _ucontext: *mut libc::c_void,
+    ) {
+        println!("{}", signum);
+        println!("{:?}", unsafe { &*siginfo }); // Make sure the checker gets the same siginfo_t
+    }
+
+    trace_w_options(
+        || {
+            unsafe {
+                sigaction(
+                    Signal::SIGUSR2,
+                    &SigAction::new(
+                        SigHandler::SigAction(handler),
+                        SaFlags::SA_SIGINFO,
+                        SigSet::empty(),
+                    ),
+                )
+                .unwrap();
+            }
+            checkpoint_take();
+            raise(Signal::SIGUSR2).unwrap();
+            checkpoint_fini();
+            Ok::<_, ()>(())
+        },
+        RelShellOptionsBuilder::test_serial_default()
+            .test_with_exec_point_replay()
+            .build()
+            .unwrap(),
+    )
+    .unwrap()
+    .expect()
+}
+
+#[test]
+fn test_internal_signal_handling() {
+    trace_w_options(
+        || {
+            unsafe {
+                sigaction(
+                    Signal::SIGSEGV,
+                    &SigAction::new(SigHandler::SigDfl, SaFlags::SA_SIGINFO, SigSet::empty()),
+                )
+                .unwrap();
+            }
+
+            checkpoint_take();
+            #[allow(deref_nullptr)]
+            unsafe {
+                *(0 as *mut i32) = 1 // cause a SIGSEGV
+            };
+            checkpoint_fini();
+            Ok::<_, ()>(())
+        },
+        RelShellOptionsBuilder::test_serial_default()
+            .test_with_exec_point_replay()
+            .build()
+            .unwrap(),
+    )
+    .unwrap()
+    .expect_signalled(Signal::SIGSEGV);
 }
