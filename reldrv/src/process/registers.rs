@@ -545,7 +545,27 @@ impl Registers {
 
     #[cfg(target_arch = "x86_64")]
     pub fn with_one_random_bit_flipped(#[allow(unused_mut)] mut self) -> Registers {
-        todo!()
+        use rand::Rng;
+
+        let gpr_size = std::mem::size_of::<GpRegs>();
+        let fpr_size = std::mem::size_of::<FpRegs>();
+
+        let byte = rand::thread_rng().gen_range(0..gpr_size + fpr_size);
+        let bit = rand::thread_rng().gen_range(0..8);
+
+        if byte < gpr_size {
+            let byte = (&mut self.inner as *mut _ as *mut u8).wrapping_add(byte);
+            unsafe {
+                *byte ^= 1 << bit;
+            }
+        } else {
+            let byte = (&mut self.fpr as *mut _ as *mut u8).wrapping_add(byte - gpr_size);
+            unsafe {
+                *byte ^= 1 << bit;
+            }
+        }
+
+        self
     }
 }
 
@@ -687,202 +707,223 @@ impl RegisterAccess for Process<Stopped> {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
 #[cfg(test)]
 mod tests {
-    use super::{RegisterAccess, Registers};
-    use crate::process::memory::instructions;
-    use crate::process::state::Stopped;
-    use crate::process::{Process, SyscallDir};
-    use crate::test_utils::ptraced;
-    use crate::{error::Result, process::state::WithProcess};
-    use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
-    use std::arch::asm;
+    use cfg_if::cfg_if;
+
+    use super::Registers;
+
     use std::mem::MaybeUninit;
 
-    fn run_syscall_followed_by_breakpoint() -> Process<Stopped> {
-        ptraced(|| {
-            unsafe {
-                asm!(
-                    "
-                        mov x7, #42
-                        
-                        mov w8, #-1
-                        svc #0
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "aarch64")] {
+            use super::RegisterAccess;
+            use crate::process::memory::instructions;
+            use crate::process::state::Stopped;
+            use crate::process::{Process, SyscallDir};
+            use crate::test_utils::ptraced;
+            use crate::{error::Result, process::state::WithProcess};
+            use nix::sys::{ptrace, signal::Signal, wait::WaitStatus};
+            use std::arch::asm;
 
-                        brk #0
-                    ",
-                    out("x7") _,
-                    out("w8") _,
-                )
-            };
-            0
-        })
-    }
+            fn run_syscall_followed_by_breakpoint() -> Process<Stopped> {
+                ptraced(|| {
+                    unsafe {
+                        asm!(
+                            "
+                                mov x7, #42
+                                
+                                mov w8, #-1
+                                svc #0
+        
+                                brk #0
+                            ",
+                            out("x7") _,
+                            out("w8") _,
+                        )
+                    };
+                    0
+                })
+            }
 
-    #[test]
-    fn test_read_registers_precisely_syscall_entry() -> Result<()> {
-        let mut process = run_syscall_followed_by_breakpoint();
+            #[test]
+            fn test_read_registers_precisely_syscall_entry() -> Result<()> {
+                let mut process = run_syscall_followed_by_breakpoint();
 
-        let mut status;
-        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
+                let mut status;
+                WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
 
-        // expect the syscall entry
-        assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
-        assert!(process.syscall_dir()?.is_entry());
+                // expect the syscall entry
+                assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
+                assert!(process.syscall_dir()?.is_entry());
 
-        let mut regs = process.read_registers()?;
-        let regs_precise;
-        (process, regs_precise) = process.read_registers_precisely()?;
-        let mut regs2 = process.read_registers()?;
+                let mut regs = process.read_registers()?;
+                let regs_precise;
+                (process, regs_precise) = process.read_registers_precisely()?;
+                let mut regs2 = process.read_registers()?;
 
-        regs.regs[7] = 42;
-        assert_eq!(regs, regs_precise);
+                regs.regs[7] = 42;
+                assert_eq!(regs, regs_precise);
 
-        regs2.regs[7] = 42;
-        assert_eq!(regs2, regs_precise);
+                regs2.regs[7] = 42;
+                assert_eq!(regs2, regs_precise);
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        // expect the breakpoint
-        assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
-        let mut regs_brk = process.read_registers()?;
+                // expect the breakpoint
+                assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+                let mut regs_brk = process.read_registers()?;
 
-        regs.regs[0] = 0;
-        regs.regs[1] = 0;
-        regs_brk.regs[0] = 0;
-        regs_brk.regs[1] = 0;
+                regs.regs[0] = 0;
+                regs.regs[1] = 0;
+                regs_brk.regs[0] = 0;
+                regs_brk.regs[1] = 0;
 
-        assert_eq!(regs_brk.regs, regs.regs);
+                assert_eq!(regs_brk.regs, regs.regs);
 
-        process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
+                process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
 
-        // program exit
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                // program exit
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
+                assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
-        Ok(())
-    }
+                Ok(())
+            }
 
-    #[test]
-    fn test_read_registers_precisely_syscall_exit() -> Result<()> {
-        let mut process = run_syscall_followed_by_breakpoint();
+            #[test]
+            fn test_read_registers_precisely_syscall_exit() -> Result<()> {
+                let mut process = run_syscall_followed_by_breakpoint();
 
-        let mut status;
-        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
+                let mut status;
+                WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
 
-        // expect the syscall entry
-        assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
-        assert!(process.syscall_dir()?.is_entry());
+                // expect the syscall entry
+                assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
+                assert!(process.syscall_dir()?.is_entry());
 
-        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
+                WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
 
-        // expect the syscall exit
-        assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
-        assert!(matches!(
-            ptrace::getsyscallinfo(process.pid)?.op,
-            ptrace::SyscallInfoOp::Exit { .. }
-        ));
+                // expect the syscall exit
+                assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
+                assert!(matches!(
+                    ptrace::getsyscallinfo(process.pid)?.op,
+                    ptrace::SyscallInfoOp::Exit { .. }
+                ));
 
-        let mut regs = process.read_registers()?;
-        let regs_precise;
-        (process, regs_precise) = process.read_registers_precisely()?;
-        let mut regs2 = process.read_registers()?;
+                let mut regs = process.read_registers()?;
+                let regs_precise;
+                (process, regs_precise) = process.read_registers_precisely()?;
+                let mut regs2 = process.read_registers()?;
 
-        regs.regs[7] = 42;
-        assert_eq!(regs, regs_precise);
+                regs.regs[7] = 42;
+                assert_eq!(regs, regs_precise);
 
-        regs2.regs[7] = 42;
-        assert_eq!(regs2.with_sysno_raw(regs_precise.sysno_raw()), regs_precise);
+                regs2.regs[7] = 42;
+                assert_eq!(regs2.with_sysno_raw(regs_precise.sysno_raw()), regs_precise);
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        // expect the breakpoint
-        assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
-        let regs_brk = process.read_registers()?;
+                // expect the breakpoint
+                assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+                let regs_brk = process.read_registers()?;
 
-        assert_eq!(regs_brk.regs, regs.regs);
+                assert_eq!(regs_brk.regs, regs.regs);
 
-        process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
+                process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
 
-        // program exit
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                // program exit
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
 
-        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
+                assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
-        Ok(())
-    }
+                Ok(())
+            }
 
-    #[test]
-    fn test_write_registers_precisely_at_syscall_entry() -> Result<()> {
-        let mut process = run_syscall_followed_by_breakpoint();
+            #[test]
+            fn test_write_registers_precisely_at_syscall_entry() -> Result<()> {
+                let mut process = run_syscall_followed_by_breakpoint();
 
-        let mut status;
-        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
-        assert_eq!(process.syscall_dir()?, SyscallDir::Entry);
+                let mut status;
+                WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
+                assert_eq!(process.syscall_dir()?, SyscallDir::Entry);
 
-        let mut regs;
-        (process, regs) = process.read_registers_precisely()?;
+                let mut regs;
+                (process, regs) = process.read_registers_precisely()?;
 
-        regs = regs.with_x7(42);
-        process = process.write_registers_precisely(regs)?;
+                regs = regs.with_x7(42);
+                process = process.write_registers_precisely(regs)?;
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
 
-        let regs_new = process.read_registers()?;
+                let regs_new = process.read_registers()?;
 
-        assert_eq!(regs_new.x7(), 42);
+                assert_eq!(regs_new.x7(), 42);
 
-        process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
+                process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
-        Ok(())
-    }
+                Ok(())
+            }
 
-    #[test]
-    fn test_write_registers_precisely_at_syscall_exit() -> Result<()> {
-        let mut process = run_syscall_followed_by_breakpoint();
+            #[test]
+            fn test_write_registers_precisely_at_syscall_exit() -> Result<()> {
+                let mut process = run_syscall_followed_by_breakpoint();
 
-        let mut status;
-        WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
+                let mut status;
+                WithProcess(process, status) = process.resume()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::PtraceSyscall(process.pid));
 
-        process = process.skip_syscall()?;
-        assert_eq!(process.syscall_dir()?, SyscallDir::Exit);
+                process = process.skip_syscall()?;
+                assert_eq!(process.syscall_dir()?, SyscallDir::Exit);
 
-        let mut regs;
-        (process, regs) = process.read_registers_precisely()?;
+                let mut regs;
+                (process, regs) = process.read_registers_precisely()?;
 
-        regs = regs.with_x7(42);
-        process = process.write_registers_precisely(regs)?;
+                regs = regs.with_x7(42);
+                process = process.write_registers_precisely(regs)?;
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
 
-        let regs_new = process.read_registers()?;
+                let regs_new = process.read_registers()?;
 
-        assert_eq!(regs_new.x7(), 42);
+                assert_eq!(regs_new.x7(), 42);
 
-        process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
+                process.modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as _))?;
 
-        WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
-        assert_eq!(status, WaitStatus::Exited(process.pid, 0));
+                WithProcess(process, status) = process.cont()?.waitpid()?.unwrap_stopped();
+                assert_eq!(status, WaitStatus::Exited(process.pid, 0));
 
-        Ok(())
+                Ok(())
+            }
+        }
     }
 
     #[test]
     fn test_register_random_bit_flip() {
-        let mut regs = Registers::new(
-            unsafe { MaybeUninit::zeroed().assume_init() },
-            unsafe { MaybeUninit::zeroed().assume_init() },
-            Default::default(),
-        );
+        cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                let mut regs = Registers::new(
+                    unsafe { MaybeUninit::zeroed().assume_init() },
+                    unsafe { MaybeUninit::zeroed().assume_init() },
+                );
+            }
+            else if #[cfg(target_arch = "aarch64")] {
+                let mut regs = Registers::new(
+                    unsafe { MaybeUninit::zeroed().assume_init() },
+                    unsafe { MaybeUninit::zeroed().assume_init() },
+                    Default::default(),
+                );
+            }
+            else {
+                compile_error!("unsupported target arch");
+            }
+        }
 
         for _ in 0..10000 {
             regs = regs.with_one_random_bit_flipped();
