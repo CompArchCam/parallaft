@@ -1341,7 +1341,18 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             })?)
                         }
                         Inferior::Checker(checker) => {
-                            let siginfo_expected = checker.segment.record.pop_internal_signal()?;
+                            let siginfo_expected =
+                                checker.segment.record.pop_internal_signal().map_err(
+                                    |e| match e {
+                                        Error::UnexpectedEvent(
+                                            UnexpectedEventReason::IncorrectType { .. },
+                                        ) => Error::UnexpectedCheckerExitReason(
+                                            ExitReason::Signalled(sig),
+                                        ),
+                                        e => e,
+                                    },
+                                )?;
+
                             let siginfo = checker.process().get_siginfo()?;
 
                             if siginfo_expected.value != siginfo {
@@ -1349,8 +1360,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                                     "{checker} Unexpected signal: {:?} != {:?}",
                                     siginfo, siginfo_expected
                                 );
-                                return Err(Error::UnexpectedEvent(
-                                    UnexpectedEventReason::IncorrectValue,
+                                return Err(Error::UnexpectedCheckerExitReason(
+                                    ExitReason::Signalled(sig),
                                 ));
                             }
 
