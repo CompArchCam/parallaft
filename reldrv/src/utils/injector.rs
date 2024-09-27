@@ -148,7 +148,7 @@ mod tests {
 
     use crate::test_utils::{init_logging, ptraced};
 
-    use std::{io::IoSlice, mem::size_of_val};
+    use std::io::IoSlice;
 
     #[test]
     #[cfg(target_arch = "aarch64")]
@@ -166,7 +166,10 @@ mod tests {
         ];
 
         let binary = unsafe {
-            slice::from_raw_parts(&binary as *const _ as *const u8, size_of_val(&binary))
+            slice::from_raw_parts(
+                &binary as *const _ as *const u8,
+                std::mem::size_of_val(&binary),
+            )
         };
 
         let result;

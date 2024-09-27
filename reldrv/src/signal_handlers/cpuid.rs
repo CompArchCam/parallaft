@@ -10,15 +10,20 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         signal::{SignalHandler, SignalHandlerExitAction},
         syscall::{StandardSyscallHandler, SyscallHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
-    process::{memory::instructions, registers::RegisterAccess, Process},
+    process::{
+        memory::instructions,
+        registers::RegisterAccess,
+        state::{Stopped, WithProcess},
+        Process,
+    },
     signal_handlers::handle_nondeterministic_instruction,
     syscall_handlers::is_execve_ok,
-    types::segment_record::saved_trap_event::SavedTrapEvent,
+    types::{process_id::Main, segment_record::saved_trap_event::SavedTrapEvent},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,8 +100,8 @@ impl CpuidHandler {
         *self.overrides.lock() = overrides;
     }
 
-    fn enable_cpuid_faulting(process: &Process) -> Result<()> {
-        let ret = process.syscall_direct(
+    fn enable_cpuid_faulting(process: Process<Stopped>) -> Result<Process<Stopped>> {
+        let WithProcess(process, ret) = process.syscall_direct(
             Sysno::arch_prctl,
             syscall_args!(0x1012 /* ARCH_SET_CPUID */, 0),
             true,
@@ -107,10 +112,10 @@ impl CpuidHandler {
         assert_eq!(ret, 0, "CPUID faulting is not supported on your machine");
         info!("Cpuid init done");
 
-        Ok(())
+        Ok(process)
     }
 
-    fn is_cpuid(sig: Signal, process: &Process) -> Result<bool> {
+    fn is_cpuid(sig: Signal, process: &Process<Stopped>) -> Result<bool> {
         if sig == Signal::SIGSEGV {
             let regs = process.read_registers()?;
 
@@ -127,7 +132,7 @@ impl SignalHandler for CpuidHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        mut context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -201,7 +206,7 @@ impl SignalHandler for CpuidHandler {
             },
         )?;
 
-        context.process().write_registers(
+        context.process_mut().write_registers(
             regs.with_cpuid_result(cpuid.value)
                 .with_offsetted_ip(instructions::CPUID.length() as _),
         )?;
@@ -215,11 +220,13 @@ impl StandardSyscallHandler for CpuidHandler {
         &self,
         ret_val: isize,
         syscall: &Syscall,
-        context: HandlerContext,
+        context: HandlerContextWithInferior<Stopped>,
     ) -> Result<SyscallHandlerExitAction> {
         if is_execve_ok(syscall, ret_val) {
             // arch_prctl cpuid is cleared after every execve
-            Self::enable_cpuid_faulting(context.process())?;
+            context
+                .child
+                .try_map_process_inplace_noret(|p| Self::enable_cpuid_faulting(p))?;
         }
 
         Ok(SyscallHandlerExitAction::NextHandler)
@@ -229,13 +236,15 @@ impl StandardSyscallHandler for CpuidHandler {
 impl ProcessLifetimeHook for CpuidHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        main: &mut Main<Stopped>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
-        Self::enable_cpuid_faulting(context.process)
+        main.try_map_process_inplace(|p| Self::enable_cpuid_faulting(p).map(|p| p.with_ret(())))?;
+        Ok(())
     }
 }
 

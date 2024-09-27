@@ -4,7 +4,9 @@ use syscalls::{syscall_args, Sysno};
 
 use crate::{
     dispatcher::{Module, Subscribers},
-    events::process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+    events::process_lifetime::{HandlerContext, ProcessLifetimeHook},
+    process::state::Stopped,
+    types::process_id::Main,
 };
 
 pub struct SpecCtrlSetter {
@@ -27,24 +29,28 @@ impl SpecCtrlSetter {
 impl ProcessLifetimeHook for SpecCtrlSetter {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        main: &mut Main<Stopped>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> crate::error::Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
         if self.enable_speculative_store_bypass_misfeature {
-            let ret = context.process.syscall_direct(
-                Sysno::prctl,
-                syscall_args!(
-                    libc::PR_SET_SPECULATION_CTRL as _,
-                    libc::PR_SPEC_STORE_BYPASS as _,
-                    libc::PR_SPEC_ENABLE as _
-                ),
-                false,
-                false,
-                false,
-            )?;
+            let ret = main.try_map_process_inplace(|p| {
+                p.syscall_direct(
+                    Sysno::prctl,
+                    syscall_args!(
+                        libc::PR_SET_SPECULATION_CTRL as _,
+                        libc::PR_SPEC_STORE_BYPASS as _,
+                        libc::PR_SPEC_ENABLE as _
+                    ),
+                    false,
+                    false,
+                    false,
+                )
+            })?;
+
             assert_eq!(
                 ret, 0,
                 "Failed to enable speculative store bypass misfeature"
@@ -53,17 +59,20 @@ impl ProcessLifetimeHook for SpecCtrlSetter {
         }
 
         if self.enable_indirect_branch_speculation_misfeature {
-            let ret = context.process.syscall_direct(
-                Sysno::prctl,
-                syscall_args!(
-                    libc::PR_SET_SPECULATION_CTRL as _,
-                    libc::PR_SPEC_INDIRECT_BRANCH as _,
-                    libc::PR_SPEC_ENABLE as _
-                ),
-                false,
-                false,
-                false,
-            )?;
+            let ret = main.try_map_process_inplace(|p| {
+                p.syscall_direct(
+                    Sysno::prctl,
+                    syscall_args!(
+                        libc::PR_SET_SPECULATION_CTRL as _,
+                        libc::PR_SPEC_INDIRECT_BRANCH as _,
+                        libc::PR_SPEC_ENABLE as _
+                    ),
+                    false,
+                    false,
+                    false,
+                )
+            })?;
+
             assert_eq!(
                 ret, 0,
                 "Failed to enable indirect branch speculation misfeature"

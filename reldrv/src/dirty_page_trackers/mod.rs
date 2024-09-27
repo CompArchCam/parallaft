@@ -13,10 +13,7 @@ use std::{fmt::Debug, ops::Range};
 
 use crate::{
     error::Result,
-    features::{
-        dirty_page_userspace_scan::KPAGECOUNT_FEATURE, pagemap_scan::PAGEMAP_SCAN_UNIQUE_FEATURE,
-        Feature,
-    },
+    features::{pagemap_scan::PAGEMAP_SCAN_UNIQUE_FEATURE, Feature},
     process::PAGESIZE,
     types::process_id::InferiorId,
 };
@@ -37,6 +34,8 @@ impl Default for DirtyPageAddressTrackerType {
     fn default() -> Self {
         cfg_if! {
             if #[cfg(target_arch = "aarch64")] {
+                use crate::features::dirty_page_userspace_scan::KPAGECOUNT_FEATURE;
+
                 if PAGEMAP_SCAN_UNIQUE_FEATURE.is_available().is_ok() {
                     Self::PagemapScanUnique
                 }
@@ -49,6 +48,8 @@ impl Default for DirtyPageAddressTrackerType {
                 }
             }
             else {
+                use crate::features::{dirty_page_userspace_scan::SOFT_DIRTY_FEATURE, pagemap_scan::PAGEMAP_SCAN_SOFT_DIRTY_FEATURE};
+
                 if PAGEMAP_SCAN_UNIQUE_FEATURE.is_available().is_ok() {
                     Self::PagemapScanUnique
                 }

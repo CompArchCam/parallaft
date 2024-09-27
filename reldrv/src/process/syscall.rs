@@ -29,7 +29,7 @@ impl Process<Stopped> {
         args: SyscallArgs,
         mut restart_parent_old_syscall: bool,
         mut restart_child_old_syscall: bool,
-        force_insn_insertion: bool,
+        mut force_insn_insertion: bool,
     ) -> Result<WithProcess<Stopped, i64>> {
         // save the old states
         let saved_regs;
@@ -37,6 +37,16 @@ impl Process<Stopped> {
         let mut saved_instr = None;
 
         let dir = self.syscall_dir()?;
+
+        if dir == SyscallDir::Exit
+            && !force_insn_insertion
+            && !self.instr_eq(
+                saved_regs.ip() - instructions::SYSCALL.length(),
+                instructions::SYSCALL,
+            )
+        {
+            force_insn_insertion = true;
+        }
 
         if dir == SyscallDir::None || force_insn_insertion {
             debug!("Ad-hoc syscall injection");
@@ -66,14 +76,6 @@ impl Process<Stopped> {
             restart_parent_old_syscall = false;
 
             // handle syscall exit
-            debug_assert_eq!(
-                self.instr_at(
-                    saved_regs.ip() - instructions::SYSCALL.length(),
-                    instructions::SYSCALL.length()
-                ),
-                instructions::SYSCALL
-            );
-
             self.write_registers(
                 saved_regs.with_offsetted_ip(-(instructions::SYSCALL.length() as isize)),
             )?; // jump back to previous syscall
@@ -248,9 +250,8 @@ impl Process<Stopped> {
                     matches!(syscall_info.op, SyscallInfoOp::Entry { nr, .. } if nr == orig_nr as _)
                 );
             }
-        } else {
-            process.write_registers(saved_regs)?;
         }
+        process.write_registers(saved_regs)?;
 
         Ok(process)
     }
@@ -419,6 +420,7 @@ pub(crate) mod tests {
 
         assert_eq!(pid as i32, process.pid.as_raw());
 
+        #[cfg(target_arch = "aarch64")] // x86_64 automatically advances ip after the trap
         process
             .modify_registers_with(|r| r.with_offsetted_ip(instructions::TRAP.length() as isize))?;
 

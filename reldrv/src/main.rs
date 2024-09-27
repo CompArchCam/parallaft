@@ -295,12 +295,12 @@ fn main() {
     }
 
     #[cfg(target_arch = "x86_64")]
-    apply_if_some(&mut config, cli.no_cpuid_trap, |config, val| {
+    apply_if_some(&mut config, cli.dont_trap_cpuid, |config, val| {
         config.no_cpuid_trap = val;
     });
 
     #[cfg(target_arch = "x86_64")]
-    apply_if_some(&mut config, cli.no_rdtsc_trap, |config, val| {
+    apply_if_some(&mut config, cli.dont_trap_rdtsc, |config, val| {
         config.no_rdtsc_trap = val;
     });
 

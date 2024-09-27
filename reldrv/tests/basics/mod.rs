@@ -97,57 +97,57 @@ fn register_preservation_after_checkpoint() {
                 pop rax
                 pop r11
                 cmp rax, r11
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r15
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r14
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r13
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r12
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r10
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r9
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, r8
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, rdi
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, rsi
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, rdx
-                jne 1f
+                jne 2f
 
                 pop rax
                 cmp rax, rbx
-                jne 1f
+                jne 2f
 
                 mov rax, 0
-                jmp 2f
-                1:
-                mov rax, 1
+                jmp 3f
                 2:
+                mov rax, 1
+                3:
                 ",
                 out("rcx") _,
                 out("r11") _,

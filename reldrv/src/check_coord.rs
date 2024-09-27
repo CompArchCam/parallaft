@@ -646,7 +646,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         if cfg!(debug_assertions) {
             let registers;
             (checker_process, registers) = checker_process.read_registers_precisely()?;
-            assert_eq!(registers, segment.reference_start().read_registers()?);
+            assert_eq!(
+                registers.strip_orig(),
+                segment.reference_start().read_registers()?.strip_orig()
+            );
         }
 
         segment.record.wait_for_initial_event()?;

@@ -135,7 +135,7 @@ fn pmc_monotonicity() {
                     syscall
                     mov rdx, 100
                 2:
-                    mov rax, {sysno_test_pmc}
+                    mov rax, {sysno_test_pmc:r}
                     syscall
                     dec rdx
                     jnz 2b
@@ -204,7 +204,7 @@ fn pmc_consistency() {
                     mov rdx, 100
                     jmp 2f
                 2:
-                    mov rax, {sysno_test_pmc}
+                    mov rax, {sysno_test_pmc:r}
                     syscall
                     mov rax, 0xff77 # checkpoint_take
                     syscall

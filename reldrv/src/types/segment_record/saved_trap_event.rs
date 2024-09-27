@@ -1,10 +1,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::CpuidResult;
-use std::fmt::{Display, Formatter};
 
 use cfg_if::cfg_if;
-
-use crate::process::registers::Register;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SavedTrapEvent {
@@ -23,6 +20,9 @@ pub enum SavedTrapEvent {
 
 cfg_if! {
     if #[cfg(target_arch = "aarch64")] {
+        use std::fmt::{Display, Formatter};
+        use crate::process::registers::Register;
+
         #[allow(non_camel_case_types)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum SystemReg {

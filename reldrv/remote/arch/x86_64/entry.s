@@ -4,6 +4,6 @@
 
 __export_start:
     call main
-    mov $15, %rax // rt_sigreturn
+    mov $15, %rax # rt_sigreturn
     syscall
     int3

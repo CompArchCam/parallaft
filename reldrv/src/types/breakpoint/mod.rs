@@ -19,6 +19,12 @@ pub trait Breakpoint: Send + Sync {
     fn enable(&mut self, process: &mut Process<Stopped>) -> Result<()>;
     fn disable(&mut self, process: &mut Process<Stopped>) -> Result<()>;
     fn is_hit(&self, process: &Process<Stopped>) -> Result<bool>;
+
+    fn fix_after_hit(&self, process: &mut Process<Stopped>) -> Result<()> {
+        let _ = process;
+        Ok(())
+    }
+
     fn characteristics(&self) -> BreakpointCharacteristics {
         BreakpointCharacteristics {
             needs_bp_disabled_during_single_stepping: true,
@@ -33,7 +39,7 @@ pub fn breakpoint(
 ) -> Result<Box<dyn Breakpoint>> {
     cfg_if! {
         if #[cfg(target_arch = "x86_64")] {
-            Ok(Box::new(HardwareBreakpoint::new(process.pid, pc)?))
+            Ok(Box::new(HardwareBreakpoint::new(process.pid, pc, 0, false)?))
         }
         else {
             Ok(Box::new(SoftwareBreakpoint::new(process, pc)?))

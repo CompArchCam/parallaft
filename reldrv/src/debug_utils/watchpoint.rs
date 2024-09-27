@@ -104,6 +104,8 @@ impl<'a> Watchpoint<'a> {
                 child.process().read_registers()?.ip()
             );
 
+            watchpoint.fix_after_hit(child.process_mut())?;
+
             let single_step;
 
             if watchpoint.characteristics().needs_single_step_after_hit {

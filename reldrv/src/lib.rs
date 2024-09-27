@@ -50,6 +50,7 @@ use helpers::checker_timeout_killer::CheckerTimeoutKiller;
 use helpers::cpufreq::dynamic::DynamicCpuFreqScaler;
 use helpers::cpufreq::fixed::FixedCpuFreqGovernorSetter;
 use helpers::cpufreq::CpuFreqScalerType;
+#[cfg(target_arch = "aarch64")]
 use helpers::insn_patcher::InstructionPatcher;
 use helpers::madviser::Madviser;
 use nix::sys::personality;
@@ -62,6 +63,7 @@ use process::state::{Running, WithProcess};
 use process::Process;
 use serde::{Deserialize, Serialize};
 use signal_handlers::begin_protection::BeginProtectionHandler;
+#[cfg(target_arch = "aarch64")]
 use signal_handlers::mrs::MrsHandler;
 use signal_handlers::slice_segment::SliceSegmentHandler;
 use slicers::dynamic::DynamicSlicer;
@@ -290,8 +292,6 @@ pub fn parent_work(
 
     // Non-deterministic instruction handlers
 
-    let mut insn_patcher = InstructionPatcher::new();
-
     cfg_if! {
         if #[cfg(target_arch = "x86_64")] {
             if !options.no_rdtsc_trap {
@@ -305,13 +305,15 @@ pub fn parent_work(
             }
         }
         else if #[cfg(target_arch = "aarch64")] {
+            let mut insn_patcher = InstructionPatcher::new();
+
             if !options.no_mrs_trap {
                 disp.register_module(MrsHandler::new(&mut insn_patcher));
             }
+
+            disp.register_module(insn_patcher);
         }
     }
-
-    disp.register_module(insn_patcher);
 
     // Execution point providers
     if options.exec_point_replay {

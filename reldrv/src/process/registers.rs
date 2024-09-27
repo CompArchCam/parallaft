@@ -1,14 +1,26 @@
 use crate::error::Result;
 
-use nix::libc::{self, user_fpsimd_struct, user_regs_struct};
+use cfg_if::cfg_if;
+use nix::libc;
 use std::{
-    fmt::Display,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 use syscalls::{SyscallArgs, Sysno};
 
-use super::{memory::Instruction, state::Stopped, state::WithProcess, Process};
+use super::{memory::Instruction, state::Stopped, Process};
+
+cfg_if! {
+    if #[cfg(target_arch = "aarch64")] {
+        pub type FpRegs = nix::libc::user_fpsimd_struct;
+        use super::state::WithProcess;
+    }
+    else {
+        pub type FpRegs = nix::libc::user_fpregs_struct;
+    }
+}
+
+pub type GpRegs = nix::libc::user_regs_struct;
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
@@ -44,6 +56,8 @@ cfg_if::cfg_if! {
         }
     }
     else if #[cfg(target_arch = "aarch64")] {
+        use std::fmt::Display;
+
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Register {
             X(u8),
@@ -79,15 +93,15 @@ cfg_if::cfg_if! {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Registers {
-    pub inner: user_regs_struct,
-    pub fpr: user_fpsimd_struct,
+    pub inner: GpRegs,
+    pub fpr: FpRegs,
 
     #[cfg(target_arch = "aarch64")]
     pub sysno: libc::c_int,
 }
 
 impl Deref for Registers {
-    type Target = user_regs_struct;
+    type Target = GpRegs;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -102,12 +116,12 @@ impl DerefMut for Registers {
 
 impl Registers {
     #[cfg(target_arch = "x86_64")]
-    pub fn new(gpr: user_regs_struct) -> Self {
-        Self { inner: gpr }
+    pub fn new(gpr: GpRegs, fpr: FpRegs) -> Self {
+        Self { inner: gpr, fpr }
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn new(gpr: user_regs_struct, fpr: user_fpsimd_struct, sysno: libc::c_int) -> Self {
+    pub fn new(gpr: GpRegs, fpr: FpRegs, sysno: libc::c_int) -> Self {
         Self {
             inner: gpr,
             fpr,
@@ -528,6 +542,11 @@ impl Registers {
 
         self
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_one_random_bit_flipped(#[allow(unused_mut)] mut self) -> Registers {
+        todo!()
+    }
 }
 
 pub trait RegisterAccess
@@ -609,7 +628,10 @@ impl Process<Stopped> {
 impl RegisterAccess for Process<Stopped> {
     #[cfg(target_arch = "x86_64")]
     fn read_registers(&self) -> Result<Registers> {
-        Ok(Registers::new(self.get_reg_set(libc::NT_PRSTATUS)?))
+        Ok(Registers::new(
+            self.get_reg_set(libc::NT_PRSTATUS)?,
+            self.get_reg_set(libc::NT_PRFPREG)?,
+        ))
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -637,7 +659,10 @@ impl RegisterAccess for Process<Stopped> {
 
     #[cfg(target_arch = "x86_64")]
     fn write_registers(&mut self, regs: Registers) -> Result<()> {
-        self.set_reg_set(libc::NT_PRSTATUS, &regs.inner)
+        self.set_reg_set(libc::NT_PRSTATUS, &regs.inner)?;
+        self.set_reg_set(libc::NT_PRFPREG, &regs.fpr)?;
+
+        Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]

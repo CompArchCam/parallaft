@@ -12,13 +12,13 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result, UnexpectedEventReason},
     events::{
-        process_lifetime::{ProcessLifetimeHook, ProcessLifetimeHookContext},
+        process_lifetime::{HandlerContext, ProcessLifetimeHook},
         signal::{SignalHandler, SignalHandlerExitAction},
-        HandlerContext,
+        HandlerContextWithInferior,
     },
-    process::{memory::instructions, registers::RegisterAccess},
+    process::{memory::instructions, registers::RegisterAccess, state::Stopped},
     signal_handlers::handle_nondeterministic_instruction,
-    types::segment_record::saved_trap_event::SavedTrapEvent,
+    types::{process_id::Main, segment_record::saved_trap_event::SavedTrapEvent},
 };
 
 pub struct RdtscHandler;
@@ -39,7 +39,7 @@ impl SignalHandler for RdtscHandler {
     fn handle_signal<'s, 'disp, 'scope, 'env>(
         &'s self,
         signal: Signal,
-        context: HandlerContext<'_, '_, 'disp, 'scope, 'env, '_, '_>,
+        mut context: HandlerContextWithInferior<'_, '_, 'disp, 'scope, 'env, '_, '_, Stopped>,
     ) -> Result<SignalHandlerExitAction>
     where
         'disp: 'scope,
@@ -65,7 +65,7 @@ impl SignalHandler for RdtscHandler {
                     },
                 )?;
 
-                context.process().write_registers(
+                context.process_mut().write_registers(
                     regs.with_tsc(tsc.value)
                         .with_offsetted_ip(instructions::RDTSC.length() as _),
                 )?;
@@ -94,7 +94,7 @@ impl SignalHandler for RdtscHandler {
                     },
                 )?;
 
-                context.process().write_registers(
+                context.process_mut().write_registers(
                     regs.with_tscp(tscp.value.0, tscp.value.1)
                         .with_offsetted_ip(instructions::RDTSCP.length() as _),
                 )?;
@@ -110,19 +110,23 @@ impl SignalHandler for RdtscHandler {
 impl ProcessLifetimeHook for RdtscHandler {
     fn handle_main_init<'s, 'scope, 'disp>(
         &'s self,
-        context: ProcessLifetimeHookContext<'disp, 'scope, '_, '_, '_>,
+        main: &mut Main<Stopped>,
+        _context: HandlerContext<'disp, 'scope, '_, '_, '_>,
     ) -> Result<()>
     where
         's: 'disp,
         'disp: 'scope,
     {
-        let ret = context.process.syscall_direct(
-            Sysno::prctl,
-            syscall_args!(libc::PR_SET_TSC as _, libc::PR_TSC_SIGSEGV as _),
-            false,
-            false,
-            true,
-        )?;
+        let ret = main.try_map_process_inplace(|p| {
+            p.syscall_direct(
+                Sysno::prctl,
+                syscall_args!(libc::PR_SET_TSC as _, libc::PR_TSC_SIGSEGV as _),
+                false,
+                false,
+                true,
+            )
+        })?;
+
         assert_eq!(ret, 0);
         info!("Rdtsc init done");
         Ok(())

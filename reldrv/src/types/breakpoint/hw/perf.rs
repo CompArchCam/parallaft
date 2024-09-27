@@ -1,10 +1,9 @@
-use log::debug;
 use nix::unistd::Pid;
 use perf_event::SampleSkid;
 
 use crate::{
-    error::{Error, Result},
-    process::{siginfo::SigInfoExt, Process},
+    error::Result,
+    process::{state::Stopped, Process},
     types::{
         breakpoint::{Breakpoint, BreakpointCharacteristics},
         perf_counter::{
@@ -16,6 +15,7 @@ use crate::{
 
 pub struct HardwareBreakpoint {
     counter: BasePerfCounterWithInterrupt,
+    addr: usize,
 }
 
 impl HardwareBreakpoint {
@@ -31,22 +31,26 @@ impl HardwareBreakpoint {
             1,
             SampleSkid::RequestZero,
         )?;
-        Ok(Self { counter })
+        Ok(Self { counter, addr })
     }
 }
 
 impl Breakpoint for HardwareBreakpoint {
-    fn enable(&mut self, _process: &mut Process) -> Result<()> {
+    fn addr(&self) -> usize {
+        self.addr
+    }
+
+    fn enable(&mut self, _process: &mut Process<Stopped>) -> Result<()> {
         self.counter.enable()?;
         Ok(())
     }
 
-    fn disable(&mut self, _process: &mut Process) -> Result<()> {
+    fn disable(&mut self, _process: &mut Process<Stopped>) -> Result<()> {
         self.counter.disable()?;
         Ok(())
     }
 
-    fn is_hit(&self, process: &Process) -> Result<bool> {
+    fn is_hit(&self, process: &Process<Stopped>) -> Result<bool> {
         self.counter.is_interrupt(&process.get_siginfo()?)
     }
 

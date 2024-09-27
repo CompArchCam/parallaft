@@ -414,6 +414,24 @@ impl<'a, S: ProcessState> InferiorRefMut<'a, S> {
             InferiorRefMut::Checker(checker) => Some(checker.segment.clone()),
         }
     }
+
+    pub fn try_map_process_inplace<E, R>(
+        &mut self,
+        f: impl FnOnce(Process<S>) -> std::result::Result<WithProcess<S, R>, E>,
+    ) -> std::result::Result<R, E> {
+        match self {
+            InferiorRefMut::Main(main) => main.try_map_process_inplace(f),
+            InferiorRefMut::Checker(checker) => checker.try_map_process_inplace(f),
+        }
+    }
+
+    pub fn try_map_process_inplace_noret<E>(
+        &mut self,
+        f: impl FnOnce(Process<S>) -> std::result::Result<Process<S>, E>,
+    ) -> std::result::Result<(), E> {
+        self.try_map_process_inplace(|p| f(p).map(|r| r.with_ret(())))?;
+        Ok(())
+    }
 }
 
 impl<S: ProcessState> Display for InferiorRefMut<'_, S> {

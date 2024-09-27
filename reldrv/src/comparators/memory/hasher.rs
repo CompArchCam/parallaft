@@ -43,7 +43,7 @@ fn compute_page_hash(
         })
         .collect::<Vec<_>>();
 
-    let len = (iovecs.len() * size_of::<IoSlice>()).next_multiple_of(*PAGESIZE);
+    let len = (iovecs.len() * std::mem::size_of::<IoSlice>()).next_multiple_of(*PAGESIZE);
 
     let addr;
     WithProcess(process, addr) = process.mmap(

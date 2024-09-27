@@ -3,12 +3,12 @@ use std::{
     mem::MaybeUninit,
 };
 
-use reldrv::{types::exit_reason::ExitReason, RelShellOptionsBuilder};
+use reldrv::{error::Error, types::exit_reason::ExitReason, RelShellOptionsBuilder};
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 
 #[must_use]
-fn trace_w_rdtsc_trapping<E>(f: impl FnOnce() -> Result<(), E>) -> ExitReason {
+fn trace_w_rdtsc_trapping<E>(f: impl FnOnce() -> Result<(), E>) -> Result<ExitReason, Error> {
     trace_w_options(
         f,
         RelShellOptionsBuilder::test_serial_default()

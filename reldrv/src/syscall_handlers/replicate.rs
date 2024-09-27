@@ -107,7 +107,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
 
         match syscall {
             #[cfg(target_arch = "x86_64")]
-            Syscall::ArchPrctl(_) => action(),
+            Syscall::ArchPrctl(_) => action_complete_syscall(),
             Syscall::Brk(_) | Syscall::RtSigreturn(_) => action_complete_syscall(),
             Syscall::Exit(_) | Syscall::ExitGroup(_) => action_incomplete_syscall(),
             _ => Ok(StandardSyscallEntryCheckerHandlerExitAction::NextHandler),

@@ -17,7 +17,6 @@ use crate::{
             MemoryComparator, MemoryComparsionResult, RegisterComparator, RegisterComparsionResult,
         },
         hctx,
-        insn_patching::InstructionPatchingEventHandler,
         memory::MemoryEventHandler,
         migration::MigrationHandler,
         module_lifetime::ModuleLifetimeHook,
@@ -32,7 +31,6 @@ use crate::{
         HandlerContextWithInferior,
     },
     exec_point_providers::ExecutionPointProvider,
-    helpers::insn_patcher::Patch,
     process::{
         dirty_pages::IgnoredPagesProvider,
         registers::Registers,
@@ -52,6 +50,9 @@ use crate::{
         segment_record::saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     },
 };
+
+#[cfg(target_arch = "aarch64")]
+use crate::{events::insn_patching::InstructionPatchingEventHandler, helpers::insn_patcher::Patch};
 
 macro_rules! generate_event_handler {
     ($handlers_list:ident, fn $name:ident $( < $( $gen:tt ),+ > )? (& $($self_lifetime:lifetime)? self, $( $arg_name:ident : $arg_ty:ty ),* $(,)? ) ) => {
@@ -89,6 +90,7 @@ pub struct Subscribers<'a> {
     module_lifetime_hooks: Vec<&'a dyn ModuleLifetimeHook>,
     exec_point_provider: Option<&'a dyn ExecutionPointProvider>,
     memory_event_handlers: Vec<&'a dyn MemoryEventHandler>,
+    #[cfg(target_arch = "aarch64")]
     instruction_patching_events_handlers: Vec<&'a dyn InstructionPatchingEventHandler>,
     migration_handlers: Vec<&'a dyn MigrationHandler>,
 }
@@ -117,6 +119,7 @@ impl<'a> Subscribers<'a> {
             module_lifetime_hooks: Vec::new(),
             exec_point_provider: None,
             memory_event_handlers: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
             instruction_patching_events_handlers: Vec::new(),
             migration_handlers: Vec::new(),
         }
@@ -185,6 +188,7 @@ impl<'a> Subscribers<'a> {
         self.memory_event_handlers.push(handler)
     }
 
+    #[cfg(target_arch = "aarch64")]
     pub fn install_instruction_patching_events_handler(
         &mut self,
         handler: &'a dyn InstructionPatchingEventHandler,
@@ -230,7 +234,7 @@ impl<'a, 'm> Dispatcher<'a, 'm> {
             .copied()
     }
 
-    pub fn register_module<'s, T>(&'s self, module: T) -> &T
+    pub fn register_module<'s, T>(&'s self, module: T) -> &'s T
     where
         T: Module + 'm,
         's: 'a,
@@ -714,6 +718,7 @@ impl MemoryEventHandler for Dispatcher<'_, '_> {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 impl InstructionPatchingEventHandler for Dispatcher<'_, '_> {
     fn handle_instruction_patched(
         &self,

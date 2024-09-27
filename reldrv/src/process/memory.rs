@@ -155,7 +155,7 @@ impl Process<Stopped> {
         let mut new_data_u8 = Vec::<u8>::with_capacity(len_bytes);
 
         for insn in insns {
-            new_data_u8.extend(insn.value.to_le_bytes());
+            new_data_u8.extend(&insn.value.to_le_bytes()[..insn.length()]);
         }
 
         for i in 0..len {
@@ -164,7 +164,7 @@ impl Process<Stopped> {
             old_words.push(old_val);
         }
 
-        let chunks = new_data_u8.into_iter().chunks(size_of::<usize>());
+        let chunks = new_data_u8.into_iter().chunks(std::mem::size_of::<usize>());
 
         let new_words = chunks
             .into_iter()

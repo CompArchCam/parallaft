@@ -1,4 +1,5 @@
 pub mod comparator;
+#[cfg(target_arch = "aarch64")]
 pub mod insn_patching;
 pub mod memory;
 pub mod migration;

@@ -1,9 +1,11 @@
 use std::process::Command;
 
 fn compile_shellcode(out_dir: &str, name: &'static str) {
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let source_filename = format!("remote/{}.c", name);
     let intermediate_filename = format!("{}/{}.elf", out_dir, name);
     let output_filename = format!("{}/{}.bin", out_dir, name);
+    let arch_dir = format!("remote/arch/{}", arch);
 
     let is_ok = Command::new("gcc")
         .arg("-o")
@@ -21,8 +23,8 @@ fn compile_shellcode(out_dir: &str, name: &'static str) {
         .arg("-T")
         .arg("remote/pack.lds.S")
         .arg(&source_filename)
-        .arg("remote/arch/aarch64/entry.s")
-        .arg("remote/arch/aarch64/syscall.s")
+        .arg(format!("{}/entry.s", arch_dir))
+        .arg(format!("{}/syscall.s", arch_dir))
         .status()
         .expect("Failed to run gcc");
 

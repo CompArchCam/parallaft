@@ -1,3 +1,4 @@
+use cfg_if::cfg_if;
 use log::debug;
 
 use crate::{
@@ -78,10 +79,26 @@ impl Breakpoint for SoftwareBreakpoint {
         match self.state {
             BreakpointState::Enabled(_) => {
                 let pc = process.read_registers()?.ip();
-                Ok(pc == self.pc)
+                cfg_if! {
+                    if #[cfg(target_arch = "x86_64")] {
+                        Ok(pc == self.pc + instructions::TRAP.length())
+                    }
+                    else {
+                        Ok(pc == self.pc)
+                    }
+                }
             }
             BreakpointState::Disabled => Ok(false),
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn fix_after_hit(&self, process: &mut Process<Stopped>) -> Result<()> {
+        process.modify_registers_with(|r| {
+            r.with_offsetted_ip(-(instructions::TRAP.length() as isize))
+        })?;
+
+        Ok(())
     }
 }
 
@@ -142,6 +159,7 @@ mod tests {
 
         assert_eq!(status, WaitStatus::Stopped(process.pid, Signal::SIGTRAP));
         assert!(bp.is_hit(&process)?);
+        bp.fix_after_hit(&mut process)?;
 
         // Disable the breakpoint
         bp.disable(&mut process)?;
