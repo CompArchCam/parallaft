@@ -494,6 +494,11 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                         std::cmp::Ordering::Equal => {
                                             breakpoint.disable(checker.process_mut())?;
 
+                                            #[cfg(target_arch = "x86_64")]
+                                            checker.process_mut().modify_registers_with(|r| {
+                                                r.with_resume_flag_cleared()
+                                            })?;
+
                                             debug!(
                                                 "{checker} Reached execution point {exec_point:?}"
                                             );
