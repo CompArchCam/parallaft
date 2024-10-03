@@ -203,13 +203,7 @@ impl Tracer {
             total_stime - checker_state.last_sys_time,
         );
 
-        checker_state.last_cpu_set = checker
-            .segment
-            .checker_status
-            .lock()
-            .cpu_set()
-            .unwrap()
-            .into();
+        checker_state.last_cpu_set = checker.exec.status.lock().cpu_set().unwrap().into();
         checker_state.last_user_time = total_utime;
         checker_state.last_sys_time = total_stime;
 
@@ -315,7 +309,7 @@ impl ProcessLifetimeHook for Tracer {
 }
 
 impl SegmentEventHandler for Tracer {
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
@@ -323,13 +317,7 @@ impl SegmentEventHandler for Tracer {
         self.checker_states.lock().insert(
             checker.segment.nr,
             CheckerState {
-                last_cpu_set: checker
-                    .segment
-                    .checker_status
-                    .lock()
-                    .cpu_set()
-                    .unwrap()
-                    .into(),
+                last_cpu_set: checker.exec.status.lock().cpu_set().unwrap().into(),
                 last_user_time: Duration::ZERO,
                 last_sys_time: Duration::ZERO,
             },
@@ -338,7 +326,7 @@ impl SegmentEventHandler for Tracer {
         Ok(())
     }
 
-    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         self.account_checker_cpu_time(checker)?;
 
         let ticks_per_second = procfs::ticks_per_second();

@@ -67,16 +67,11 @@ impl DirtyPageAddressTracker for KPageCountDirtyPageTracker {
                 self.pages_written_map.lock().remove(&segment.nr).unwrap()
             }
             InferiorId::Main(None) => vec![],
-            InferiorId::Checker(segment) => segment
-                .checker_status
-                .lock()
-                .process()
-                .unwrap()
-                .get_dirty_pages(
-                    PageFlagType::KPageCountEqualsOne,
-                    extra_writable_ranges,
-                    !self.dont_use_pagemap_scan,
-                )?,
+            InferiorId::Checker(_, exec) => exec.status.lock().process().unwrap().get_dirty_pages(
+                PageFlagType::KPageCountEqualsOne,
+                extra_writable_ranges,
+                !self.dont_use_pagemap_scan,
+            )?,
         };
 
         Ok(DirtyPageAddressesWithFlags {

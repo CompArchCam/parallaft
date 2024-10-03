@@ -140,7 +140,7 @@ impl<'a> ProcessLifetimeHook for AffinitySetter<'a> {
         's: 'disp,
         'disp: 'scope,
     {
-        let checker_status = checker.segment.checker_status.lock();
+        let checker_status = checker.exec.status.lock();
         let checker_cpu_set = checker_status.cpu_set().unwrap();
 
         checker
@@ -168,7 +168,7 @@ impl MigrationHandler for AffinitySetter<'_> {
     fn handle_checker_migration(&self, context: HandlerContextWithInferior<Stopped>) -> Result<()> {
         let checker = context.child.unwrap_checker_mut();
 
-        let checker_status = checker.segment.checker_status.lock();
+        let checker_status = checker.exec.status.lock();
         let new_cpu_set = checker_status.cpu_set().unwrap();
 
         Process::shell().set_cpu_affinity(self.shell_cpu_set)?;

@@ -6,8 +6,8 @@ use cfg_if::cfg_if;
 use crate::error::Result;
 use crate::process::state::Stopped;
 use crate::types::process_id::InferiorRefMut;
+use crate::types::segment_record::replay::WithIsLastEvent;
 use crate::types::segment_record::saved_trap_event::SavedTrapEvent;
-use crate::types::segment_record::WithIsLastEvent;
 
 cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
@@ -46,7 +46,7 @@ where
         }
         InferiorRefMut::Checker(checker) => {
             // Checker signal
-            let result = checker.segment.record.pop_trap_event()?;
+            let result = checker.exec.replay.pop_trap_event()?;
             is_last_event = result.is_last_event;
 
             ret = replay_event(*result.value)?;

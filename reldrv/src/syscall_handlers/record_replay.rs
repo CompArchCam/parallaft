@@ -111,7 +111,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
             .process_mut()
             .modify_registers_with(|regs| regs.with_syscall_skipped())?;
 
-        if let Ok(saved_syscall) = checker.segment.record.get_syscall() {
+        if let Ok(saved_syscall) = checker.exec.replay.get_syscall() {
             if &saved_syscall.syscall != syscall {
                 error!(
                     "Unexpected syscall {:?}, expecting {:?}",
@@ -137,7 +137,7 @@ impl StandardSyscallHandler for RecordReplaySyscallHandler {
                     Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
                 }
             }
-        } else if let Ok(incomplete_syscall) = checker.segment.record.get_incomplete_syscall() {
+        } else if let Ok(incomplete_syscall) = checker.exec.replay.get_incomplete_syscall() {
             if &incomplete_syscall.syscall != syscall {
                 error!(
                     "Unexpected syscall {:?}, expecting {:?}",

@@ -41,7 +41,8 @@ use crate::{
     throttlers::Throttler,
     types::{
         chains::SegmentChains,
-        checker::CheckFailReason,
+        checker_exec::CheckerExecution,
+        checker_status::CheckFailReason,
         execution_point::ExecutionPoint,
         exit_reason::ExitReason,
         memory_map::MemoryMap,
@@ -538,13 +539,13 @@ impl SegmentEventHandler for Dispatcher<'_, '_> {
     generate_event_handler!(segment_event_handlers, fn handle_segment_created(&self, main: &mut Main<Running>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_chain_closed(&self, main: &mut Main<Running>));
     generate_event_handler!(segment_event_handlers, fn handle_segment_filled(&self, main: &mut Main<Running>));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_ready(&self, checker: &mut Checker<Stopped>, ctx: HandlerContext));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_completed(&self, checker: &mut Checker<Stopped>));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_created(&self, segment: &Arc<Segment>, exec: &Arc<CheckerExecution>, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_ready(&self, checker: &mut Checker<Stopped>, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_checked(&self, checker: &mut Checker<Stopped>, check_fail_reason: &Option<CheckFailReason>, ctx: HandlerContext));
     generate_event_handler!(segment_event_handlers, fn handle_segment_removed(&self, segment: &Arc<Segment>));
-    generate_event_handler!(segment_event_handlers, fn handle_segment_checker_error(&self, segment: &Arc<Segment>, error: &Error, abort: &mut bool, ctx: HandlerContext));
-    generate_event_handler!(segment_event_handlers, fn handle_checker_pre_fork(&self, segment: &Arc<Segment>, ctx: HandlerContext));
-    generate_event_handler!(segment_event_handlers, fn handle_checker_worker_fini(&self, segment: &Arc<Segment>, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_error(&self, segment: &Arc<Segment>, exec: &Arc<CheckerExecution>, error: &Error, abort: &mut bool, ctx: HandlerContext));
+    generate_event_handler!(segment_event_handlers, fn handle_checker_exec_fini(&self, segment: &Arc<Segment>, exec: &Arc<CheckerExecution>, ctx: HandlerContext));
 }
 
 impl<'a, 'm> IgnoredPagesProvider for Dispatcher<'a, 'm> {

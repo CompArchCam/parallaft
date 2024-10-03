@@ -54,7 +54,7 @@ impl ProcessLifetimeHook for SignalInjector {
             let segments = context.check_coord.segments.read();
 
             for segment in segments.list.iter() {
-                let checker_status = segment.checker_status.lock();
+                let checker_status = segment.main_checker_exec.status.lock();
                 if let Some(process) = checker_status.process() {
                     if process.kill_with_sig(Signal::SIGUSR1).is_ok() {
                         n += 1;

@@ -5,7 +5,7 @@ use crate::events::process_lifetime::{HandlerContext, ProcessLifetimeHook};
 use crate::process::state::Stopped;
 use crate::process::PAGESIZE;
 use crate::statistics_list;
-use crate::types::checker::CheckerStatus;
+use crate::types::checker_status::CheckerStatus;
 use crate::types::exit_reason::ExitReason;
 use crate::types::process_id::Checker;
 use crate::{dispatcher::Module, error::Result};
@@ -41,7 +41,7 @@ impl ProcessLifetimeHook for DirtyPageStatsCollector {
         's: 'disp,
         'disp: 'scope,
     {
-        let checker_status = checker.segment.checker_status.lock();
+        let checker_status = checker.exec.status.lock();
 
         if let CheckerStatus::Checked {
             dirty_page_addresses,

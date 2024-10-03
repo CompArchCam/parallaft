@@ -1,6 +1,7 @@
 pub mod breakpoint;
 pub mod chains;
-pub mod checker;
+pub mod checker_exec;
+pub mod checker_status;
 pub mod checkpoint;
 pub mod custom_sysno;
 pub mod execution_point;

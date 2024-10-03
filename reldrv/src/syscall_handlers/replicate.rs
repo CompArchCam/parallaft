@@ -62,12 +62,7 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         context: HandlerContextWithInferior<Stopped>,
     ) -> Result<StandardSyscallEntryCheckerHandlerExitAction> {
         let action_complete_syscall = || {
-            let saved_syscall = context
-                .child
-                .unwrap_checker()
-                .segment
-                .record
-                .get_syscall()?;
+            let saved_syscall = context.child.unwrap_checker().exec.replay.get_syscall()?;
 
             if &saved_syscall.syscall != syscall {
                 error!(
@@ -87,8 +82,8 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
             let saved_syscall = context
                 .child
                 .unwrap_checker()
-                .segment
-                .record
+                .exec
+                .replay
                 .pop_incomplete_syscall()?;
 
             if &saved_syscall.value.syscall != syscall {

@@ -4,7 +4,8 @@ use crate::{
     error::{Error, Result},
     process::state::{Running, Stopped},
     types::{
-        checker::CheckFailReason,
+        checker_exec::CheckerExecution,
+        checker_status::CheckFailReason,
         process_id::{Checker, Main},
         segment::Segment,
     },
@@ -87,10 +88,20 @@ pub trait SegmentEventHandler: Sync {
         Ok(())
     }
 
+    /// Called when a new checker execution is created.
+    fn handle_checker_exec_created(
+        &self,
+        segment: &Arc<Segment>,
+        exec: &Arc<CheckerExecution>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Called when the current segment is ready to be executed by the checker.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         ctx: HandlerContext,
@@ -102,7 +113,7 @@ pub trait SegmentEventHandler: Sync {
     /// but is not yet checked.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         Ok(())
     }
 
@@ -110,7 +121,7 @@ pub trait SegmentEventHandler: Sync {
     /// between the segment-end checkpoint and the checker is compared.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_segment_checked(
+    fn handle_checker_exec_checked(
         &self,
         checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
@@ -119,15 +130,21 @@ pub trait SegmentEventHandler: Sync {
         Ok(())
     }
 
-    /// Called when the segment is about to be removed.
-    fn handle_segment_removed(&self, segment: &Arc<Segment>) -> Result<()> {
+    /// Called when the checker worker thread is about to exit.
+    fn handle_checker_exec_fini(
+        &self,
+        segment: &Arc<Segment>,
+        exec: &Arc<CheckerExecution>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
         Ok(())
     }
 
     /// Called when the segment encounters an error during checker execution.
-    fn handle_segment_checker_error(
+    fn handle_checker_exec_error(
         &self,
         segment: &Arc<Segment>,
+        exec: &Arc<CheckerExecution>,
         error: &Error,
         abort: &mut bool,
         ctx: HandlerContext,
@@ -135,17 +152,8 @@ pub trait SegmentEventHandler: Sync {
         Ok(())
     }
 
-    /// Called when the checker process is about to be forked.
-    fn handle_checker_pre_fork(&self, segment: &Arc<Segment>, ctx: HandlerContext) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called when the checker worker thread is about to exit.
-    fn handle_checker_worker_fini(
-        &self,
-        segment: &Arc<Segment>,
-        ctx: HandlerContext,
-    ) -> Result<()> {
+    /// Called when the segment is about to be removed.
+    fn handle_segment_removed(&self, segment: &Arc<Segment>) -> Result<()> {
         Ok(())
     }
 }

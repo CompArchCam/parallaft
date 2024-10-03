@@ -9,7 +9,7 @@ use crate::{
     error::Result,
     events::{process_lifetime::HandlerContext, segment::SegmentEventHandler},
     process::state::Stopped,
-    types::{checker::CheckFailReason, process_id::Checker},
+    types::{checker_status::CheckFailReason, process_id::Checker},
 };
 
 pub struct CoreDumper {
@@ -41,7 +41,7 @@ impl CoreDumper {
 }
 
 impl SegmentEventHandler for CoreDumper {
-    fn handle_segment_checked(
+    fn handle_checker_exec_checked(
         &self,
         checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,

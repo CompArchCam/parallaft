@@ -6,7 +6,7 @@ use crate::check_coord::SyscallType;
 use crate::error::Result;
 use crate::process::state::Unowned;
 use crate::process::Process;
-use crate::types::checker::CheckerStatus;
+use crate::types::checker_status::CheckerStatus;
 
 use super::checkpoint::Checkpoint;
 use super::exit_reason::ExitReason;
@@ -140,7 +140,7 @@ impl SegmentChains {
                 }
                 drop(status);
 
-                let checker_status = front.checker_status.lock();
+                let checker_status = front.main_checker_exec.status.lock();
 
                 if checker_status.is_finished() {
                     if keep_mismatch_segments
@@ -183,7 +183,7 @@ impl SegmentChains {
 
     pub fn collect_results(&self) -> Option<Result<ExitReason>> {
         for segment in &self.list {
-            let checker_status = segment.checker_status.lock();
+            let checker_status = segment.main_checker_exec.status.lock();
             match &*checker_status {
                 CheckerStatus::Checked { result: None, .. } => (),
                 CheckerStatus::Checked {
@@ -205,7 +205,7 @@ impl SegmentChains {
     /// Mark all filling segments as crashed
     pub fn mark_all_filling_segments_as_crashed(&self) {
         for segment in &self.list {
-            segment.mark_as_crashed_if_filling();
+            segment.mark_main_as_crashed_if_filling();
         }
     }
 }

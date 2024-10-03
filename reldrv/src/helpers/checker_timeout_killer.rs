@@ -22,6 +22,7 @@ use crate::{
         state::{Running, Stopped},
     },
     types::{
+        checker_exec::CheckerExecutionId,
         perf_counter::{
             symbolic_events::{
                 expr::Target, GenericHardwareEventCounter, GenericHardwareEventCounterWithInterrupt,
@@ -33,28 +34,28 @@ use crate::{
     },
 };
 
+#[derive(Debug)]
+struct SegmentInfo {
+    main_insn_count: Option<u64>,
+    exec_map: HashMap<CheckerExecutionId, ExecInfo>,
+}
+
 #[derive(Derivative)]
 #[derivative(Debug)]
-struct SegmentInfo {
-    id: SegmentId,
-    main_insn_count: Option<u64>,
+struct ExecInfo {
+    id: CheckerExecutionId,
     checker_insn_count_offset: u64,
     #[derivative(Debug = "ignore")]
     checker_insn_irq: Option<GenericHardwareEventCounterWithInterrupt>,
 }
 
-impl SegmentInfo {
+impl ExecInfo {
     fn checker_insn_count(&mut self) -> Result<u64> {
         let mut result = self.checker_insn_count_offset;
         if let Some(irq) = &mut self.checker_insn_irq {
             result += irq.read()?;
         }
         Ok(result)
-    }
-
-    fn reset(&mut self) {
-        self.checker_insn_count_offset = 0;
-        self.checker_insn_irq = None;
     }
 }
 
@@ -82,16 +83,19 @@ impl<'a> CheckerTimeoutKiller<'a> {
     fn init_or_migrate_checker_insn_irq(
         &self,
         segment_info: &mut SegmentInfo,
+        exec_id: CheckerExecutionId,
         pid: Pid,
         new_cpu_set: &[usize],
     ) -> Result<()> {
         let mut old_count = 0;
 
-        if let Some(checker_insn_irq) = &mut segment_info.checker_insn_irq {
+        let exec_info = segment_info.exec_map.get_mut(&exec_id).unwrap();
+
+        if let Some(checker_insn_irq) = &mut exec_info.checker_insn_irq {
             old_count = checker_insn_irq.read()?;
         }
 
-        segment_info.checker_insn_irq = Some(GenericHardwareEventCounterWithInterrupt::new(
+        exec_info.checker_insn_irq = Some(GenericHardwareEventCounterWithInterrupt::new(
             Hardware::INSTRUCTIONS,
             pid,
             true,
@@ -127,9 +131,11 @@ impl SegmentEventHandler for CheckerTimeoutKiller<'_> {
             let segment_info = segment_info_map.get_mut(&segment.nr).unwrap();
 
             segment_info.main_insn_count = Some(counter.read()?);
-            let checker_status = segment.checker_status.lock();
-            if let Some(process) = checker_status.process() {
-                process.sigqueue(Self::SIGVAL_INIT_IRQ)?;
+            for exec in segment.checker_execs() {
+                let status = exec.status.lock();
+                if let Some(process) = status.process() {
+                    process.sigqueue(Self::SIGVAL_INIT_IRQ)?;
+                }
             }
         }
 
@@ -144,26 +150,14 @@ impl SegmentEventHandler for CheckerTimeoutKiller<'_> {
         self.segment_info_map.lock().insert(
             segment_id,
             SegmentInfo {
-                id: segment_id,
                 main_insn_count: None,
-                checker_insn_count_offset: 0,
-                checker_insn_irq: None,
+                exec_map: HashMap::new(),
             },
         );
         Ok(())
     }
 
-    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
-        self.segment_info_map
-            .lock()
-            .get_mut(&checker.segment.nr)
-            .unwrap()
-            .reset();
-
-        Ok(())
-    }
-
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
@@ -171,16 +165,32 @@ impl SegmentEventHandler for CheckerTimeoutKiller<'_> {
         let mut segment_info_map = self.segment_info_map.lock();
 
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
-        segment_info.reset();
+
+        segment_info.exec_map.insert(
+            checker.exec.id,
+            ExecInfo {
+                id: checker.exec.id,
+                checker_insn_count_offset: 0,
+                checker_insn_irq: None,
+            },
+        );
 
         if segment_info.main_insn_count.is_some() {
             self.init_or_migrate_checker_insn_irq(
                 segment_info,
+                checker.exec.id,
                 checker.process().pid,
-                checker.segment.checker_status.lock().cpu_set().unwrap(),
+                checker.exec.status.lock().cpu_set().unwrap(),
             )?;
         }
 
+        Ok(())
+    }
+
+    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+        let mut segment_info_map = self.segment_info_map.lock();
+        let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
+        segment_info.exec_map.remove(&checker.exec.id);
         Ok(())
     }
 
@@ -211,7 +221,11 @@ impl SignalHandler for CheckerTimeoutKiller<'_> {
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
 
         if siginfo.sigval() == Some(Self::SIGVAL_INIT_IRQ) {
-            if segment_info.checker_insn_count()?
+            if segment_info
+                .exec_map
+                .get_mut(&checker.exec.id)
+                .unwrap()
+                .checker_insn_count()?
                 >= (segment_info.main_insn_count.unwrap() as f64 * Self::HEADROOM) as u64
             {
                 info!("{checker} Timed out");
@@ -220,16 +234,20 @@ impl SignalHandler for CheckerTimeoutKiller<'_> {
 
             self.init_or_migrate_checker_insn_irq(
                 segment_info,
+                checker.exec.id,
                 checker.process().pid,
-                checker.segment.checker_status.lock().cpu_set().unwrap(),
+                checker.exec.status.lock().cpu_set().unwrap(),
             )?;
 
             return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
                 single_step: false,
             });
         } else if segment_info
+            .exec_map
+            .get(&checker.exec.id)
+            .unwrap()
             .checker_insn_irq
-            .as_mut()
+            .as_ref()
             .unwrap()
             .is_interrupt(&siginfo)?
         {
@@ -250,8 +268,9 @@ impl MigrationHandler for CheckerTimeoutKiller<'_> {
                 .lock()
                 .get_mut(&checker.segment.nr)
                 .unwrap(),
+            checker.exec.id,
             checker.process().pid,
-            checker.segment.checker_status.lock().cpu_set().unwrap(),
+            checker.exec.status.lock().cpu_set().unwrap(),
         )?;
 
         Ok(())

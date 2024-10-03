@@ -173,7 +173,7 @@ impl StandardSyscallHandler for MmapHandler {
                         panic!("Unexpected fd")
                     }
                 } else {
-                    let saved_syscall = checker.segment.record.get_syscall()?;
+                    let saved_syscall = checker.exec.replay.get_syscall()?;
 
                     if saved_syscall.syscall != syscall {
                         error!("Mmap syscall mismatch");
@@ -203,7 +203,7 @@ impl StandardSyscallHandler for MmapHandler {
                 }
             }
             Syscall::Mremap(mut mremap) => {
-                let saved_syscall = checker.segment.record.get_syscall()?;
+                let saved_syscall = checker.exec.replay.get_syscall()?;
 
                 if saved_syscall.syscall != syscall {
                     info!("Mremap syscall mismatch");
@@ -238,7 +238,7 @@ impl StandardSyscallHandler for MmapHandler {
                 Ok(StandardSyscallEntryCheckerHandlerExitAction::ContinueInferior)
             }
             Syscall::Mprotect(_) | Syscall::Munmap(_) => {
-                let saved_syscall = checker.segment.record.get_syscall()?;
+                let saved_syscall = checker.exec.replay.get_syscall()?;
 
                 if saved_syscall.syscall != syscall {
                     error!(

@@ -40,8 +40,8 @@ impl DirtyPageAddressTracker for AllWritablePageTracker {
                     },
                     &[],
                 )?,
-            InferiorId::Checker(segment) => segment
-                .checker_status
+            InferiorId::Checker(_, exec) => exec
+                .status
                 .lock()
                 .process()
                 .unwrap()

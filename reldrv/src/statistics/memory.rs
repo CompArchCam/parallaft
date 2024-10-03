@@ -91,9 +91,7 @@ impl ProcessLifetimeHook for MemoryCollector {
                 let mut checkpoints = HashSet::new();
 
                 for segment in &segments.list {
-                    if let Some(p) = segment.checker_status.lock().process() {
-                        processes.push(p.clone());
-                    }
+                    processes.extend(segment.checker_processes());
 
                     if let Some(p) = segment.checkpoint_end() {
                         checkpoints.insert(p);

@@ -26,7 +26,8 @@ use reldrv::{
     },
     process::{registers::RegisterAccess, state::Stopped},
     types::{
-        checker::{CheckFailReason, CheckerStatus},
+        checker_exec::CheckerExecution,
+        checker_status::{CheckFailReason, CheckerStatus},
         exit_reason::ExitReason,
         process_id::Checker,
         segment::{Segment, SegmentId},
@@ -190,7 +191,7 @@ impl ErrorInjector {
 }
 
 impl SegmentEventHandler for ErrorInjector {
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         ctx: HandlerContext,
@@ -234,7 +235,7 @@ impl SegmentEventHandler for ErrorInjector {
         Ok(())
     }
 
-    fn handle_segment_checked(
+    fn handle_checker_exec_checked(
         &self,
         checker: &mut Checker<Stopped>,
         check_fail_reason: &Option<CheckFailReason>,
@@ -287,9 +288,10 @@ impl SegmentEventHandler for ErrorInjector {
         Ok(())
     }
 
-    fn handle_segment_checker_error(
+    fn handle_checker_exec_error(
         &self,
         segment: &Arc<Segment>,
+        _exec: &Arc<CheckerExecution>,
         error: &Error,
         abort: &mut bool,
         _ctx: HandlerContext,
@@ -335,7 +337,7 @@ impl SegmentEventHandler for ErrorInjector {
             println!("{}", segment_state);
             self.write_to_output_file(segment_state)?;
             *segment.pinned.lock() = false;
-            segment.checker_status.lock().assume_checked();
+            segment.main_checker_exec.status.lock().assume_checked();
         }
 
         *abort = false; // don't abort the main thread
@@ -343,15 +345,19 @@ impl SegmentEventHandler for ErrorInjector {
         Ok(())
     }
 
-    fn handle_checker_worker_fini(
+    fn handle_checker_exec_fini(
         &self,
         segment: &Arc<Segment>,
+        _exec: &Arc<CheckerExecution>,
         ctx: HandlerContext,
     ) -> reldrv::error::Result<()> {
         if *segment.pinned.lock() {
             info!("{} Restarting checker thread for error injection", segment);
-            ctx.check_coord
-                .start_checker_worker_thread(segment.clone(), ctx.scope)?;
+            ctx.check_coord.start_checker_worker_thread(
+                segment.main_checker_exec.clone(),
+                segment.clone(),
+                ctx.scope,
+            )?;
         }
         Ok(())
     }
@@ -373,7 +379,13 @@ impl SignalHandler for ErrorInjector {
         }
 
         if !matches!(
-            &*context.child.segment().unwrap().checker_status.lock(),
+            &*context
+                .child
+                .segment()
+                .unwrap()
+                .main_checker_exec
+                .status
+                .lock(),
             CheckerStatus::Executing { .. }
         ) {
             return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {

@@ -230,7 +230,12 @@ impl DynamicCpuFreqScaler<'_> {
                     continue;
                 }
 
-                if segment_info.segment.checker_status.lock().cpu_set()
+                if segment_info
+                    .segment
+                    .main_checker_exec
+                    .status
+                    .lock()
+                    .cpu_set()
                     != Some(self.checker_cpu_set)
                 {
                     continue;
@@ -293,7 +298,7 @@ impl DynamicCpuFreqScaler<'_> {
 
             let nr_live_checkers = segment_info_map
                 .values()
-                .filter(|x| !x.checker_done && !x.segment.record.is_waiting())
+                .filter(|x| !x.checker_done && !x.segment.main_checker_exec.replay.is_waiting())
                 .count();
 
             debug!("Number of live checkers: {nr_live_checkers}");
@@ -361,7 +366,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
@@ -386,7 +391,7 @@ impl SegmentEventHandler for DynamicCpuFreqScaler<'_> {
         Ok(())
     }
 
-    fn handle_segment_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
         let mut segment_info_map = self.segment_info_map.lock();
         let segment_info = segment_info_map.get_mut(&checker.segment.nr).unwrap();
 

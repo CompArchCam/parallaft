@@ -1,6 +1,6 @@
 use std::{any::Any, fmt::Debug};
 
-use super::segment::Segment;
+use super::{checker_exec::CheckerExecution, segment::Segment};
 
 use crate::error::Result;
 
@@ -34,7 +34,7 @@ impl PartialEq for dyn DynEq {
 
 #[allow(unused_variables)]
 pub trait ExecutionPoint: DynEq + Debug + Send + Sync {
-    fn prepare(&self, segment: &Segment) -> Result<()> {
+    fn prepare(&self, segment: &Segment, exec: &CheckerExecution) -> Result<()> {
         Ok(())
     }
 }

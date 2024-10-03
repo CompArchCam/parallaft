@@ -24,7 +24,7 @@ use crate::{
     statistics::StatisticsProvider,
     statistics_list,
     types::{
-        checker::{CheckFailReason, CheckerStatus},
+        checker_status::{CheckFailReason, CheckerStatus},
         exit_reason::ExitReason,
         process_id::{Checker, Main},
         segment::Segment,
@@ -95,7 +95,7 @@ impl<'a> CheckerScheduler<'a> {
             .rev()
             .take(self.checker_booster_cpu_set.len())
         {
-            let mut checker_status = segment.checker_status.lock();
+            let mut checker_status = segment.main_checker_exec.status.lock(); // TODO: handle aux checker execs
 
             if let Some(cpu_set) = checker_status.cpu_set() {
                 if cpu_set == self.checker_booster_cpu_set {
@@ -126,12 +126,12 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
         Ok(())
     }
 
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
     ) -> crate::error::Result<()> {
-        if checker.segment.checker_status.lock().cpu_set().unwrap() != self.checker_cpu_set {
+        if checker.exec.status.lock().cpu_set().unwrap() != self.checker_cpu_set {
             return Ok(());
         }
 
@@ -144,7 +144,7 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
                 .iter()
                 .filter(|x| {
                     x.nr < checker.segment.nr
-                        && x.checker_status.lock().cpu_set() == Some(self.checker_cpu_set)
+                        && x.main_checker_exec.status.lock().cpu_set() == Some(self.checker_cpu_set)
                 })
                 .count()
                 < self.checker_cpu_set.len()
@@ -159,7 +159,8 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
                     .iter()
                     .filter(|x| {
                         x.nr < checker.segment.nr
-                            && x.checker_status.lock().cpu_set() == Some(self.checker_emerg_cpu_set)
+                            && x.main_checker_exec.status.lock().cpu_set()
+                                == Some(self.checker_emerg_cpu_set)
                     })
                     .count()
                     < self.checker_emerg_cpu_set.len()
@@ -168,10 +169,10 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
 
                 if let Some(segment) = state.live_checkers.iter().find(|x| {
                     x.nr < checker.segment.nr
-                        && x.checker_status.lock().cpu_set() == Some(self.checker_cpu_set)
+                        && x.main_checker_exec.status.lock().cpu_set() == Some(self.checker_cpu_set)
                 }) {
                     info!("{} Candidate segment: {}", checker, segment.nr);
-                    let mut checker_status = segment.checker_status.lock();
+                    let mut checker_status = segment.main_checker_exec.status.lock();
 
                     match &mut *checker_status {
                         CheckerStatus::Executing { process, cpu_set } => {
@@ -194,7 +195,7 @@ impl SegmentEventHandler for CheckerScheduler<'_> {
         Ok(())
     }
 
-    fn handle_segment_checked(
+    fn handle_checker_exec_checked(
         &self,
         checker: &mut Checker<Stopped>,
         _check_fail_reason: &Option<CheckFailReason>,

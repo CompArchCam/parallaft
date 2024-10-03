@@ -40,7 +40,8 @@ use crate::process::Process;
 use crate::statistics::timing::{self, Tracer};
 use crate::throttlers::Throttler;
 use crate::types::chains::SegmentChains;
-use crate::types::checker::CheckerStatus;
+use crate::types::checker_exec::CheckerExecution;
+use crate::types::checker_status::CheckerStatus;
 use crate::types::checkpoint::{Checkpoint, CheckpointCaller};
 use crate::types::custom_sysno::CustomSysno;
 use crate::types::exit_reason::ExitReason;
@@ -125,7 +126,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 }
             }
             Inferior::Checker(checker) => {
-                let expected_event = checker.segment.record.pop_program_exit()?;
+                let expected_event = checker.exec.replay.pop_program_exit()?;
                 assert!(expected_event.is_last_event);
 
                 if expected_event.value != event {
@@ -134,7 +135,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         UnexpectedEventReason::IncorrectValue,
                     ));
                 } else {
-                    checker.segment.checker_status.lock().assume_checked();
+                    checker.exec.status.lock().assume_checked();
                 }
             }
         }
@@ -480,16 +481,16 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         info!("{checker} Checkpoint");
 
-        self.dispatcher.handle_segment_completed(&mut checker)?;
+        self.dispatcher
+            .handle_checker_exec_completed(&mut checker)?;
 
         let check_fail_reason;
 
         if self.options.no_state_cmp {
             check_fail_reason = None;
-            checker.segment.checker_status.lock().assume_checked();
+            checker.exec.status.lock().assume_checked();
         } else {
-            check_fail_reason = checker.segment.clone().check(
-                &mut checker,
+            check_fail_reason = checker.check(
                 &self.dispatcher.get_ignored_pages(),
                 &self.dispatcher.get_extra_writable_ranges(),
                 self.dispatcher,
@@ -510,7 +511,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             }
         }
 
-        self.dispatcher.handle_segment_checked(
+        self.dispatcher.handle_checker_exec_checked(
             &mut checker,
             &check_fail_reason,
             pctx(self, scope),
@@ -591,6 +592,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         }
         self.dispatcher.init(pctx(self, scope))?;
 
+        // TODO: handle panic
+
         let mut exit_reason = match self.run_event_loop(
             Inferior::Main(Main {
                 process: Some(process),
@@ -604,7 +607,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 error!("Main worker crashed with error: {:?}", err);
 
                 if let Some(last_segment) = self.segments.read().last_segment() {
-                    last_segment.mark_as_crashed();
+                    last_segment.mark_main_as_crashed();
                 }
 
                 return Err(err);
@@ -614,7 +617,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         if let Some(last_segment) = self.segments.read().last_segment() {
             if !last_segment.is_main_finished() {
                 error!("Main worker crashed without marking segment as finished");
-                last_segment.mark_as_crashed();
+                last_segment.mark_main_as_crashed();
             }
         }
 
@@ -631,6 +634,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     fn checker_work<'s, 'scope, 'env>(
         &'s self,
+        exec: Arc<CheckerExecution>,
         segment: Arc<Segment>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
@@ -640,7 +644,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         let checker_starting_tracer = self.tracer.trace(timing::Event::CheckerStarting);
 
         let checker_forking_tracer = self.tracer.trace(timing::Event::CheckerForking);
-        let mut checker_process = segment.start_checker(self.checker_cpu_set.clone())?;
+        let mut checker_process = exec.start_checker(self.checker_cpu_set.clone(), &segment)?;
         checker_forking_tracer.end();
 
         if cfg!(debug_assertions) {
@@ -652,7 +656,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             );
         }
 
-        segment.record.wait_for_initial_event()?;
+        exec.replay.wait_for_initial_event()?;
 
         if !self.options.no_checker_exec {
             let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
@@ -660,10 +664,11 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             let mut checker = Checker {
                 process: Some(checker_process),
                 segment: segment.clone(),
+                exec,
             };
 
             self.dispatcher
-                .handle_segment_ready(&mut checker, pctx(self, scope))?;
+                .handle_checker_exec_ready(&mut checker, pctx(self, scope))?;
             checker_ready_hook_tracer.end();
 
             self.run_event_loop(Inferior::Checker(checker), segment.ongoing_syscall, scope)?;
@@ -673,7 +678,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             //     return Err(Error::UnexpectedCheckerExitReason(exit_reason));
             // }
         } else {
-            segment.checker_status.lock().assume_checked();
+            exec.status.lock().assume_checked();
         }
         checker_starting_tracer.end();
 
@@ -682,12 +687,16 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
     pub fn start_checker_worker_thread<'s, 'scope, 'env>(
         &'s self,
+        exec: Arc<CheckerExecution>,
         segment: Arc<Segment>,
         scope: &'scope Scope<'scope, 'env>,
     ) -> Result<()>
     where
         's: 'scope + 'disp,
     {
+        self.dispatcher
+            .handle_checker_exec_created(&segment, &exec, pctx(self, scope))?;
+
         let segment_nr = segment.nr;
 
         let mut workers = self.workers.lock();
@@ -696,7 +705,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             .name(format!("checker-{}", segment.nr))
             .spawn_scoped(scope, move || {
                 let ret = catch_unwind(AssertUnwindSafe(|| {
-                    self.checker_work(segment.clone(), scope)
+                    self.checker_work(exec.clone(), segment.clone(), scope)
                 }));
 
                 self.workers.lock().remove(&segment.nr);
@@ -709,24 +718,24 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     Err(_) => {
                         error!("{checker_id} Panicked");
                         abort = true;
-                        *segment.checker_status.lock() = CheckerStatus::Crashed(Error::Panic);
-                        self.dispatcher.handle_segment_checker_error(&segment, &Error::Panic, &mut abort, pctx(self, scope)).unwrap();
+                        *exec.status.lock() = CheckerStatus::Crashed(Error::Panic);
+                        self.dispatcher.handle_checker_exec_error(&segment, &exec, &Error::Panic, &mut abort, pctx(self, scope)).unwrap();
                     }
                     Ok(Err(e)) => {
                         error!("{checker_id} Failed: {e:?}");
                         abort = true;
-                        *segment.checker_status.lock() = CheckerStatus::Crashed(e.clone());
-                        self.dispatcher.handle_segment_checker_error(&segment, &e, &mut abort, pctx(self, scope)).unwrap();
+                        *exec.status.lock() = CheckerStatus::Crashed(e.clone());
+                        self.dispatcher.handle_checker_exec_error(&segment, &exec, &e, &mut abort, pctx(self, scope)).unwrap();
                     }
                     Ok(Ok(())) => {
-                        let mut checker_status = segment.checker_status.lock();
+                        let mut checker_status = exec.status.lock();
 
                         if !checker_status.is_finished() {
                             info!("{checker_id} Checker not marked as finished, assuming it is cancelled");
                             abort = true;
                             *checker_status = CheckerStatus::Crashed(Error::Cancelled);
                             drop(checker_status);
-                            self.dispatcher.handle_segment_checker_error(&segment, &Error::Cancelled, &mut abort, pctx(self, scope)).unwrap();
+                            self.dispatcher.handle_checker_exec_error(&segment, &exec, &Error::Cancelled, &mut abort, pctx(self, scope)).unwrap();
                         }
                     }
                 }
@@ -737,7 +746,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     self.abort_main();
                 }
 
-                self.dispatcher.handle_checker_worker_fini(&segment, pctx(self, scope)).unwrap();
+                self.dispatcher.handle_checker_exec_fini(&segment, &exec, pctx(self, scope)).unwrap();
             })
             .unwrap();
 
@@ -790,7 +799,11 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         if let Some(new_segment) = result.new_segment {
             self.dispatcher.handle_segment_created(main)?;
 
-            self.start_checker_worker_thread(new_segment, scope)?;
+            self.start_checker_worker_thread(
+                new_segment.main_checker_exec.clone(),
+                new_segment,
+                scope,
+            )?;
         }
 
         if is_finishing {
@@ -948,7 +961,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         })
                         .map(|x| x.into()),
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
-                        let incomplete_syscall = checker.segment.record.pop_incomplete_syscall()?;
+                        let incomplete_syscall = checker.exec.replay.pop_incomplete_syscall()?;
                         assert!(incomplete_syscall.is_last_event);
                         syscall_entry_handling_tracer.end();
 
@@ -1100,8 +1113,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             }
             Inferior::Checker(mut checker) => {
                 let saved_syscall_with_is_last_event = checker
-                    .segment
-                    .record
+                    .exec
+                    .replay
                     .pop_syscall()
                     .expect("Unexpected ptrace event");
 
@@ -1204,7 +1217,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     .map(|x| x.into())
                 }
                 Inferior::Checker(checker) => {
-                    let result = checker.segment.record.pop_manual_checkpoint_request()?;
+                    let result = checker.exec.replay.pop_manual_checkpoint_request()?;
                     assert!(result.is_last_event);
                     if result.value.is_finishing != is_finishing {
                         error!("{checker} Unexpected checkpoint request");
@@ -1341,17 +1354,18 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             })?)
                         }
                         Inferior::Checker(checker) => {
-                            let siginfo_expected =
-                                checker.segment.record.pop_internal_signal().map_err(
-                                    |e| match e {
-                                        Error::UnexpectedEvent(
-                                            UnexpectedEventReason::IncorrectType { .. },
-                                        ) => Error::UnexpectedCheckerExitReason(
-                                            ExitReason::Signalled(sig),
-                                        ),
-                                        e => e,
-                                    },
-                                )?;
+                            let siginfo_expected = checker
+                                .exec
+                                .replay
+                                .pop_internal_signal()
+                                .map_err(|e| match e {
+                                    Error::UnexpectedEvent(
+                                        UnexpectedEventReason::IncorrectType { .. },
+                                    ) => Error::UnexpectedCheckerExitReason(ExitReason::Signalled(
+                                        sig,
+                                    )),
+                                    e => e,
+                                })?;
 
                             let siginfo = checker.process().get_siginfo()?;
 
@@ -1456,11 +1470,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
     where
         's: 'scope + 'disp,
     {
-        checker
-            .segment
-            .checker_status
-            .lock()
-            .set_cpu_set(new_cpu_set)?;
+        checker.exec.status.lock().set_cpu_set(new_cpu_set)?;
 
         self.dispatcher
             .handle_checker_migration(hctx(&mut checker.into(), self, scope))?;

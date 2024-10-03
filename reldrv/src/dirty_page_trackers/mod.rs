@@ -121,9 +121,8 @@ pub trait DirtyPageAddressTracker: Sync {
                     .memory_stats()?
                     .private_dirty_pages as _
             }
-            InferiorId::Checker(segment) => {
-                segment
-                    .checker_status
+            InferiorId::Checker(_, exec) => {
+                exec.status
                     .lock()
                     .process()
                     .unwrap()

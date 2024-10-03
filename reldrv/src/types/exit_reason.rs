@@ -1,6 +1,6 @@
 use nix::sys::signal::Signal;
 
-use super::checker::CheckFailReason;
+use super::checker_status::CheckFailReason;
 
 pub type ExitCode = i32;
 

@@ -43,16 +43,11 @@ impl DirtyPageAddressTracker for SoftDirtyPageTracker {
                     extra_writable_ranges,
                     !self.dont_use_pagemap_scan,
                 )?,
-            InferiorId::Checker(segment) => segment
-                .checker_status
-                .lock()
-                .process()
-                .unwrap()
-                .get_dirty_pages(
-                    PageFlagType::SoftDirty,
-                    extra_writable_ranges,
-                    !self.dont_use_pagemap_scan,
-                )?,
+            InferiorId::Checker(_, exec) => exec.status.lock().process().unwrap().get_dirty_pages(
+                PageFlagType::SoftDirty,
+                extra_writable_ranges,
+                !self.dont_use_pagemap_scan,
+            )?,
         };
 
         Ok(DirtyPageAddressesWithFlags {
@@ -77,7 +72,7 @@ impl SegmentEventHandler for SoftDirtyPageTracker {
         Ok(())
     }
 
-    fn handle_segment_ready(
+    fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
