@@ -121,12 +121,12 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         match child {
             Inferior::Main(main) => {
                 if let Some(segment) = &main.segment {
-                    segment.record.push_event(event, true, segment)?;
+                    segment.record.push_event(event, true)?;
                     segment.mark_main_as_completed(None);
                 }
             }
             Inferior::Checker(checker) => {
-                let expected_event = checker.exec.replay.pop_program_exit()?;
+                let expected_event = checker.exec.replay.pop_program_exit(checker)?;
                 assert!(expected_event.is_last_event);
 
                 if expected_event.value != event {
@@ -656,8 +656,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             );
         }
 
-        exec.replay.wait_for_initial_event()?;
-
         if !self.options.no_checker_exec {
             let checker_ready_hook_tracer = self.tracer.trace(timing::Event::CheckerReadyHook);
 
@@ -666,6 +664,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 segment: segment.clone(),
                 exec,
             };
+
+            checker.exec.replay.wait_for_initial_event(&checker)?;
 
             self.dispatcher
                 .handle_checker_exec_ready(&mut checker, pctx(self, scope))?;
@@ -917,9 +917,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         StandardSyscallEntryMainHandlerExitAction::StoreSyscallAndCheckpoint(
                             saved_incomplete_syscall,
                         ) => {
-                            segment
-                                .record
-                                .push_event(saved_incomplete_syscall, true, &segment)?;
+                            segment.record.push_event(saved_incomplete_syscall, true)?;
 
                             syscall_entry_handling_tracer.end();
 
@@ -961,7 +959,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         })
                         .map(|x| x.into()),
                     StandardSyscallEntryCheckerHandlerExitAction::Checkpoint => {
-                        let incomplete_syscall = checker.exec.replay.pop_incomplete_syscall()?;
+                        let incomplete_syscall =
+                            checker.exec.replay.pop_incomplete_syscall(&checker)?;
                         assert!(incomplete_syscall.is_last_event);
                         syscall_entry_handling_tracer.end();
 
@@ -1056,11 +1055,9 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                         }
                     };
 
-                    segment.record.push_event(
-                        saved_syscall,
-                        exit_action == SyscallExitAction::Checkpoint,
-                        &segment,
-                    )?;
+                    segment
+                        .record
+                        .push_event(saved_syscall, exit_action == SyscallExitAction::Checkpoint)?;
 
                     main.try_map_process_noret(|mut p| {
                         pre_resume_cb(&mut p)?;
@@ -1115,7 +1112,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 let saved_syscall_with_is_last_event = checker
                     .exec
                     .replay
-                    .pop_syscall()
+                    .pop_syscall(&checker)
                     .expect("Unexpected ptrace event");
 
                 if saved_syscall_with_is_last_event.is_last_event {
@@ -1198,11 +1195,9 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             match child {
                 Inferior::Main(main) => {
                     if let Some(segment) = &main.segment {
-                        segment.record.push_event(
-                            ManualCheckpointRequest { is_finishing },
-                            true,
-                            segment,
-                        )?;
+                        segment
+                            .record
+                            .push_event(ManualCheckpointRequest { is_finishing }, true)?;
                     }
 
                     self.take_main_checkpoint(
@@ -1217,7 +1212,10 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     .map(|x| x.into())
                 }
                 Inferior::Checker(checker) => {
-                    let result = checker.exec.replay.pop_manual_checkpoint_request()?;
+                    let result = checker
+                        .exec
+                        .replay
+                        .pop_manual_checkpoint_request(&checker)?;
                     assert!(result.is_last_event);
                     if result.value.is_finishing != is_finishing {
                         error!("{checker} Unexpected checkpoint request");
@@ -1340,11 +1338,9 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             if let Some(segment) = main.segment.clone() {
                                 let siginfo = main.process().get_siginfo()?;
 
-                                segment.record.push_event(
-                                    SavedSignal::Internal(siginfo),
-                                    false,
-                                    &segment,
-                                )?;
+                                segment
+                                    .record
+                                    .push_event(SavedSignal::Internal(siginfo), false)?;
                             }
 
                             Ok(child.try_map_process_noret(|mut p| {
@@ -1357,7 +1353,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                             let siginfo_expected = checker
                                 .exec
                                 .replay
-                                .pop_internal_signal()
+                                .pop_internal_signal(checker)
                                 .map_err(|e| match e {
                                     Error::UnexpectedEvent(
                                         UnexpectedEventReason::IncorrectType { .. },
@@ -1401,7 +1397,6 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                                 segment.record.push_event(
                                     SavedSignal::External(siginfo, exec_point),
                                     false,
-                                    &segment,
                                 )?;
                             }
 
@@ -1451,9 +1446,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                 .get_current_execution_point(&mut main.into())?;
 
             debug!("{main} New execution point: {exec_point:?}");
-            segment
-                .record
-                .push_event(exec_point, is_finishing, &segment)?;
+            segment.record.push_event(exec_point, is_finishing)?;
         } else {
             return Err(Error::InvalidState);
         }

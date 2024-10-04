@@ -39,7 +39,7 @@ impl CheckerExecution {
         checker_cpu_set: Vec<usize>,
         segment: &Segment,
     ) -> Result<Process<Stopped>> {
-        self.replay.rewind(segment, self)?;
+        self.replay.rewind()?;
         let mut status = self.status.lock();
         assert!(!matches!(&*status, CheckerStatus::Executing { .. }));
         status.start(&segment.checkpoint_start, checker_cpu_set)

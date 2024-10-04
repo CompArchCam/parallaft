@@ -8,10 +8,7 @@ use crate::{
     error::{Error, Result, UnexpectedEventReason},
     events::signal::SignalHandlerExitAction,
     process::state::Stopped,
-    types::{
-        checker_exec::CheckerExecution, execution_point::ExecutionPoint, process_id::Checker,
-        segment::Segment,
-    },
+    types::{execution_point::ExecutionPoint, process_id::Checker},
 };
 
 use super::{
@@ -72,19 +69,8 @@ impl SegmentReplay {
 
     /// Rewind the checker pos to the beginning of the segment, cancelling
     /// existing checkers' execution.
-    pub fn rewind(&self, segment: &Segment, exec: &CheckerExecution) -> Result<()> {
-        let record_state = self.record.state.lock();
+    pub fn rewind(&self) -> Result<()> {
         self.state.lock().event_pos = 0;
-
-        for event in record_state.event_log.iter() {
-            match event {
-                SavedEvent::ExecutionPoint(exec_point)
-                | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
-                    exec_point.prepare(segment, exec)?;
-                }
-                _ => (),
-            }
-        }
 
         Ok(())
     }
@@ -136,9 +122,17 @@ impl SegmentReplay {
         }
     }
 
-    pub fn wait_for_initial_event(&self) -> Result<()> {
+    pub fn wait_for_initial_event(&self, checker: &Checker<Stopped>) -> Result<()> {
         if self.record.with_active_events {
-            let _ = self.wait_until_n_events_available(1)?;
+            let state = self.wait_until_n_events_available(1)?;
+            assert_eq!(state.event_pos, 0);
+            self.record
+                .state
+                .lock()
+                .event_log
+                .first()
+                .unwrap()
+                .prepare(checker)?;
         }
 
         Ok(())
@@ -172,6 +166,7 @@ impl SegmentReplay {
 
     fn pop_event_with<T>(
         &self,
+        checker: &Checker<Stopped>,
         f: impl FnOnce(&SavedEvent) -> Result<T>,
     ) -> Result<WithIsLastEvent<T>> {
         let mut state = self.wait_until_event_available()?;
@@ -187,45 +182,70 @@ impl SegmentReplay {
         let is_last_event = (state.event_pos == record_state.event_log.len())
             && record_state.main_status == MainStatus::Completed;
 
+        if self.record.with_active_events {
+            if let Some(e) = record_state.event_log.get(state.event_pos) {
+                e.prepare(checker)?;
+            }
+        }
+
         Ok(WithIsLastEvent::new(is_last_event, ret))
     }
 
-    pub fn pop_syscall(&self) -> Result<WithIsLastEvent<Arc<SavedSyscall>>> {
-        self.pop_event_with(|event| event.get_syscall())
+    pub fn pop_syscall(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<Arc<SavedSyscall>>> {
+        self.pop_event_with(checker, |event| event.get_syscall())
     }
 
-    pub fn pop_trap_event(&self) -> Result<WithIsLastEvent<Arc<SavedTrapEvent>>> {
-        self.pop_event_with(|event| event.get_trap_event())
+    pub fn pop_trap_event(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<Arc<SavedTrapEvent>>> {
+        self.pop_event_with(checker, |event| event.get_trap_event())
     }
 
-    pub fn pop_execution_point(&self) -> Result<WithIsLastEvent<Arc<dyn ExecutionPoint>>> {
-        self.pop_event_with(|event| event.get_execution_point())
+    pub fn pop_execution_point(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<Arc<dyn ExecutionPoint>>> {
+        self.pop_event_with(checker, |event| event.get_execution_point())
     }
 
     pub fn pop_manual_checkpoint_request(
         &self,
+        checker: &Checker<Stopped>,
     ) -> Result<WithIsLastEvent<ManualCheckpointRequest>> {
-        self.pop_event_with(|event| event.get_manual_checkpoint_request())
+        self.pop_event_with(checker, |event| event.get_manual_checkpoint_request())
     }
 
-    pub fn pop_incomplete_syscall(&self) -> Result<WithIsLastEvent<Arc<SavedIncompleteSyscall>>> {
-        self.pop_event_with(|event| event.get_incomplete_syscall())
+    pub fn pop_incomplete_syscall(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<Arc<SavedIncompleteSyscall>>> {
+        self.pop_event_with(checker, |event| event.get_incomplete_syscall())
     }
 
-    pub fn pop_event(&self) -> Result<WithIsLastEvent<SavedEvent>> {
-        self.pop_event_with(|event| Ok(event.clone()))
+    pub fn pop_event(&self, checker: &Checker<Stopped>) -> Result<WithIsLastEvent<SavedEvent>> {
+        self.pop_event_with(checker, |event| Ok(event.clone()))
     }
 
-    pub fn pop_signal(&self) -> Result<WithIsLastEvent<SavedSignal>> {
-        self.pop_event_with(|event| event.get_signal())
+    pub fn pop_signal(&self, checker: &Checker<Stopped>) -> Result<WithIsLastEvent<SavedSignal>> {
+        self.pop_event_with(checker, |event| event.get_signal())
     }
 
-    pub fn pop_internal_signal(&self) -> Result<WithIsLastEvent<siginfo_t>> {
-        self.pop_event_with(|event| event.get_signal()?.get_internal_signal())
+    pub fn pop_internal_signal(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<siginfo_t>> {
+        self.pop_event_with(checker, |event| event.get_signal()?.get_internal_signal())
     }
 
-    pub fn pop_program_exit(&self) -> Result<WithIsLastEvent<ProgramExit>> {
-        self.pop_event_with(|event| event.get_program_exit())
+    pub fn pop_program_exit(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<ProgramExit>> {
+        self.pop_event_with(checker, |event| event.get_program_exit())
     }
 
     pub fn peek_event_blocking(&self) -> Result<SavedEvent> {
@@ -245,7 +265,7 @@ impl SegmentReplay {
         exec_point: &impl ExecutionPoint,
         checker: &mut Checker<Stopped>,
     ) -> Result<SignalHandlerExitAction> {
-        let next_event = self.pop_event()?;
+        let next_event = self.pop_event(checker)?;
 
         match &next_event.value {
             SavedEvent::Signal(SavedSignal::External(siginfo, exec_point_expected)) => {

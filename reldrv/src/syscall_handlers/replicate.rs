@@ -79,12 +79,9 @@ impl StandardSyscallHandler for ReplicatedSyscallHandler {
         };
 
         let action_incomplete_syscall = || {
-            let saved_syscall = context
-                .child
-                .unwrap_checker()
-                .exec
-                .replay
-                .pop_incomplete_syscall()?;
+            let checker = context.child.unwrap_checker();
+
+            let saved_syscall = checker.exec.replay.pop_incomplete_syscall(checker)?;
 
             if &saved_syscall.value.syscall != syscall {
                 error!(

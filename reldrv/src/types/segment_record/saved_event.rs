@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     error::{Error, Result, UnexpectedEventReason},
-    types::execution_point::ExecutionPoint,
+    process::state::Stopped,
+    types::{execution_point::ExecutionPoint, process_id::Checker},
 };
 
 use super::{
@@ -22,6 +23,19 @@ pub enum SavedEvent {
     ExecutionPoint(Arc<dyn ExecutionPoint>),
     ManualCheckpointRequest(ManualCheckpointRequest),
     ProgramExit(ProgramExit),
+}
+
+impl SavedEvent {
+    pub fn prepare(&self, checker: &Checker<Stopped>) -> crate::error::Result<()> {
+        match self {
+            SavedEvent::ExecutionPoint(exec_point)
+            | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
+                exec_point.prepare(&checker.segment, &checker.exec)?;
+            }
+            _ => (),
+        }
+        Ok(())
+    }
 }
 
 impl From<SavedSyscall> for SavedEvent {

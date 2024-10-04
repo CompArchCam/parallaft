@@ -36,9 +36,7 @@ where
                 // Main signal, inside protection zone
                 ret = run_instr();
                 #[allow(unreachable_code)]
-                segment
-                    .record
-                    .push_event(create_event(ret), false, segment)?;
+                segment.record.push_event(create_event(ret), false)?;
             } else {
                 // Main signal, outside protection zone
                 ret = run_instr();
@@ -46,7 +44,7 @@ where
         }
         InferiorRefMut::Checker(checker) => {
             // Checker signal
-            let result = checker.exec.replay.pop_trap_event()?;
+            let result = checker.exec.replay.pop_trap_event(checker)?;
             is_last_event = result.is_last_event;
 
             ret = replay_event(*result.value)?;

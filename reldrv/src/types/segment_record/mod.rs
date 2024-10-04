@@ -10,13 +10,10 @@ pub mod saved_trap_event;
 use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
-use saved_signal::SavedSignal;
 
 use self::{saved_event::SavedEvent, saved_syscall::SavedIncompleteSyscall};
 
 use crate::error::Result;
-
-use super::segment::Segment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum MainStatus {
@@ -80,25 +77,8 @@ impl SegmentRecord {
             .and_then(|event| event.get_incomplete_syscall().ok())
     }
 
-    pub fn push_event(
-        &self,
-        event: impl Into<SavedEvent>,
-        is_last: bool,
-        segment: &Segment,
-    ) -> Result<()> {
+    pub fn push_event(&self, event: impl Into<SavedEvent>, is_last: bool) -> Result<()> {
         let event: SavedEvent = event.into();
-
-        match &event {
-            SavedEvent::ExecutionPoint(exec_point)
-            | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
-                assert!(self.with_active_events);
-
-                for exec in segment.checker_execs() {
-                    exec_point.prepare(segment, &exec)?;
-                }
-            }
-            _ => (),
-        };
 
         let mut state = self.state.lock();
         assert_eq!(state.main_status, MainStatus::Filling);
