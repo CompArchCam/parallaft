@@ -39,10 +39,6 @@ impl ExecutionPoint for BranchCounterBasedExecutionPoint {
         debug!("Preparing execution point {self:?}");
         let exec_info_map = self.exec_info_map.lock();
 
-        dbg!(&exec_info_map);
-        dbg!(segment.nr);
-        dbg!(exec.id);
-
         let exec_info = exec_info_map
             .get(&segment.nr)
             .unwrap()
