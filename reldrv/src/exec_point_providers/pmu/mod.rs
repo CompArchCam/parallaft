@@ -356,10 +356,10 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
         &self,
         checker: &mut Checker<Stopped>,
         exec_info: &mut ExecInfo,
-    ) -> Result<()> {
+    ) -> Result<Option<SignalHandlerExitAction>> {
         if exec_info.active_exec_point.is_some() {
             debug!("{checker} Ignoring execution point activation request because there is already an active one");
-            return Ok(());
+            return Ok(None);
         }
 
         if let Some(exec_point) = exec_info.upcoming_exec_points.pop_front() {
@@ -369,7 +369,14 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
             if exec_point.branch_count == branch_count_curr
                 && exec_point.instruction_pointer == checker.process().read_registers()?.ip()
             {
-                return self.activate_first_exec_point_in_queue(checker, exec_info);
+                let result = checker
+                    .exec
+                    .clone()
+                    .replay
+                    .handle_exec_point_reached(&exec_point, checker)?;
+
+                self.activate_first_exec_point_in_queue(checker, exec_info)?;
+                return Ok(Some(result));
             }
 
             let replay_state = ExecutionPointReplayState::setup(
@@ -385,7 +392,7 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
 
             exec_info.active_exec_point = Some((exec_point, replay_state));
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -411,7 +418,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                 {
                     debug!("{checker} Received sigval for preparing exec point");
 
-                    self.activate_first_exec_point_in_queue(
+                    let result = self.activate_first_exec_point_in_queue(
                         checker,
                         &mut self
                             .exec_info_map
@@ -423,6 +430,10 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                             .unwrap()
                             .lock(),
                     )?;
+
+                    if let Some(result) = result {
+                        return Ok(result);
+                    }
 
                     handled = true;
                 } else if let Some(exec_info) = self
