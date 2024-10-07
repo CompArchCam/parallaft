@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use super::{
     checker_status::CheckerStatus,
     segment::Segment,
-    segment_record::{replay::SegmentReplay, SegmentRecord},
+    segment_record::{record::SegmentRecord, replay::SegmentReplay},
 };
 
 use crate::{

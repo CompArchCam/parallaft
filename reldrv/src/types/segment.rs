@@ -17,7 +17,7 @@ use crate::process::Process;
 use super::checker_exec::{CheckerExecution, CheckerExecutionId};
 use super::checkpoint::Checkpoint;
 use super::process_id::InferiorId;
-use super::segment_record::SegmentRecord;
+use super::segment_record::record::SegmentRecord;
 
 pub type SegmentId = u32;
 

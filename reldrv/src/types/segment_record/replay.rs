@@ -14,11 +14,11 @@ use crate::{
 use super::{
     manual_checkpoint::ManualCheckpointRequest,
     program_exit::ProgramExit,
+    record::{MainStatus, SegmentRecord},
     saved_event::{SavedEvent, SavedEventType},
     saved_signal::SavedSignal,
     saved_syscall::{SavedIncompleteSyscall, SavedSyscall},
     saved_trap_event::SavedTrapEvent,
-    MainStatus, SegmentRecord,
 };
 
 #[derive(Debug)]
