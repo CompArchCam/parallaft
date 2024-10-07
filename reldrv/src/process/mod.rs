@@ -19,7 +19,7 @@ use nix::unistd::gettid;
 use pidfd::PidFd;
 use registers::{RegisterAccess, Registers};
 use state::{ProcessState, Running, Stopped, Unowned, WithProcess};
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use nix::{
     errno::Errno,
@@ -49,7 +49,7 @@ struct ProcessHandles {
 pub struct Process<S: ProcessState> {
     pub pid: Pid,
     #[derivative(Debug = "ignore")]
-    handles: Option<ProcessHandles>,
+    handles: Arc<ProcessHandles>,
     state: S,
     owned: bool,
     pub ambient_sigmask: Option<u64>,
@@ -84,7 +84,7 @@ impl<S: ProcessState> Process<S> {
 
         Self {
             pid,
-            handles: Some(ProcessHandles {
+            handles: Arc::new(ProcessHandles {
                 procfs: Lazy::new(),
                 pidfd: Lazy::new(),
             }),
@@ -101,7 +101,7 @@ impl<S: ProcessState> Process<S> {
 
         Process {
             pid: self.pid,
-            handles: self.handles.take(),
+            handles: self.handles.clone(),
             state,
             owned,
             ambient_sigmask: self.ambient_sigmask,
@@ -119,10 +119,7 @@ impl<S: ProcessState> Process<S> {
     pub fn unowned_copy(&self) -> Process<Unowned> {
         Process {
             pid: self.pid,
-            handles: Some(ProcessHandles {
-                procfs: Lazy::new(),
-                pidfd: Lazy::new(),
-            }),
+            handles: self.handles.clone(),
             state: Unowned,
             owned: false,
             ambient_sigmask: None,
@@ -133,7 +130,6 @@ impl<S: ProcessState> Process<S> {
         let p = self
             .handles
             .as_ref()
-            .unwrap()
             .procfs
             .get_or_create(|| procfs::process::Process::new(self.pid.as_raw()))
             .as_ref()
@@ -146,7 +142,6 @@ impl<S: ProcessState> Process<S> {
         let pidfd = self
             .handles
             .as_ref()
-            .unwrap()
             .pidfd
             .get_or_create(|| unsafe { PidFd::open(self.pid.as_raw(), 0) })
             .as_ref()
@@ -452,10 +447,7 @@ impl Clone for Process<Unowned> {
     fn clone(&self) -> Self {
         Self {
             pid: self.pid,
-            handles: Some(ProcessHandles {
-                procfs: Lazy::new(),
-                pidfd: Lazy::new(),
-            }),
+            handles: self.handles.clone(),
             state: Unowned,
             owned: false,
             ambient_sigmask: None,
