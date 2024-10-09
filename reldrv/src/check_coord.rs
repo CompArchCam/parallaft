@@ -122,7 +122,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
             Inferior::Main(main) => {
                 if let Some(segment) = &main.segment {
                     segment.record.push_event(event, true)?;
-                    segment.mark_main_as_completed(None);
+                    segment.mark_main_as_completed(None, true);
                 }
             }
             Inferior::Checker(checker) => {

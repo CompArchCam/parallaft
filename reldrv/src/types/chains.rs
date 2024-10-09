@@ -91,7 +91,7 @@ impl SegmentChains {
 
         if self.in_chain {
             let last_segment = self.list.back().unwrap();
-            last_segment.mark_main_as_completed(Some(checkpoint.clone()));
+            last_segment.mark_main_as_completed(Some(checkpoint.clone()), is_finishing);
 
             result.last_segment = Some(last_segment.clone());
         } else {

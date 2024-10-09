@@ -33,6 +33,7 @@ pub enum SegmentStatus {
     /// filled.
     Filled {
         checkpoint: Option<Arc<Checkpoint>>,
+        is_finishing: bool,
         dirty_page_addresses: Option<Arc<DirtyPageAddressesWithFlags>>,
     },
 
@@ -131,11 +132,16 @@ impl Segment {
         }
     }
 
-    pub fn mark_main_as_completed(&self, checkpoint_end: Option<Arc<Checkpoint>>) {
+    pub fn mark_main_as_completed(
+        &self,
+        checkpoint_end: Option<Arc<Checkpoint>>,
+        is_finishing: bool,
+    ) {
         let mut status = self.status.lock();
         assert!(matches!(&*status, SegmentStatus::Filling { .. }));
         *status = SegmentStatus::Filled {
             checkpoint: checkpoint_end,
+            is_finishing,
             dirty_page_addresses: None,
         };
         drop(status);
