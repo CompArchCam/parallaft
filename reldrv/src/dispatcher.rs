@@ -16,6 +16,7 @@ use crate::{
         comparator::{
             MemoryComparator, MemoryComparsionResult, RegisterComparator, RegisterComparsionResult,
         },
+        exec_point::ExecutionPointEventHandler,
         hctx,
         memory::MemoryEventHandler,
         migration::MigrationHandler,
@@ -94,6 +95,7 @@ pub struct Subscribers<'a> {
     #[cfg(target_arch = "aarch64")]
     instruction_patching_events_handlers: Vec<&'a dyn InstructionPatchingEventHandler>,
     migration_handlers: Vec<&'a dyn MigrationHandler>,
+    exec_point_events_handlers: Vec<&'a dyn ExecutionPointEventHandler>,
 }
 
 impl<'a> Default for Subscribers<'a> {
@@ -123,6 +125,7 @@ impl<'a> Subscribers<'a> {
             #[cfg(target_arch = "aarch64")]
             instruction_patching_events_handlers: Vec::new(),
             migration_handlers: Vec::new(),
+            exec_point_events_handlers: Vec::new(),
         }
     }
 
@@ -199,6 +202,13 @@ impl<'a> Subscribers<'a> {
 
     pub fn install_migration_handler(&mut self, handler: &'a dyn MigrationHandler) {
         self.migration_handlers.push(handler)
+    }
+
+    pub fn install_exec_point_event_handler(
+        &mut self,
+        handler: &'a dyn ExecutionPointEventHandler,
+    ) {
+        self.exec_point_events_handlers.push(handler)
     }
 }
 
@@ -772,6 +782,10 @@ impl MigrationHandler for Dispatcher<'_, '_> {
 
         Ok(())
     }
+}
+
+impl ExecutionPointEventHandler for Dispatcher<'_, '_> {
+    generate_event_handler!(exec_point_events_handlers, fn handle_freestanding_exec_point_reached(&self, exec_point: &dyn ExecutionPoint, checker: &mut Checker<Stopped>));
 }
 
 unsafe impl Sync for Dispatcher<'_, '_> {}

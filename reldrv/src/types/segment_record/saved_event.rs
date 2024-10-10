@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{
     error::{Error, Result, UnexpectedEventReason},
     process::state::Stopped,
-    types::{execution_point::ExecutionPoint, process_id::Checker},
+    types::{
+        execution_point::{ExecutionPoint, ExecutionPointOwner},
+        process_id::Checker,
+    },
 };
 
 use super::{
@@ -30,7 +33,11 @@ impl SavedEvent {
         match self {
             SavedEvent::ExecutionPoint(exec_point)
             | SavedEvent::Signal(SavedSignal::External(_, exec_point)) => {
-                exec_point.prepare(&checker.segment, &checker.exec)?;
+                exec_point.prepare(
+                    &checker.segment,
+                    &checker.exec,
+                    ExecutionPointOwner::SegmentRecord,
+                )?;
             }
             _ => (),
         }

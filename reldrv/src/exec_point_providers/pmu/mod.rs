@@ -19,6 +19,7 @@ use crate::{
     dispatcher::{Module, Subscribers},
     error::{Error, Result},
     events::{
+        exec_point::ExecutionPointEventHandler,
         migration::MigrationHandler,
         process_lifetime::{HandlerContext, ProcessLifetimeHook},
         segment::SegmentEventHandler,
@@ -36,7 +37,7 @@ use crate::{
     types::{
         breakpoint::{breakpoint, Breakpoint},
         checker_exec::CheckerExecutionId,
-        execution_point::ExecutionPoint,
+        execution_point::{ExecutionPoint, ExecutionPointOwner},
         perf_counter::{
             symbolic_events::{
                 expr::{lookup_cpu_model_and_pmu_name_from_cpu_set, Target},
@@ -64,8 +65,12 @@ pub struct ExecInfo {
     branch_count_offset: u64,
     #[derivative(Debug = "ignore")]
     checker_branch_counter: Option<BranchCounter>,
-    active_exec_point: Option<(BranchCounterBasedExecutionPoint, ExecutionPointReplayState)>,
-    upcoming_exec_points: LinkedList<BranchCounterBasedExecutionPoint>,
+    active_exec_point: Option<(
+        BranchCounterBasedExecutionPoint,
+        ExecutionPointOwner,
+        ExecutionPointReplayState,
+    )>,
+    upcoming_exec_points: LinkedList<(BranchCounterBasedExecutionPoint, ExecutionPointOwner)>,
 }
 
 impl ExecInfo {
@@ -105,7 +110,7 @@ impl ExecInfo {
     ) -> Result<()> {
         self.init_or_migrate_branch_counter(checker_process.pid, new_cpu_set, false)?;
 
-        if let Some((exec_point, state)) = self.active_exec_point.as_mut() {
+        if let Some((exec_point, _, state)) = self.active_exec_point.as_mut() {
             if let ExecutionPointReplayState::CountingBranches { .. } = state {
                 *state = ExecutionPointReplayState::setup(
                     exec_point,
@@ -129,6 +134,32 @@ impl ExecInfo {
         self.checker_branch_counter = None;
         self.active_exec_point = None;
         self.upcoming_exec_points.clear();
+    }
+
+    pub fn add_exec_point_to_queue(
+        &mut self,
+        ep: BranchCounterBasedExecutionPoint,
+        owner: ExecutionPointOwner,
+    ) -> Result<()> {
+        let mut new_list = LinkedList::new();
+        let mut new_ep = Some(ep);
+
+        while let Some((e_ep, e_owner)) = self.upcoming_exec_points.pop_front() {
+            if let Some(n_ep) = &new_ep {
+                if &e_ep > n_ep {
+                    new_list.push_back((n_ep.clone(), owner));
+                    new_ep = None;
+                }
+            }
+            new_list.push_back((e_ep, e_owner));
+        }
+
+        if let Some(n_ep) = new_ep.take() {
+            new_list.push_back((n_ep, owner));
+        }
+
+        self.upcoming_exec_points = new_list;
+        Ok(())
     }
 }
 
@@ -290,7 +321,7 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
     fn handle_checker_exec_ready(
         &self,
         checker: &mut Checker<Stopped>,
-        _ctx: HandlerContext,
+        ctx: HandlerContext,
     ) -> Result<()> {
         let exec_info_map = self.exec_info_map.lock();
 
@@ -308,7 +339,11 @@ impl SegmentEventHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
         drop(checker_status);
 
-        self.activate_first_exec_point_in_queue(checker, &mut exec_info)?;
+        self.activate_first_exec_point_in_queue(
+            checker,
+            &mut exec_info,
+            ctx.check_coord.dispatcher,
+        )?;
 
         Ok(())
     }
@@ -352,30 +387,85 @@ impl ProcessLifetimeHook for PerfCounterBasedExecutionPointProvider<'_> {
 }
 
 impl PerfCounterBasedExecutionPointProvider<'_> {
+    fn handle_exec_point_reached(
+        &self,
+        ep: &BranchCounterBasedExecutionPoint,
+        owner: ExecutionPointOwner,
+        checker: &mut Checker<Stopped>,
+        dispatcher: &impl ExecutionPointEventHandler,
+    ) -> Result<SignalHandlerExitAction> {
+        match owner {
+            ExecutionPointOwner::SegmentRecord => checker
+                .exec
+                .clone()
+                .replay
+                .handle_exec_point_reached(ep, checker),
+            ExecutionPointOwner::Freestanding => {
+                dispatcher.handle_freestanding_exec_point_reached(ep, checker)?;
+                Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
+                    single_step: false,
+                })
+            }
+        }
+    }
+
     fn activate_first_exec_point_in_queue(
         &self,
         checker: &mut Checker<Stopped>,
         exec_info: &mut ExecInfo,
+        dispatcher: &impl ExecutionPointEventHandler,
     ) -> Result<Option<SignalHandlerExitAction>> {
-        if exec_info.active_exec_point.is_some() {
-            debug!("{checker} Ignoring execution point activation request because there is already an active one");
-            return Ok(None);
+        let mut ep_to_activate = None;
+
+        if let Some((active_ep, _, _)) = &exec_info.active_exec_point {
+            let mut replaced = false;
+
+            if let Some((first_ep, first_ep_owner)) = exec_info.upcoming_exec_points.front() {
+                if first_ep < active_ep {
+                    debug!("{checker} Replacing active exec point with the upcoming one");
+                    ep_to_activate = Some((first_ep.clone(), *first_ep_owner));
+
+                    let (active_ep, active_ep_owner, state) =
+                        exec_info.active_exec_point.take().unwrap();
+
+                    match state {
+                        ExecutionPointReplayState::Stepping { mut breakpoint, .. } => {
+                            breakpoint.disable(checker.process_mut())?;
+                        }
+                        _ => (),
+                    }
+
+                    exec_info.add_exec_point_to_queue(active_ep, active_ep_owner)?;
+                    replaced = true;
+                }
+            }
+
+            if !replaced {
+                return Ok(None);
+            }
         }
 
-        if let Some(exec_point) = exec_info.upcoming_exec_points.pop_front() {
+        if ep_to_activate.is_none() {
+            if let Some(first) = exec_info.upcoming_exec_points.pop_front() {
+                assert!(exec_info.active_exec_point.is_none());
+                ep_to_activate = Some(first);
+            }
+        }
+
+        if let Some((exec_point, owner)) = ep_to_activate.take() {
             let branch_count_curr = exec_info.current_branch_count()?;
             assert!(exec_point.branch_count >= branch_count_curr);
 
             if exec_point.branch_count == branch_count_curr
                 && exec_point.instruction_pointer == checker.process().read_registers()?.ip()
             {
-                let result = checker
-                    .exec
-                    .clone()
-                    .replay
-                    .handle_exec_point_reached(&exec_point, checker)?;
+                let result =
+                    self.handle_exec_point_reached(&exec_point, owner, checker, dispatcher)?;
 
-                self.activate_first_exec_point_in_queue(checker, exec_info)?;
+                assert!(self
+                    .activate_first_exec_point_in_queue(checker, exec_info, dispatcher)?
+                    .is_none());
+
                 return Ok(Some(result));
             }
 
@@ -390,7 +480,7 @@ impl PerfCounterBasedExecutionPointProvider<'_> {
 
             debug!("{checker} Set up exec point {exec_point:?}, current branch count = {branch_count_curr}, replay state = {replay_state:?}");
 
-            exec_info.active_exec_point = Some((exec_point, replay_state));
+            exec_info.active_exec_point = Some((exec_point, owner, replay_state));
         }
         Ok(None)
     }
@@ -429,6 +519,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                             .map(|x| x.clone())
                             .unwrap()
                             .lock(),
+                        context.check_coord.dispatcher,
                     )?;
 
                     if let Some(result) = result {
@@ -444,7 +535,8 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                     .cloned()
                 {
                     let mut exec_info = exec_info.lock();
-                    if let Some((exec_point, mut state)) = exec_info.active_exec_point.take() {
+                    if let Some((exec_point, owner, mut state)) = exec_info.active_exec_point.take()
+                    {
                         let mut replay_done = false;
 
                         let sig_info = checker.process().get_siginfo()?;
@@ -534,7 +626,7 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
                                             })?;
 
                                             debug!(
-                                                "{checker} Reached execution point {exec_point:?}"
+                                                "{checker} Reached execution point: {exec_point}"
                                             );
 
                                             replay_done = true;
@@ -566,14 +658,19 @@ impl SignalHandler for PerfCounterBasedExecutionPointProvider<'_> {
 
                         if replay_done {
                             debug!("{checker} Execution point replay finished");
-                            self.activate_first_exec_point_in_queue(checker, &mut exec_info)?;
-                            return checker
-                                .exec
-                                .clone()
-                                .replay
-                                .handle_exec_point_reached(&exec_point, checker);
+                            self.activate_first_exec_point_in_queue(
+                                checker,
+                                &mut exec_info,
+                                context.check_coord.dispatcher,
+                            )?;
+                            return self.handle_exec_point_reached(
+                                &exec_point,
+                                owner,
+                                checker,
+                                context.check_coord.dispatcher,
+                            );
                         } else {
-                            exec_info.active_exec_point = Some((exec_point, state));
+                            exec_info.active_exec_point = Some((exec_point, owner, state));
                         }
                     }
                 }
@@ -608,6 +705,7 @@ impl StandardSyscallHandler for PerfCounterBasedExecutionPointProvider<'_> {
                 let mut exec_info = exec_info.lock();
                 match &mut exec_info.active_exec_point {
                     Some((
+                        _,
                         _,
                         ExecutionPointReplayState::Stepping {
                             breakpoint,

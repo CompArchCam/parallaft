@@ -1,4 +1,7 @@
-use std::{any::Any, fmt::Debug};
+use std::{
+    any::Any,
+    fmt::{Debug, Display},
+};
 
 use super::{checker_exec::CheckerExecution, segment::Segment};
 
@@ -32,9 +35,17 @@ impl PartialEq for dyn DynEq {
     }
 }
 
-#[allow(unused_variables)]
-pub trait ExecutionPoint: DynEq + Debug + Send + Sync {
-    fn prepare(&self, segment: &Segment, exec: &CheckerExecution) -> Result<()> {
-        Ok(())
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPointOwner {
+    SegmentRecord,
+    Freestanding,
+}
+
+pub trait ExecutionPoint: DynEq + Debug + Send + Sync + Display {
+    fn prepare(
+        &self,
+        segment: &Segment,
+        exec: &CheckerExecution,
+        owner: ExecutionPointOwner,
+    ) -> Result<()>;
 }
