@@ -110,8 +110,8 @@ impl_maps!(Main, segment);
 impl<S: ProcessState> Display for Main<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.segment.as_ref() {
-            Some(segment) => write!(f, "[M{:>6}]", segment.nr),
-            None => write!(f, "[M      ]"),
+            Some(segment) => write!(f, "[M{:>8}]", segment.nr),
+            None => write!(f, "[M        ]"),
         }
     }
 }
@@ -321,7 +321,7 @@ impl Checker<Stopped> {
 
 impl<S: ProcessState> Display for Checker<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[C{:>6}]", self.segment.nr)
+        write!(f, "[C{:>6}/{}]", self.segment.nr, self.exec.id)
     }
 }
 
@@ -523,9 +523,9 @@ impl<'a, S: ProcessState> From<&mut InferiorRefMut<'a, S>> for InferiorId {
 impl Display for InferiorId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferiorId::Main(Some(main)) => write!(f, "[M{:>6}]", main.nr),
-            InferiorId::Main(None) => write!(f, "[M      ]"),
-            InferiorId::Checker(checker, _) => write!(f, "[C{:>6}]", checker.nr),
+            InferiorId::Main(Some(main)) => write!(f, "[M{:>8}]", main.nr),
+            InferiorId::Main(None) => write!(f, "[M        ]"),
+            InferiorId::Checker(checker, exec) => write!(f, "[C{:>6}/{}]", checker.nr, exec.id),
         }
     }
 }
@@ -680,8 +680,8 @@ impl<S: ProcessState> From<&InferiorRefMut<'_, S>> for InferiorRole {
 impl Display for InferiorRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferiorRole::Main => write!(f, "[M     ?]"),
-            InferiorRole::Checker(segment) => write!(f, "[C{:>6}]", segment.nr),
+            InferiorRole::Main => write!(f, "[M       ?]"),
+            InferiorRole::Checker(segment) => write!(f, "[C{:>6}/?]", segment.nr),
         }
     }
 }

@@ -103,7 +103,7 @@ impl Ord for Segment {
 
 impl Display for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[S{:>6}]", self.nr)
+        write!(f, "[S{:>8}]", self.nr)
     }
 }
 
