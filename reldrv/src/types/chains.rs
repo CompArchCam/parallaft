@@ -89,30 +89,39 @@ impl SegmentChains {
             new_segment: None,
         };
 
+        let mut segment = None;
+        if !is_finishing {
+            segment = Some(Arc::new(Segment::new(
+                checkpoint.clone(),
+                self.next_id,
+                main,
+                ongoing_syscall,
+                enable_async_events,
+            )));
+        }
+
         if self.in_chain {
             let last_segment = self.list.back().unwrap();
-            last_segment.mark_main_as_completed(Some(checkpoint.clone()), is_finishing);
+            if let Some(segment) = &segment {
+                *last_segment.next.lock() = Some(segment.clone());
+            }
+            last_segment.mark_main_as_completed(Some(checkpoint), is_finishing);
 
             result.last_segment = Some(last_segment.clone());
         } else {
             assert!(!is_finishing);
         }
 
-        if !is_finishing {
-            let segment = Segment::new(
-                checkpoint,
-                self.next_id,
-                main,
-                ongoing_syscall,
-                enable_async_events,
-            );
-
+        if let Some(segment) = segment {
             self.next_id += 1;
             self.in_chain = true;
 
             // debug!("New segment: {:?}", segment);
 
-            let segment = Arc::new(segment);
+            if let Some(last_segment) = &result.last_segment {
+                *last_segment.next.lock() = Some(segment.clone());
+            }
+
             self.list.push_back(segment.clone());
 
             result.new_segment = Some(segment);

@@ -72,6 +72,7 @@ pub struct Segment {
     pub pinned: Mutex<bool>,
     pub ongoing_syscall: Option<SyscallType>,
     exec_id: AtomicU32,
+    pub next: Mutex<Option<Arc<Segment>>>,
 }
 
 impl Hash for Segment {
@@ -129,6 +130,7 @@ impl Segment {
             pinned: Mutex::new(false),
             ongoing_syscall,
             exec_id: AtomicU32::new(1),
+            next: Mutex::new(None),
         }
     }
 
