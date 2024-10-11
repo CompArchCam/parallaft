@@ -125,7 +125,7 @@ impl Segment {
             }),
             status_cvar: Condvar::new(),
             record: record.clone(),
-            main_checker_exec: Arc::new(CheckerExecution::new(0, record.clone())),
+            main_checker_exec: Arc::new(CheckerExecution::new(0, record.clone(), false)),
             aux_checker_exec: Mutex::new(HashMap::new()),
             pinned: Mutex::new(false),
             ongoing_syscall,
@@ -259,13 +259,14 @@ impl Segment {
             .collect()
     }
 
-    pub fn new_checker_exec(&self) -> Arc<CheckerExecution> {
+    pub fn new_checker_exec(&self, no_check: bool) -> Arc<CheckerExecution> {
         assert!(*self.pinned.lock());
 
         let exec = Arc::new(CheckerExecution::new(
             self.exec_id
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             self.record.clone(),
+            no_check,
         ));
 
         self.aux_checker_exec.lock().insert(exec.id, exec.clone());

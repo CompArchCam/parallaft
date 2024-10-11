@@ -23,14 +23,16 @@ pub struct CheckerExecution {
     pub id: CheckerExecutionId,
     pub status: Mutex<CheckerStatus>,
     pub replay: SegmentReplay,
+    pub no_check: bool,
 }
 
 impl CheckerExecution {
-    pub fn new(id: CheckerExecutionId, record: Arc<SegmentRecord>) -> Self {
+    pub fn new(id: CheckerExecutionId, record: Arc<SegmentRecord>, no_check: bool) -> Self {
         Self {
             id,
             status: Mutex::new(CheckerStatus::NotReady),
             replay: SegmentReplay::new(record),
+            no_check,
         }
     }
 

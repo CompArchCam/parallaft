@@ -486,7 +486,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         let check_fail_reason;
 
-        if self.options.no_state_cmp {
+        if self.options.no_state_cmp || checker.exec.no_check {
             check_fail_reason = None;
             checker.exec.status.lock().assume_checked();
         } else {
