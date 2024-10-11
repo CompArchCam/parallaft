@@ -482,7 +482,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         info!("{checker} Checkpoint");
 
         self.dispatcher
-            .handle_checker_exec_completed(&mut checker)?;
+            .handle_checker_exec_completed(&mut checker, pctx(self, scope))?;
 
         let check_fail_reason;
 

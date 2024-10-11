@@ -113,7 +113,11 @@ pub trait SegmentEventHandler: Sync {
     /// but is not yet checked.
     /// # States
     /// checker: ptrace-stopped
-    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_checker_exec_completed(
+        &self,
+        checker: &mut Checker<Stopped>,
+        ctx: HandlerContext,
+    ) -> Result<()> {
         Ok(())
     }
 

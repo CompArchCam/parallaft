@@ -326,7 +326,11 @@ impl SegmentEventHandler for Tracer {
         Ok(())
     }
 
-    fn handle_checker_exec_completed(&self, checker: &mut Checker<Stopped>) -> Result<()> {
+    fn handle_checker_exec_completed(
+        &self,
+        checker: &mut Checker<Stopped>,
+        _ctx: HandlerContext,
+    ) -> Result<()> {
         self.account_checker_cpu_time(checker)?;
 
         let ticks_per_second = procfs::ticks_per_second();
