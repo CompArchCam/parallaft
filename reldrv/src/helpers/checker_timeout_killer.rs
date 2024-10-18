@@ -25,7 +25,8 @@ use crate::{
         checker_exec::CheckerExecutionId,
         perf_counter::{
             symbolic_events::{
-                expr::Target, GenericHardwareEventCounter, GenericHardwareEventCounterWithInterrupt,
+                expr::{lookup_cpu_model_and_pmu_name_from_cpu_set, Target},
+                GenericHardwareEventCounter, GenericHardwareEventCounterWithInterrupt,
             },
             PerfCounter, PerfCounterWithInterrupt,
         },
@@ -95,13 +96,23 @@ impl<'a> CheckerTimeoutKiller<'a> {
             old_count = checker_insn_irq.read()?;
         }
 
+        let nr_insns = ((segment_info.main_insn_count.unwrap() as f64) * (1.0 + Self::HEADROOM))
+            as u64
+            - old_count;
+
+        let nr_insns = nr_insns.max(
+            lookup_cpu_model_and_pmu_name_from_cpu_set(new_cpu_set)
+                .unwrap()
+                .0
+                .min_irq_period(),
+        );
+
         exec_info.checker_insn_irq = Some(GenericHardwareEventCounterWithInterrupt::new(
             Hardware::INSTRUCTIONS,
             pid,
             true,
             new_cpu_set,
-            ((segment_info.main_insn_count.unwrap() as f64) * (1.0 + Self::HEADROOM)) as u64
-                - old_count,
+            nr_insns,
             None,
         )?);
 
