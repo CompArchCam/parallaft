@@ -23,6 +23,7 @@ use crate::{
     },
     process::state::Stopped,
     types::{
+        checker_exec::CheckerExecutionId,
         exit_reason::ExitReason,
         process_id::{Checker, Main},
         segment::SegmentId,
@@ -138,7 +139,7 @@ struct CheckerState {
 
 pub struct Tracer {
     durations: Mutex<HashMap<Event, Duration>>,
-    checker_states: Mutex<HashMap<SegmentId, CheckerState>>,
+    checker_states: Mutex<HashMap<(SegmentId, CheckerExecutionId), CheckerState>>,
     exit_status: Mutex<Option<i32>>,
 }
 
@@ -187,7 +188,9 @@ impl Tracer {
 
     fn account_checker_cpu_time(&self, checker: &Checker<Stopped>) -> Result<()> {
         let mut checker_states = self.checker_states.lock();
-        let checker_state = checker_states.get_mut(&checker.segment.nr).unwrap();
+        let checker_state = checker_states
+            .get_mut(&(checker.segment.nr, checker.exec.id))
+            .unwrap();
 
         let ticks_per_second = procfs::ticks_per_second();
         let stats = checker.process().stats()?;
@@ -315,7 +318,7 @@ impl SegmentEventHandler for Tracer {
         _ctx: HandlerContext,
     ) -> Result<()> {
         self.checker_states.lock().insert(
-            checker.segment.nr,
+            (checker.segment.nr, checker.exec.id),
             CheckerState {
                 last_cpu_set: checker.exec.status.lock().cpu_set().unwrap().into(),
                 last_user_time: Duration::ZERO,
