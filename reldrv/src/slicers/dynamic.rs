@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::AtomicU32,
+        atomic::AtomicU64,
         mpsc::{channel, RecvTimeoutError, Sender},
     },
     time::Duration,
@@ -75,7 +75,7 @@ pub struct DynamicSlicer {
     params: DynamicSlicerParams,
     worker: Mutex<Option<Sender<()>>>,
     main_cycles_counter: Mutex<Option<GenericHardwareEventCounter>>,
-    epoch: AtomicU32,
+    epoch: AtomicU64,
 }
 
 impl DynamicSlicer {
@@ -85,7 +85,7 @@ impl DynamicSlicer {
             params: DynamicSlicerParams::default(),
             worker: Mutex::new(None),
             main_cycles_counter: Mutex::new(None),
-            epoch: AtomicU32::new(0),
+            epoch: AtomicU64::new(0),
         }
     }
 

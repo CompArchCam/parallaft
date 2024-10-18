@@ -16,7 +16,7 @@ use crate::{
     process::{state::Stopped, Process},
 };
 
-pub type CheckerExecutionId = u32;
+pub type CheckerExecutionId = u64;
 
 #[derive(Debug)]
 pub struct CheckerExecution {

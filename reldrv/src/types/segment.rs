@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ops::Range;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use parking_lot::{Condvar, MappedMutexGuard, Mutex, MutexGuard};
@@ -19,7 +19,7 @@ use super::checkpoint::Checkpoint;
 use super::process_id::InferiorId;
 use super::segment_record::record::SegmentRecord;
 
-pub type SegmentId = u32;
+pub type SegmentId = u64;
 
 #[derive(Debug)]
 pub enum SegmentStatus {
@@ -71,7 +71,7 @@ pub struct Segment {
     pub aux_checker_exec: Mutex<HashMap<CheckerExecutionId, Arc<CheckerExecution>>>,
     pub pinned: Mutex<bool>,
     pub ongoing_syscall: Option<SyscallType>,
-    exec_id: AtomicU32,
+    pub exec_id: AtomicU64,
     pub next: Mutex<Option<Arc<Segment>>>,
 }
 
@@ -129,7 +129,7 @@ impl Segment {
             aux_checker_exec: Mutex::new(HashMap::new()),
             pinned: Mutex::new(false),
             ongoing_syscall,
-            exec_id: AtomicU32::new(1),
+            exec_id: AtomicU64::new(1),
             next: Mutex::new(None),
         }
     }
