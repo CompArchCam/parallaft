@@ -740,13 +740,13 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
                     }
                 }
 
+                self.dispatcher.handle_checker_exec_fini(&segment, &exec, pctx(self, scope)).unwrap();
+
                 self.cleanup_committed_segments(&mut self.segments.write(), true).unwrap();
 
                 if abort {
                     self.abort_main();
                 }
-
-                self.dispatcher.handle_checker_exec_fini(&segment, &exec, pctx(self, scope)).unwrap();
             })
             .unwrap();
 
