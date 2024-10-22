@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 use crate::{
     dirty_page_trackers::DirtyPageAddressesWithFlags,
@@ -30,6 +30,17 @@ pub enum CheckerStatus {
         dirty_page_addresses: Arc<DirtyPageAddressesWithFlags>,
     },
     Crashed(Error),
+}
+
+impl Display for CheckerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckerStatus::NotReady => write!(f, "NotReady"),
+            CheckerStatus::Executing { .. } => write!(f, "Executing"),
+            CheckerStatus::Checked { .. } => write!(f, "Checked"),
+            CheckerStatus::Crashed(err) => write!(f, "Crashed: {}", err),
+        }
+    }
 }
 
 impl CheckerStatus {

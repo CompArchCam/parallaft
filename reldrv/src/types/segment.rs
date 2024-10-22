@@ -41,6 +41,16 @@ pub enum SegmentStatus {
     Crashed,
 }
 
+impl Display for SegmentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SegmentStatus::Filling { .. } => write!(f, "Filling"),
+            SegmentStatus::Filled { .. } => write!(f, "Filled"),
+            SegmentStatus::Crashed => write!(f, "Crashed"),
+        }
+    }
+}
+
 impl SegmentStatus {
     pub fn checkpoint_end(&self) -> Option<Arc<Checkpoint>> {
         match self {
@@ -281,5 +291,15 @@ impl Segment {
             .is_none());
 
         exec
+    }
+
+    pub fn state_as_str(&self) -> String {
+        format!(
+            "Segment {}: MSt {}, CSt: {}, pinned = {}",
+            self.nr,
+            self.status.lock(),
+            self.main_checker_exec.status.lock(),
+            *self.pinned.lock()
+        )
     }
 }

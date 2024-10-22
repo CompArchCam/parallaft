@@ -1,5 +1,5 @@
 use std::collections::LinkedList;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::check_coord::SyscallType;
@@ -22,6 +22,16 @@ pub struct SegmentChains {
 impl Default for SegmentChains {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for SegmentChains {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.list
+            .iter()
+            .try_for_each(|s| writeln!(f, "{}", s.state_as_str()))?;
+
+        Ok(())
     }
 }
 
