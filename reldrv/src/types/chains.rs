@@ -159,12 +159,17 @@ impl SegmentChains {
                 }
                 drop(status);
 
-                let checker_status = front.main_checker_exec.status.lock();
+                let main_checker_status = front.main_checker_exec.status.lock();
+                let aux_checker_all_finished = front
+                    .aux_checker_exec
+                    .lock()
+                    .values()
+                    .all(|x| x.is_finished());
 
-                if checker_status.is_finished() {
+                if main_checker_status.is_finished() && aux_checker_all_finished {
                     if keep_mismatch_segments
                         && matches!(
-                            &*checker_status,
+                            &*main_checker_status,
                             CheckerStatus::Checked {
                                 result: Some(..),
                                 ..
@@ -175,7 +180,7 @@ impl SegmentChains {
                     }
 
                     if keep_crashed_segments
-                        && matches!(&*checker_status, CheckerStatus::Crashed(..))
+                        && matches!(&*main_checker_status, CheckerStatus::Crashed(..))
                     {
                         break;
                     }
@@ -185,7 +190,7 @@ impl SegmentChains {
                         break;
                     }
 
-                    drop(checker_status);
+                    drop(main_checker_status);
 
                     on_segment_removed(front.clone())?;
                     self.list.pop_front();
