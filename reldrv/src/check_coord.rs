@@ -1470,4 +1470,8 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
 
         Ok(())
     }
+
+    pub fn wakeup_main_worker(&self) {
+        self.main_thread.unpark();
+    }
 }
