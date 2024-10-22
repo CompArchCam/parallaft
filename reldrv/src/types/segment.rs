@@ -260,16 +260,25 @@ impl Segment {
     }
 
     pub fn new_checker_exec(&self, no_check: bool) -> Arc<CheckerExecution> {
-        assert!(*self.pinned.lock());
-
-        let exec = Arc::new(CheckerExecution::new(
+        self.new_checker_exec_with_id(
             self.exec_id
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            self.record.clone(),
             no_check,
-        ));
+        )
+    }
 
-        self.aux_checker_exec.lock().insert(exec.id, exec.clone());
+    pub fn new_checker_exec_with_id(
+        &self,
+        id: CheckerExecutionId,
+        no_check: bool,
+    ) -> Arc<CheckerExecution> {
+        let exec = Arc::new(CheckerExecution::new(id, self.record.clone(), no_check));
+
+        assert!(self
+            .aux_checker_exec
+            .lock()
+            .insert(exec.id, exec.clone())
+            .is_none());
 
         exec
     }
