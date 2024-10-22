@@ -702,7 +702,7 @@ impl<'disp, 'modules, 'tracer> CheckCoordinator<'disp, 'modules, 'tracer> {
         let mut workers = self.workers.lock();
 
         let jh = std::thread::Builder::new()
-            .name(format!("checker-{}", segment.nr))
+            .name(format!("checker-{}/{}", segment.nr, exec.id))
             .spawn_scoped(scope, move || {
                 let ret = catch_unwind(AssertUnwindSafe(|| {
                     self.checker_work(exec.clone(), segment.clone(), scope)
