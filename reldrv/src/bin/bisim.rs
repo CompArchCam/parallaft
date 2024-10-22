@@ -1,14 +1,21 @@
 use core::panic;
-use std::{collections::HashMap, fs::OpenOptions, path::PathBuf, process::Command, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    path::PathBuf,
+    process::Command,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 use clap::Parser;
 use derivative::Derivative;
 use git_version::git_version;
 use log::info;
 use nix::sys::signal::Signal;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use perf_event::events::Hardware;
 use reldrv::{
+    dispatcher::Module,
     events::{
         exec_point::ExecutionPointEventHandler,
         process_lifetime::HandlerContext,
@@ -19,11 +26,14 @@ use reldrv::{
     exec_point_providers::ExecutionPointProvider,
     process::{
         registers::{RegisterAccess, Registers},
-        state::{Running, Stopped},
+        state::{ProcessState, Running, Stopped},
     },
     types::{
-        checker_exec::CheckerExecution,
+        checker_exec::{CheckerExecution, CheckerExecutionId},
+        checker_status::CheckFailReason,
+        checkpoint::{Checkpoint, CheckpointCaller},
         execution_point::{ExecutionPoint, ExecutionPointOwner},
+        exit_reason::ExitReason,
         perf_counter::{
             symbolic_events::{
                 GenericHardwareEventCounter, GenericHardwareEventCounterWithInterrupt,
@@ -43,25 +53,9 @@ struct CliArgs {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
-    /// Number of error injection iterations per segment
-    #[arg(short = 'n', long, default_value = "10")]
-    iters_per_segment: u64,
-
-    /// Ignore missed injections
-    #[arg(short = 'i', long)]
-    ignore_missed: bool,
-
     /// Don't actually inject errors
     #[arg(short, long)]
     dry_run: bool,
-
-    /// Start injection on or newer than the specified segment number
-    #[arg(short, long)]
-    since: Option<SegmentId>,
-
-    /// Stop injection on or older than the specified segment number
-    #[arg(short, long)]
-    until: Option<SegmentId>,
 
     /// Result output filename
     #[arg(short, long)]
@@ -75,16 +69,64 @@ struct CliArgs {
     args: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ExecutionOutcome {
+    Benigh,
+    Detected,
+    Exception,
+    Timeout,
+    Other,
+}
+
+impl From<&reldrv::error::Error> for ExecutionOutcome {
+    fn from(value: &reldrv::error::Error) -> Self {
+        match value {
+            reldrv::error::Error::CheckerTimeout => ExecutionOutcome::Timeout,
+            reldrv::error::Error::ExecPointReplayUnexpectedSkid
+            | reldrv::error::Error::UnexpectedEvent(_) => ExecutionOutcome::Detected,
+            reldrv::error::Error::UnexpectedCheckerExitReason(ExitReason::Signalled(sig))
+                if [Signal::SIGSEGV, Signal::SIGBUS, Signal::SIGILL].contains(sig) =>
+            {
+                ExecutionOutcome::Exception
+            }
+            _ => ExecutionOutcome::Other,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RaftLikeExecution {
+    in_initial_segment: bool,
+    initial_segment: Arc<Segment>,
     segment: Arc<Segment>,
     exec: Arc<CheckerExecution>,
+    outcome: Option<ExecutionOutcome>,
 }
 
 #[derive(Debug)]
 struct ParaHeteroExecution {
-    segment: Arc<Segment>,
-    exec: Arc<CheckerExecution>,
+    outcome: Option<ExecutionOutcome>,
+}
+
+#[derive(Debug)]
+enum Execution {
+    RaftLikeExecution(RaftLikeExecution),
+    ParaHeteroExecution(ParaHeteroExecution),
+}
+
+impl Execution {
+    fn outcome(&self) -> Option<ExecutionOutcome> {
+        match self {
+            Self::RaftLikeExecution(RaftLikeExecution { outcome, .. }) => *outcome,
+            Self::ParaHeteroExecution(ParaHeteroExecution { outcome, .. }) => *outcome,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+enum ExecType {
+    RaftLike,
+    ParaHetero,
 }
 
 #[derive(Derivative)]
@@ -102,37 +144,69 @@ enum SegmentStatus {
     },
     Injecting {
         exec_point: Arc<dyn ExecutionPoint>,
+        registers_without_fault: Registers,
         registers_with_fault: Registers,
-        raft_like_exec: Option<RaftLikeExecution>,
-        para_hetero_exec: Option<ParaHeteroExecution>,
+        execs: HashMap<CheckerExecutionId, Arc<Mutex<Execution>>>,
     },
-    Done,
 }
 
 #[derive(Debug)]
 struct SegmentState {
-    nr: SegmentId,
     status: SegmentStatus,
 }
 
 impl SegmentState {
-    fn new(nr: SegmentId) -> Self {
+    fn new() -> Self {
         Self {
-            nr,
             status: SegmentStatus::New,
         }
     }
 }
 
 struct BisimErrorInjector {
-    segments: Mutex<HashMap<SegmentId, SegmentState>>,
+    stats: Arc<Mutex<HashMap<ExecType, HashMap<ExecutionOutcome, u64>>>>,
+    segments: Mutex<HashMap<SegmentId, Arc<Mutex<SegmentState>>>>,
 }
 
 impl BisimErrorInjector {
-    fn new() -> Self {
+    fn new(stats: Arc<Mutex<HashMap<ExecType, HashMap<ExecutionOutcome, u64>>>>) -> Self {
         Self {
+            stats,
             segments: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn incr_stat(&self, exec_type: ExecType, outcome: ExecutionOutcome) {
+        info!("{exec_type:?} outcome: {outcome:?}");
+
+        *self
+            .stats
+            .lock()
+            .entry(exec_type)
+            .or_default()
+            .entry(outcome)
+            .or_default() += 1;
+    }
+}
+
+fn initial_segment_nr(segment: &Segment, exec: &CheckerExecution) -> SegmentId {
+    if exec.id & EXEC_ID_RAFT_LIKE_BIT != 0 {
+        exec.id & EXEC_ID_RAFT_LIKE_INITIAL_NR_MASK
+    } else {
+        segment.nr
+    }
+}
+
+trait InitialSegmentNrExt {
+    fn initial_segment_nr(&self) -> SegmentId;
+}
+
+const EXEC_ID_RAFT_LIKE_BIT: u64 = 1 << 63;
+const EXEC_ID_RAFT_LIKE_INITIAL_NR_MASK: u64 = (1 << 63) - 1;
+
+impl<S: ProcessState> InitialSegmentNrExt for Checker<S> {
+    fn initial_segment_nr(&self) -> SegmentId {
+        initial_segment_nr(&self.segment, &self.exec)
     }
 }
 
@@ -141,14 +215,12 @@ impl SegmentEventHandler for BisimErrorInjector {
         if let Some(segment) = &main.segment {
             self.segments
                 .lock()
-                .insert(segment.nr, SegmentState::new(segment.nr));
+                .entry(segment.nr)
+                .or_insert_with(|| Arc::new(Mutex::new(SegmentState::new())));
+
+            // *segment.pinned.lock() = true;
         }
 
-        Ok(())
-    }
-
-    fn handle_segment_filled(&self, main: &mut Main<Running>) -> reldrv::error::Result<()> {
-        // start checker
         Ok(())
     }
 
@@ -157,8 +229,14 @@ impl SegmentEventHandler for BisimErrorInjector {
         checker: &mut Checker<Stopped>,
         _ctx: HandlerContext,
     ) -> reldrv::error::Result<()> {
-        let mut segments = self.segments.lock();
-        let state = segments.get_mut(&checker.segment.nr).unwrap();
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&checker.initial_segment_nr())
+            .unwrap()
+            .clone();
+
+        let mut state = state_arc.lock();
 
         match &mut state.status {
             SegmentStatus::New => {
@@ -189,15 +267,21 @@ impl SegmentEventHandler for BisimErrorInjector {
                     None,
                 )?);
             }
-            SegmentStatus::Injecting { exec_point, .. } => {
-                info!("{checker} Preparing execution point for error injection");
-                exec_point.prepare(
-                    &checker.segment,
-                    &checker.exec,
-                    ExecutionPointOwner::Freestanding,
-                )?;
+            SegmentStatus::Injecting {
+                exec_point, execs, ..
+            } => {
+                if let Some(exec) = execs.get(&checker.exec.id) {
+                    if !matches!(&*exec.lock(), Execution::RaftLikeExecution(raft_like_exec) if !raft_like_exec.in_initial_segment)
+                    {
+                        info!("{checker} Preparing execution point for error injection");
+                        exec_point.prepare(
+                            &checker.segment,
+                            &checker.exec,
+                            ExecutionPointOwner::Freestanding,
+                        )?;
+                    }
+                }
             }
-            SegmentStatus::Done => todo!(),
         }
 
         Ok(())
@@ -208,8 +292,14 @@ impl SegmentEventHandler for BisimErrorInjector {
         checker: &mut Checker<Stopped>,
         ctx: HandlerContext,
     ) -> reldrv::error::Result<()> {
-        let mut segments = self.segments.lock();
-        let state = segments.get_mut(&checker.segment.nr).unwrap();
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&checker.initial_segment_nr())
+            .unwrap()
+            .clone();
+
+        let mut state = state_arc.lock();
 
         match &mut state.status {
             SegmentStatus::New => panic!("Unexpected SegmentStatus::New"),
@@ -233,8 +323,233 @@ impl SegmentEventHandler for BisimErrorInjector {
                     ctx.scope,
                 )?;
             }
-            SegmentStatus::Injecting { .. } => {}
-            SegmentStatus::Done => todo!(),
+            SegmentStatus::Injecting { execs, .. } => {
+                if let Some(exec) = execs.get_mut(&checker.exec.id) {
+                    match &mut *exec.clone().lock() {
+                        Execution::RaftLikeExecution(raft_like_exec) => {
+                            drop(state);
+
+                            info!("{checker} A segment of raft-like error injection run completed");
+                            assert_eq!(raft_like_exec.segment.nr, checker.segment.nr);
+                            raft_like_exec.in_initial_segment = false;
+
+                            checker.segment.wait_until_main_finished()?;
+
+                            let next_segment = checker.segment.next.lock().clone();
+
+                            if let Some(next_segment) = next_segment {
+                                info!(
+                                    "{checker} Starting next segment of raft-like error injection run: {}",
+                                    next_segment.nr
+                                );
+
+                                let checkpoint_process =
+                                    checker.try_map_process_inplace(|p| p.fork(true, true))?;
+
+                                let checkpoint_start = Checkpoint::new(
+                                    next_segment.checkpoint_start.epoch,
+                                    checkpoint_process,
+                                    CheckpointCaller::Shell,
+                                )?;
+
+                                next_segment.wait_until_main_finished()?;
+
+                                match &*next_segment.status.lock() {
+                                    reldrv::types::segment::SegmentStatus::Filling { .. } => {
+                                        unreachable!()
+                                    }
+                                    reldrv::types::segment::SegmentStatus::Filled {
+                                        is_finishing,
+                                        ..
+                                    } => {
+                                        assert!(checker.exec.id & EXEC_ID_RAFT_LIKE_BIT != 0);
+
+                                        let fake_segment = Arc::new(Segment {
+                                            nr: next_segment.nr,
+                                            checkpoint_start: Arc::new(checkpoint_start),
+                                            status: Mutex::new(
+                                                reldrv::types::segment::SegmentStatus::Filled {
+                                                    checkpoint: None,
+                                                    is_finishing: *is_finishing,
+                                                    dirty_page_addresses: None,
+                                                },
+                                            ),
+                                            status_cvar: Condvar::new(),
+                                            record: next_segment.record.clone(),
+                                            main_checker_exec: next_segment
+                                                .main_checker_exec
+                                                .clone(),
+                                            aux_checker_exec: Mutex::new(HashMap::new()),
+                                            pinned: Mutex::new(false),
+                                            ongoing_syscall: next_segment.ongoing_syscall,
+                                            exec_id: AtomicU64::new(0), // TODO: support multiple injections
+                                            next: Mutex::new(next_segment.next.lock().clone()),
+                                        });
+
+                                        let fake_exec = fake_segment
+                                            .new_checker_exec_with_id(checker.exec.id, true);
+
+                                        assert!(next_segment
+                                            .aux_checker_exec
+                                            .lock()
+                                            .insert(fake_exec.id, fake_exec.clone())
+                                            .is_none()); // insert a shadow checker exec to the original segment to prevent segment being cleaned up when we are executing
+
+                                        raft_like_exec.segment = fake_segment.clone();
+                                        raft_like_exec.exec = fake_exec.clone();
+
+                                        ctx.check_coord.start_checker_worker_thread(
+                                            fake_exec,
+                                            fake_segment,
+                                            ctx.scope,
+                                        )?;
+                                    }
+                                    reldrv::types::segment::SegmentStatus::Crashed => {
+                                        info!("{checker} Next segment crashed");
+                                        return Err(reldrv::error::Error::Cancelled);
+                                    }
+                                }
+                            } else {
+                                info!("{checker} All segments of raft-like error injection run completed");
+                                raft_like_exec.outcome = Some(ExecutionOutcome::Benigh);
+                                self.incr_stat(ExecType::RaftLike, ExecutionOutcome::Benigh);
+                            }
+                        }
+                        Execution::ParaHeteroExecution(_) => {
+                            info!("{checker} Parallel heterogeneous error injection run completed");
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_checker_exec_checked(
+        &self,
+        checker: &mut Checker<Stopped>,
+        check_fail_reason: &Option<CheckFailReason>,
+        _ctx: HandlerContext,
+    ) -> reldrv::error::Result<()> {
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&checker.initial_segment_nr())
+            .unwrap()
+            .clone();
+
+        let mut state = state_arc.lock();
+
+        match &mut state.status {
+            SegmentStatus::Injecting { execs, .. } => {
+                if let Some(exec) = execs.get_mut(&checker.exec.id) {
+                    match &mut *exec.lock() {
+                        Execution::RaftLikeExecution(_) => (),
+                        Execution::ParaHeteroExecution(para_hetero_exec) => {
+                            info!("{checker} Parallel heterogeneous error injection run checked: {check_fail_reason:?}");
+
+                            assert!(para_hetero_exec.outcome.is_none());
+
+                            if check_fail_reason.is_some() {
+                                para_hetero_exec.outcome = Some(ExecutionOutcome::Detected);
+                                self.incr_stat(ExecType::ParaHetero, ExecutionOutcome::Detected);
+                            } else {
+                                para_hetero_exec.outcome = Some(ExecutionOutcome::Benigh);
+                                self.incr_stat(ExecType::ParaHetero, ExecutionOutcome::Benigh);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    fn handle_checker_exec_error(
+        &self,
+        segment: &Arc<Segment>,
+        exec: &Arc<CheckerExecution>,
+        error: &reldrv::error::Error,
+        abort: &mut bool,
+        _ctx: HandlerContext,
+    ) -> reldrv::error::Result<()> {
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&initial_segment_nr(segment, exec))
+            .unwrap()
+            .clone();
+
+        let mut state = state_arc.lock();
+
+        match &mut state.status {
+            SegmentStatus::Injecting { execs, .. } => {
+                if let Some(exec) = execs.get_mut(&exec.id) {
+                    match &mut *exec.lock() {
+                        Execution::RaftLikeExecution(raft_like_exec) => {
+                            info!("{segment} Raft-like error injection run failed: {error}");
+                            raft_like_exec.outcome = Some(error.into());
+                            self.incr_stat(ExecType::RaftLike, error.into());
+
+                            *abort = false;
+                        }
+                        Execution::ParaHeteroExecution(para_hetero_exec) => {
+                            info!("{segment} Parallel heterogeneous error injection run failed: {error}");
+                            para_hetero_exec.outcome = Some(error.into());
+                            self.incr_stat(ExecType::ParaHetero, error.into());
+
+                            *abort = false;
+                        }
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    fn handle_checker_exec_fini(
+        &self,
+        segment: &Arc<Segment>,
+        exec: &Arc<CheckerExecution>,
+        ctx: HandlerContext,
+    ) -> reldrv::error::Result<()> {
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&initial_segment_nr(segment, exec))
+            .unwrap()
+            .clone();
+
+        let state = state_arc.lock();
+
+        match &state.status {
+            SegmentStatus::Injecting { execs, .. } => {
+                if execs
+                    .iter()
+                    .all(|e| e.1.try_lock().and_then(|r| r.outcome()).is_some())
+                {
+                    info!("{segment} All error injection runs completed, unpinning segment");
+
+                    let _segment_to_unpin = match execs.get(&exec.id) {
+                        Some(e) => match &*e.lock() {
+                            Execution::RaftLikeExecution(raft_like_exec) => {
+                                raft_like_exec.initial_segment.clone()
+                            }
+                            _ => segment.clone(),
+                        },
+                        _ => segment.clone(),
+                    };
+
+                    // *segment_to_unpin.pinned.lock() = false;
+                    ctx.check_coord.wakeup_main_worker();
+                }
+            }
+            _ => (),
         }
 
         Ok(())
@@ -261,7 +576,15 @@ impl SignalHandler for BisimErrorInjector {
         };
 
         let mut segments = self.segments.lock();
-        let state = segments.get_mut(&checker.segment.nr).unwrap();
+        let state = segments.get_mut(&checker.initial_segment_nr());
+
+        let state_arc = if let Some(state) = state {
+            state.clone()
+        } else {
+            return Ok(SignalHandlerExitAction::NextHandler);
+        };
+
+        let mut state = state_arc.lock();
 
         match &state.status {
             SegmentStatus::Randomizing { irq: Some(irq), .. } => {
@@ -275,23 +598,55 @@ impl SignalHandler for BisimErrorInjector {
 
                     info!("{checker} Current execution point {exec_point:?}");
 
-                    let registers_with_fault = checker
-                        .process()
-                        .read_registers()?
-                        .with_one_random_bit_flipped();
+                    let registers_without_fault = checker.process().read_registers()?;
+
+                    let registers_with_fault =
+                        registers_without_fault.with_one_random_bit_flipped();
+
+                    let raft_exec_id = EXEC_ID_RAFT_LIKE_BIT
+                        | (checker.initial_segment_nr() & EXEC_ID_RAFT_LIKE_INITIAL_NR_MASK);
+
+                    let raft_exec = checker.segment.new_checker_exec_with_id(raft_exec_id, true);
+                    let para_hetero_exec = checker.segment.new_checker_exec(false);
 
                     state.status = SegmentStatus::Injecting {
                         exec_point,
+                        registers_without_fault,
                         registers_with_fault,
-                        raft_like_exec: Some(RaftLikeExecution {
-                            segment: checker.segment.clone(),
-                            exec: checker.segment.new_checker_exec(true),
-                        }),
-                        para_hetero_exec: Some(ParaHeteroExecution {
-                            segment: checker.segment.clone(),
-                            exec: checker.segment.new_checker_exec(false),
-                        }),
+                        execs: vec![
+                            (
+                                raft_exec.id,
+                                Execution::RaftLikeExecution(RaftLikeExecution {
+                                    in_initial_segment: true,
+                                    initial_segment: checker.segment.clone(),
+                                    segment: checker.segment.clone(),
+                                    exec: raft_exec.clone(),
+                                    outcome: None,
+                                }),
+                            ),
+                            (
+                                para_hetero_exec.id,
+                                Execution::ParaHeteroExecution(ParaHeteroExecution {
+                                    outcome: None,
+                                }),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(k, v)| (k, Arc::new(Mutex::new(v))))
+                        .collect(),
                     };
+
+                    context.check_coord.start_checker_worker_thread(
+                        raft_exec,
+                        checker.segment.clone(),
+                        context.scope,
+                    )?;
+
+                    context.check_coord.start_checker_worker_thread(
+                        para_hetero_exec,
+                        checker.segment.clone(),
+                        context.scope,
+                    )?;
 
                     return Ok(SignalHandlerExitAction::SuppressSignalAndContinueInferior {
                         single_step: false,
@@ -307,18 +662,35 @@ impl SignalHandler for BisimErrorInjector {
 impl ExecutionPointEventHandler for BisimErrorInjector {
     fn handle_freestanding_exec_point_reached(
         &self,
-        exec_point: &dyn ExecutionPoint,
+        _exec_point: &dyn ExecutionPoint,
         checker: &mut Checker<Stopped>,
     ) -> reldrv::error::Result<()> {
-        let mut segments = self.segments.lock();
-        let state = segments.get_mut(&checker.segment.nr).unwrap();
+        let state_arc = self
+            .segments
+            .lock()
+            .get_mut(&checker.initial_segment_nr())
+            .unwrap()
+            .clone();
+
+        let state = state_arc.lock();
 
         match &state.status {
             SegmentStatus::Injecting {
                 registers_with_fault,
+                registers_without_fault,
+                exec_point,
+                execs,
                 ..
             } => {
+                assert!(execs.get(&checker.exec.id).is_some());
+
                 info!("{checker} Injecting error at {exec_point}");
+                let regs = checker.process().read_registers()?;
+                assert_eq!(
+                    regs.with_resume_flag_cleared(),
+                    registers_without_fault.with_resume_flag_cleared()
+                );
+
                 // TODO: check exec_point == expected_exec_point
                 checker
                     .process_mut()
@@ -327,6 +699,17 @@ impl ExecutionPointEventHandler for BisimErrorInjector {
             _ => (),
         }
         Ok(())
+    }
+}
+
+impl Module for BisimErrorInjector {
+    fn subscribe_all<'s, 'd>(&'s self, subs: &mut reldrv::dispatcher::Subscribers<'d>)
+    where
+        's: 'd,
+    {
+        subs.install_segment_event_handler(self);
+        subs.install_signal_handler(self);
+        subs.install_exec_point_event_handler(self);
     }
 }
 
@@ -343,8 +726,10 @@ fn main() -> reldrv::error::Result<()> {
     };
 
     config.checker_timeout_killer = true;
+    config.exec_point_replay = true;
+    config.check_coord_flags.ignore_miscmp = true;
 
-    let output = cli.output.map(|filename| {
+    let _output = cli.output.map(|filename| {
         OpenOptions::new()
             .append(cli.append)
             .write(true)
@@ -353,21 +738,13 @@ fn main() -> reldrv::error::Result<()> {
             .expect("Failed to open output file")
     });
 
-    // let state = Arc::new(Mutex::new(State::new()));
+    let stats = Arc::new(Mutex::new(HashMap::new()));
 
-    // config.extra_modules = vec![Box::new(ErrorInjector::new(
-    //     cli.iters_per_segment,
-    //     cli.dry_run,
-    //     cli.ignore_missed,
-    //     cli.since,
-    //     cli.until,
-    //     state.clone(),
-    //     output,
-    // ))];
-
-    config.check_coord_flags.ignore_miscmp = true;
+    config.extra_modules = vec![Box::new(BisimErrorInjector::new(stats.clone()))];
 
     reldrv::run(Command::new(cli.command).args(cli.args), config)?;
+
+    info!("Result: {:#?}", &*stats.lock());
 
     Ok(())
 }
