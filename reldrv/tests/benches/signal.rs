@@ -33,5 +33,5 @@ fn kernel_sighandler(n_iters: usize) {
 #[ignore = "benchmark use only"]
 #[test]
 fn run_signal_bench_set() {
-    run_suite("signal", || kernel_sighandler(100000));
+    run_suite("signal", 20, || kernel_sighandler(10000));
 }

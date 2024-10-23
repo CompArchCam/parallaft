@@ -31,23 +31,23 @@ fn kernel_read(block_size: usize, n_iters: usize) {
 #[ignore = "benchmark use only"]
 #[test]
 fn run_syscall_getpid_bench_set() {
-    run_suite("getpid", || kernel_getpid(100000));
+    run_suite("getpid", 20, || kernel_getpid(100000));
 }
 
 #[ignore = "benchmark use only"]
 #[test]
 fn run_syscall_read_1k_bench_set() {
-    run_suite("read 1k", || kernel_read(1024, 100000));
+    run_suite("read 1k", 20, || kernel_read(1024, 100000));
 }
 
 #[ignore = "benchmark use only"]
 #[test]
 fn run_syscall_read_32k_bench_set() {
-    run_suite("read 32k", || kernel_read(32768, 10000));
+    run_suite("read 32k", 20, || kernel_read(32768, 10000));
 }
 
 #[ignore = "benchmark use only"]
 #[test]
 fn run_syscall_read_1m_bench_set() {
-    run_suite("read 1M", || kernel_read(1024 * 1024, 1000));
+    run_suite("read 1M", 20, || kernel_read(1024 * 1024, 1000));
 }
