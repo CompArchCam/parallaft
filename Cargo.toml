@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "reldrv",
+    "parallaft",
     "reverie-memory",
     "reverie-syscalls",
 ]
