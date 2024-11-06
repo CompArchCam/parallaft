@@ -25,7 +25,7 @@ enum CpuFreqScalerTypeCli {
 }
 
 #[derive(Parser, Debug)]
-#[command(version = git_version!())]
+#[command(version = git_version!(fallback = "unknown"))]
 struct CliArgs {
     /// Config file to use
     #[arg(short, long)]
