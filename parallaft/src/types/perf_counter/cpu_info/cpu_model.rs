@@ -42,6 +42,8 @@ pub enum CpuModel {
     AppleAvalancheM2,
     #[cfg(target_arch = "aarch64")]
     AppleBlizzardM2,
+    #[cfg(target_arch = "aarch64")]
+    AppleUnknown,
 
     Unknown,
 }
@@ -151,6 +153,7 @@ impl CpuModel {
             (0x41, 0xd4f) => Self::Armv8NeoverseV2,
             (0x61, 0x033) => Self::AppleAvalancheM2,
             (0x61, 0x032) => Self::AppleBlizzardM2,
+            (0x61, _) => Self::AppleUnknown,
             _ => Self::Unknown,
         }
     }
@@ -166,7 +169,8 @@ impl CpuModel {
             | Self::Armv8NeoverseN1
             | Self::Armv8NeoverseV2
             | Self::AppleAvalancheM2
-            | Self::AppleBlizzardM2 => 512, // TODO: verify this
+            | Self::AppleBlizzardM2
+            | Self::AppleUnknown => 512, // TODO: verify this
             _ => 0,
         }
     }
@@ -182,7 +186,8 @@ impl CpuModel {
             | Self::Armv8NeoverseN1
             | Self::Armv8NeoverseV2
             | Self::AppleAvalancheM2
-            | Self::AppleBlizzardM2 => 16384, // TODO: verify this
+            | Self::AppleBlizzardM2
+            | Self::AppleUnknown => 16384, // TODO: verify this
             _ => 0,
         }
     }
