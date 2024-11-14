@@ -1,3 +1,4 @@
+pub mod exec_point_sync_check;
 pub mod manual_checkpoint;
 pub mod program_exit;
 pub mod record;

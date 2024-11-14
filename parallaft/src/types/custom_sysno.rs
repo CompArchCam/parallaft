@@ -12,4 +12,5 @@ pub enum CustomSysno {
     DumpExecPoint = 0xff7c,
     AssertInProtection = 0xff7d,
     SlicingStart = 0xff7e,
+    CheckExecPointSync = 0xff7f,
 }

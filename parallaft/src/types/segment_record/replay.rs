@@ -12,6 +12,7 @@ use crate::{
 };
 
 use super::{
+    exec_point_sync_check::ExecutionPointSyncCheck,
     manual_checkpoint::ManualCheckpointRequest,
     program_exit::ProgramExit,
     record::{MainStatus, SegmentRecord},
@@ -248,6 +249,13 @@ impl SegmentReplay {
         self.pop_event_with(checker, |event| event.get_program_exit())
     }
 
+    pub fn pop_execution_point_sync_check(
+        &self,
+        checker: &Checker<Stopped>,
+    ) -> Result<WithIsLastEvent<ExecutionPointSyncCheck>> {
+        self.pop_event_with(checker, |event| event.get_execution_point_sync_check())
+    }
+
     pub fn peek_event_blocking(&self) -> Result<SavedEvent> {
         let state = self.wait_until_event_available()?;
         Ok(self
@@ -271,7 +279,7 @@ impl SegmentReplay {
             SavedEvent::Signal(SavedSignal::External(siginfo, exec_point_expected)) => {
                 info!("{checker} Replaying external signal");
 
-                if !exec_point_expected.do_eq(exec_point) {
+                if !exec_point_expected.as_ref().eq(exec_point) {
                     error!(
                         "{checker} Exec point mismatch: {:?} != {:?}",
                         exec_point, exec_point_expected
@@ -290,7 +298,7 @@ impl SegmentReplay {
                 Ok(SignalHandlerExitAction::ContinueInferiorWithSignal(sig))
             }
             SavedEvent::ExecutionPoint(exec_point_expected) => {
-                if !exec_point_expected.do_eq(exec_point) {
+                if !exec_point_expected.as_ref().eq(exec_point) {
                     error!(
                         "{checker} Exec point mismatch: {:?} != {:?}",
                         exec_point, exec_point_expected

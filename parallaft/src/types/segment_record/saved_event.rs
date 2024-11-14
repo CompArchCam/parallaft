@@ -10,6 +10,7 @@ use crate::{
 };
 
 use super::{
+    exec_point_sync_check::ExecutionPointSyncCheck,
     manual_checkpoint::ManualCheckpointRequest,
     program_exit::ProgramExit,
     saved_signal::SavedSignal,
@@ -26,6 +27,7 @@ pub enum SavedEvent {
     ExecutionPoint(Arc<dyn ExecutionPoint>),
     ManualCheckpointRequest(ManualCheckpointRequest),
     ProgramExit(ProgramExit),
+    ExecutionPointSyncCheck(ExecutionPointSyncCheck),
 }
 
 impl SavedEvent {
@@ -87,6 +89,12 @@ impl From<ProgramExit> for SavedEvent {
     }
 }
 
+impl From<ExecutionPointSyncCheck> for SavedEvent {
+    fn from(c: ExecutionPointSyncCheck) -> Self {
+        SavedEvent::ExecutionPointSyncCheck(c)
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum SavedEventType {
     Syscall,
@@ -98,6 +106,7 @@ pub enum SavedEventType {
     ExecutionPoint,
     ManualCheckpointRequest,
     ProgramExit,
+    ExecutionPointSyncCheck,
 }
 
 impl From<&SavedEvent> for SavedEventType {
@@ -110,6 +119,7 @@ impl From<&SavedEvent> for SavedEventType {
             SavedEvent::ExecutionPoint(_) => SavedEventType::ExecutionPoint,
             SavedEvent::ManualCheckpointRequest(_) => SavedEventType::ManualCheckpointRequest,
             SavedEvent::ProgramExit(_) => SavedEventType::ProgramExit,
+            SavedEvent::ExecutionPointSyncCheck(_) => SavedEventType::ExecutionPointSyncCheck,
         }
     }
 }
@@ -147,4 +157,9 @@ impl SavedEvent {
         ManualCheckpointRequest
     );
     impl_getter!(get_program_exit, ProgramExit, ProgramExit);
+    impl_getter!(
+        get_execution_point_sync_check,
+        ExecutionPointSyncCheck,
+        ExecutionPointSyncCheck
+    );
 }

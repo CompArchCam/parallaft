@@ -33,6 +33,7 @@ use comparators::memory::simple::SimpleMemoryComparator;
 use comparators::memory::MemoryComparatorType;
 use debug_utils::core_dumper::CoreDumper;
 use debug_utils::exec_point_dumper::ExecutionPointDumper;
+use debug_utils::exec_point_sync_checker::ExecutionPointSyncChecker;
 use debug_utils::in_protection_asserter::InProtectionAsserter;
 use debug_utils::watchpoint::Watchpoint;
 use derivative::Derivative;
@@ -503,6 +504,8 @@ pub fn parent_work(
     if options.core_dump {
         disp.register_module(CoreDumper::new("gcore".into(), options.core_dump_dir));
     }
+
+    disp.register_module(ExecutionPointSyncChecker);
 
     let check_coord = CheckCoordinator::new(
         child.unowned_copy(),

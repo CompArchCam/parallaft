@@ -43,6 +43,10 @@ pub fn assert_in_protection() {
     unsafe { libc::syscall(CustomSysno::AssertInProtection as _) };
 }
 
+pub fn check_exec_point_sync() {
+    unsafe { libc::syscall(CustomSysno::CheckExecPointSync as _) };
+}
+
 pub fn migrate_checker() {
     unsafe { libc::syscall(TestCustomSysno::MigrateChecker as _) };
 }
