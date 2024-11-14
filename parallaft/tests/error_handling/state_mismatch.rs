@@ -1,4 +1,6 @@
-use parallaft::{dispatcher::Module, events::comparator::RegisterComparator, RelShellOptionsBuilder};
+use parallaft::{
+    dispatcher::Module, events::comparator::RegisterComparator, RelShellOptionsBuilder,
+};
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 

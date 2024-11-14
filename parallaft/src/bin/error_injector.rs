@@ -14,7 +14,6 @@ use clap::Parser;
 use git_version::git_version;
 use log::{error, info};
 use nix::sys::signal::Signal;
-use parking_lot::Mutex;
 use parallaft::{
     dispatcher::Module,
     error::{Error, UnexpectedEventReason},
@@ -34,6 +33,7 @@ use parallaft::{
     },
     RelShellOptions,
 };
+use parking_lot::Mutex;
 use serde::Serialize;
 
 #[derive(Parser, Debug)]

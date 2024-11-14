@@ -12,8 +12,6 @@ use derivative::Derivative;
 use git_version::git_version;
 use log::info;
 use nix::sys::signal::Signal;
-use parking_lot::{Condvar, Mutex};
-use perf_event::events::Hardware;
 use parallaft::{
     dispatcher::Module,
     events::{
@@ -45,6 +43,8 @@ use parallaft::{
     },
     RelShellOptions,
 };
+use parking_lot::{Condvar, Mutex};
+use perf_event::events::Hardware;
 
 #[derive(Parser, Debug)]
 #[command(version = git_version!())]
@@ -355,7 +355,9 @@ impl SegmentEventHandler for BisimErrorInjector {
                                 next_segment.wait_until_main_finished()?;
 
                                 match &*next_segment.status.lock() {
-                                    parallaft::types::segment::SegmentStatus::Filling { .. } => {
+                                    parallaft::types::segment::SegmentStatus::Filling {
+                                        ..
+                                    } => {
                                         unreachable!()
                                     }
                                     parallaft::types::segment::SegmentStatus::Filled {

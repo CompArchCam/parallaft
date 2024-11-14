@@ -6,8 +6,6 @@ use nix::{
     sys::mman::{self, munmap},
     unistd::Pid,
 };
-use parking_lot::Mutex;
-use perf_event::events::Hardware;
 use parallaft::{
     check_coord::CheckCoordinatorOptions,
     dispatcher::Module,
@@ -24,6 +22,8 @@ use parallaft::{
     },
     RelShellOptionsBuilder,
 };
+use parking_lot::Mutex;
+use perf_event::events::Hardware;
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 

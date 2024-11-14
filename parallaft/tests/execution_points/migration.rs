@@ -62,7 +62,9 @@ impl CustomSyscallHandler for MigrationHelper {
                         .check_coord
                         .migrate_checker(new_cpu_set, *checker, context.scope)?;
 
-                    return Ok(parallaft::events::syscall::SyscallHandlerExitAction::ContinueInferior);
+                    return Ok(
+                        parallaft::events::syscall::SyscallHandlerExitAction::ContinueInferior,
+                    );
                 }
             }
         }

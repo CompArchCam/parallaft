@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use log::info;
 use nix::sys::signal::Signal;
-use parking_lot::Mutex;
-use perf_event::events::Hardware;
 use parallaft::{
     dispatcher::Module,
     error::Result,
@@ -26,6 +24,8 @@ use parallaft::{
     },
     RelShellOptionsBuilder,
 };
+use parking_lot::Mutex;
+use perf_event::events::Hardware;
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 

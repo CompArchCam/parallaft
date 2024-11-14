@@ -28,8 +28,9 @@ impl StandardSyscallHandler for ExcessSyscallAfter {
         &self,
         _syscall: &reverie_syscalls::Syscall,
         _context: parallaft::events::HandlerContextWithInferior<Stopped>,
-    ) -> parallaft::error::Result<parallaft::events::syscall::StandardSyscallEntryCheckerHandlerExitAction>
-    {
+    ) -> parallaft::error::Result<
+        parallaft::events::syscall::StandardSyscallEntryCheckerHandlerExitAction,
+    > {
         if self
             .count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)

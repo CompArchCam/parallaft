@@ -8,7 +8,6 @@ use nix::{
     libc,
     sys::signal::{raise, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
 };
-use parking_lot::Mutex;
 use parallaft::{
     dispatcher::Module,
     events::{
@@ -18,6 +17,7 @@ use parallaft::{
     },
     RelShellOptionsBuilder,
 };
+use parking_lot::Mutex;
 
 use crate::common::{checkpoint_fini, checkpoint_take, trace_w_options};
 
