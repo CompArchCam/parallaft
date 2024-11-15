@@ -1,0 +1,9 @@
+checkpoint_period: 5000000000
+main_cpu_set: [0]
+checker_cpu_set: [16, 17, 18, 19]
+checker_emerg_cpu_set: [2]
+checker_booster_cpu_set: [0, 2, 4, 6]
+max_nr_live_segments: 5
+exec_point_replay: true
+slicer: !FixedInterval
+dump_stats: !StdOut
