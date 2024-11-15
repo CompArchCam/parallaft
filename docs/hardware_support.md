@@ -4,16 +4,16 @@ To enable execution point record and replay, Parallaft requires access to accura
 
 ## Status table
 
-| Architecture | Processor                                         | Supported? | Tested? | Notes                                                            |
-| ------------ | ------------------------------------------------- | ---------- | ------- | ---------------------------------------------------------------- |
-| aarch64      | Apple M2 (non-Pro/Max/Ultra)                      | Y          | Y       |                                                                  |
-| aarch64      | Other pre-M4 Apple Silicon                        | Y          | N       |                                                                  |
-| aarch64      | Arm Neoverse N1                                   | Y          | Y       |                                                                  |
-| aarch64      | Arm Neoverse V2                                   | Y          | Y       |                                                                  |
-| aarch64      | Arm Cortex A76 with ARMv8-PMUv3                   | Y          | Y       |                                                                  |
-| x86_64       | Intel Core i7-12700                               | Y          | Y       | Known issues with `memcpy`/`memchr`/`memrchr` functions in glibc |
-| x86_64       | Intel Core i7-14700                               | Y          | Y       | Ditto                                                            |
-| x86_64       | Other Intel Alder Lake and Raptor Lake processors | Y          | N       |                                                                  |
+| Architecture | Processor                                         | Supported? | Tested? | Notes                                         |
+| ------------ | ------------------------------------------------- | ---------- | ------- | --------------------------------------------- |
+| aarch64      | Apple M2 (non-Pro/Max/Ultra)                      | Y          | Y       |                                               |
+| aarch64      | Other pre-M4 Apple Silicon                        | Y          | N       |                                               |
+| aarch64      | Arm Neoverse N1                                   | Y          | Y       |                                               |
+| aarch64      | Arm Neoverse V2                                   | Y          | Y       |                                               |
+| aarch64      | Arm Cortex A76 with ARMv8-PMUv3                   | Y          | Y       |                                               |
+| x86_64       | Intel Core i7-12700                               | Y          | Y       | Known issues with `rep`-prefixed instructions |
+| x86_64       | Intel Core i7-14700                               | Y          | Y       | Ditto                                         |
+| x86_64       | Other Intel Alder Lake and Raptor Lake processors | Y          | N       |                                               |
 
 ## Developing support for a new processor
 
