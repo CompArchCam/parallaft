@@ -7,11 +7,23 @@ pub mod dynamic;
 pub mod entire_program;
 pub mod fixed_interval;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, ValueEnum, Serialize, Deserialize)]
 pub enum ReferenceType {
     Instructions,
-    #[default]
     Cycles,
+}
+
+impl Default for ReferenceType {
+    fn default() -> Self {
+        if cfg!(target_arch = "x86_64") {
+            // On x86_64, we cannot use cycles because it may split
+            // partially-executed rep-prefixed instructions, which our exec
+            // point replay mechanism cannot handle yet.
+            Self::Instructions
+        } else {
+            Self::Cycles
+        }
+    }
 }
 
 impl Display for ReferenceType {
