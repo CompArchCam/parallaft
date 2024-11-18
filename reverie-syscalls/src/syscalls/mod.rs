@@ -8,12 +8,14 @@
 
 pub mod family;
 pub mod may_rw;
+pub mod speculation;
 
 use ::syscalls::SyscallArgs;
 use ::syscalls::Sysno;
 use reverie_memory::AddrSlice;
 use reverie_memory::AddrSliceMut;
 use reverie_memory::MemoryAccess;
+use speculation::SyscallSpeculate;
 // Re-export flags that used by syscalls from the `nix` crate so downstream
 // projects don't need to add another dependency on it.
 pub use nix::fcntl::AtFlags;
@@ -519,6 +521,7 @@ typed_syscall! {
 typed_syscall! {
     #[may_read_specified_only]
     #[may_write_specified_only]
+    #[no_impl_speculate]
     pub struct Write {
         fd: i32,
         // TODO: Change this to a slice and print out part of the contents of
@@ -526,6 +529,12 @@ typed_syscall! {
         #[buf_may_read_with_len = len]
         buf: Option<Addr<u8>>,
         len: usize,
+    }
+}
+
+impl<'m, M: MemoryAccess> SyscallSpeculate<'m, M> for Write {
+    fn speculate(&self, _memory: &'m M) -> Option<isize> {
+        Some(self.len() as isize)
     }
 }
 
@@ -4058,5 +4067,22 @@ mod test {
                 .with_newpath(PathPtr::from_ptr(bar.as_ptr()))
                 .into(),
         );
+    }
+
+    #[test]
+    fn test_syscall_speculation_write() {
+        let memory = LocalMemory::new();
+
+        assert_eq!(
+            Syscall::Write(Write::new().with_len(42)).speculate(&memory),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn test_syscall_speculation_read() {
+        let memory = LocalMemory::new();
+
+        assert_eq!(Syscall::Read(Read::new()).speculate(&memory), None);
     }
 }

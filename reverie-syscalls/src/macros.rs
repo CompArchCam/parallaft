@@ -70,6 +70,7 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         }
     ) => {
         #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -200,6 +201,13 @@ macro_rules! typed_syscall {
             [$($may_written_entries)*]
             attrs: [$(#[$attrs])*],
         }
+
+        typed_syscall! {
+            @impl_speculate
+            $impl_speculate,
+            $Name,
+            attrs: [$(#[$attrs])*],
+        }
     };
 
     // Implement SyscallMayRead
@@ -295,6 +303,23 @@ macro_rules! typed_syscall {
         $may_read_specified_only:ident,
         $Name:ident,
         [$($may_written_entries:tt)*]
+        attrs: [$(#[$attrs:meta])*],
+    ) => {};
+
+    // Implement SyscallSpeculate
+    (@impl_speculate
+        true,
+        $Name:ident,
+        attrs: [$(#[$attrs:meta])*],
+    ) => {
+        $(#[$attrs])*
+        impl<'a, M: MemoryAccess> $crate::syscalls::speculation::SyscallSpeculate<'a, M> for $Name {}
+    };
+
+    // Do nothing if #[no_impl_speculate] is specified
+    (@impl_speculate
+        false,
+        $Name:ident,
         attrs: [$(#[$attrs:meta])*],
     ) => {};
 
@@ -397,6 +422,7 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -426,6 +452,7 @@ macro_rules! typed_syscall {
                     impl_may_write: $impl_may_write,
                     may_read_specified_only: $may_read_specified_only,
                     may_write_specified_only: $may_write_specified_only,
+                    impl_speculate: $impl_speculate,
                 }
             }
         }
@@ -791,7 +818,7 @@ macro_rules! typed_syscall {
     };
 
     // Consume #[no_impl_may_read]
-    (@accumulate_global_may_rw
+    (@accumulate_global_may_rw_speculate
         {
             vis: $vis:vis,
             name: $Name:ident,
@@ -804,13 +831,14 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
         $($vals:tt)*
     ) => {
         typed_syscall! {
-            @accumulate_global_may_rw
+            @accumulate_global_may_rw_speculate
             {
                 vis: $vis,
                 name: $Name,
@@ -820,6 +848,7 @@ macro_rules! typed_syscall {
                 impl_may_write: $impl_may_write,
                 may_read_specified_only: $may_read_specified_only,
                 may_write_specified_only: $may_write_specified_only,
+                impl_speculate: $impl_speculate,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -828,7 +857,7 @@ macro_rules! typed_syscall {
     };
 
     // Consume #[no_impl_may_write]
-    (@accumulate_global_may_rw
+    (@accumulate_global_may_rw_speculate
         {
             vis: $vis:vis,
             name: $Name:ident,
@@ -841,13 +870,14 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
         $($vals:tt)*
     ) => {
         typed_syscall! {
-            @accumulate_global_may_rw
+            @accumulate_global_may_rw_speculate
             {
                 vis: $vis,
                 name: $Name,
@@ -857,6 +887,7 @@ macro_rules! typed_syscall {
                 impl_may_write: false,
                 may_read_specified_only: $may_read_specified_only,
                 may_write_specified_only: $may_write_specified_only,
+                impl_speculate: $impl_speculate,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -865,7 +896,7 @@ macro_rules! typed_syscall {
     };
 
     // Consume #[may_read_specified_only]
-    (@accumulate_global_may_rw
+    (@accumulate_global_may_rw_speculate
         {
             vis: $vis:vis,
             name: $Name:ident,
@@ -878,13 +909,14 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
         $($vals:tt)*
     ) => {
         typed_syscall! {
-            @accumulate_global_may_rw
+            @accumulate_global_may_rw_speculate
             {
                 vis: $vis,
                 name: $Name,
@@ -894,6 +926,7 @@ macro_rules! typed_syscall {
                 impl_may_write: $impl_may_write,
                 may_read_specified_only: true,
                 may_write_specified_only: $may_write_specified_only,
+                impl_speculate: $impl_speculate,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -902,7 +935,7 @@ macro_rules! typed_syscall {
     };
 
     // Consume #[may_write_specified_only]
-    (@accumulate_global_may_rw
+    (@accumulate_global_may_rw_speculate
         {
             vis: $vis:vis,
             name: $Name:ident,
@@ -915,13 +948,14 @@ macro_rules! typed_syscall {
             impl_may_write: $impl_may_write:ident,
             may_read_specified_only: $may_read_specified_only:ident,
             may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
         },
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
         $($vals:tt)*
     ) => {
         typed_syscall! {
-            @accumulate_global_may_rw
+            @accumulate_global_may_rw_speculate
             {
                 vis: $vis,
                 name: $Name,
@@ -931,6 +965,7 @@ macro_rules! typed_syscall {
                 impl_may_write: $impl_may_write,
                 may_read_specified_only: $may_read_specified_only,
                 may_write_specified_only: true,
+                impl_speculate: $impl_speculate,
             },
             [$($may_read_entries)*],
             [$($may_written_entries)*],
@@ -938,7 +973,46 @@ macro_rules! typed_syscall {
         }
     };
 
-    (@accumulate_global_may_rw
+    // Consume #[no_impl_speculate]
+    (@accumulate_global_may_rw_speculate
+        {
+            vis: $vis:vis,
+            name: $Name:ident,
+            attrs: [
+                #[no_impl_speculate]
+                $(#[$($attrs:tt)*])*
+            ],
+            ret: $ret:ty,
+            impl_may_read: $impl_may_read:ident,
+            impl_may_write: $impl_may_write:ident,
+            may_read_specified_only: $may_read_specified_only:ident,
+            may_write_specified_only: $may_write_specified_only:ident,
+            impl_speculate: $impl_speculate:ident,
+        },
+        [$($may_read_entries:tt)*],
+        [$($may_written_entries:tt)*],
+        $($vals:tt)*
+    ) => {
+        typed_syscall! {
+            @accumulate_global_may_rw_speculate
+            {
+                vis: $vis,
+                name: $Name,
+                attrs: [$(#[$($attrs)*])*],
+                ret: $ret,
+                impl_may_read: $impl_may_read,
+                impl_may_write: $impl_may_write,
+                may_read_specified_only: $may_read_specified_only,
+                may_write_specified_only: $may_write_specified_only,
+                impl_speculate: false,
+            },
+            [$($may_read_entries)*],
+            [$($may_written_entries)*],
+            $($vals)*
+        }
+    };
+
+    (@accumulate_global_may_rw_speculate
         $prefix:tt,
         [$($may_read_entries:tt)*],
         [$($may_written_entries:tt)*],
@@ -968,7 +1042,7 @@ macro_rules! typed_syscall {
         }
     ) => {
         typed_syscall! {
-            @accumulate_global_may_rw
+            @accumulate_global_may_rw_speculate
             // Meta data that is passed through the munching pipeline until we
             // are ready to generate all of the code.
             {
@@ -980,6 +1054,7 @@ macro_rules! typed_syscall {
                 impl_may_write: true,
                 may_read_specified_only: false,
                 may_write_specified_only: false,
+                impl_speculate: true,
             },
             // List of entries whose pointed target may be read by the syscall.
             [],
@@ -1095,6 +1170,18 @@ macro_rules! syscall_list {
                         $name::$item(x) => x.may_write(memory),
                     )*
                     $name::Other(_num, _args) => $crate::syscalls::may_rw::RangesSyscallMayWriteBuilder::new(memory).may_write_anything().build(),
+                }
+            }
+        }
+
+        impl<'a, M: MemoryAccess> $crate::syscalls::speculation::SyscallSpeculate<'a, M> for $name {
+            fn speculate(&'a self, memory: &'a M) -> Option<isize> {
+                match self {
+                    $(
+                        $(#[$inner])*
+                        $name::$item(x) => x.speculate(memory),
+                    )*
+                    $name::Other(_num, _args) => None,
                 }
             }
         }
