@@ -5,6 +5,8 @@ use lazy_static::lazy_static;
 
 use crate::{error::Result, types::perf_counter::EVENT_SOURCE_DEVICES_ROOT};
 
+use super::NR_CPUS;
+
 lazy_static! {
     pub static ref PMUS: Vec<Pmu> = list_pmus().expect("Failed to get PMU list");
 }
@@ -42,6 +44,11 @@ fn list_pmus() -> Result<Vec<Pmu>> {
                 }
 
                 pmus.push(Pmu { name, cpus });
+            } else if path.is_dir() && path.file_name() == Some("cpu".as_ref()) {
+                pmus.push(Pmu {
+                    name: "cpu".into(),
+                    cpus: (0..*NR_CPUS).collect(),
+                });
             }
         }
     }

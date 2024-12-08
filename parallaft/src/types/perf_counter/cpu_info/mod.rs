@@ -2,6 +2,7 @@ mod cpu_model;
 pub mod pmu;
 
 pub use cpu_model::CpuModel;
+use lazy_static::lazy_static;
 use pmu::PMUS;
 
 use std::{collections::HashMap, path::PathBuf};
@@ -14,11 +15,16 @@ pub struct CpuInfo {
     pub pmu_name: Option<PathBuf>,
 }
 
+lazy_static! {
+    pub static ref NR_CPUS: usize =
+        sysconf(SysconfVar::_NPROCESSORS_CONF).unwrap().unwrap() as usize;
+}
+
 pub fn detect_all_cpu_info() -> HashMap<usize, CpuInfo> {
     let pmus = &*PMUS;
     let mut cpu_info = HashMap::new();
 
-    for cpu in 0..sysconf(SysconfVar::_NPROCESSORS_CONF).unwrap().unwrap() as usize {
+    for cpu in 0..*NR_CPUS {
         let model = CpuModel::detect(cpu);
         cpu_info.insert(
             cpu,

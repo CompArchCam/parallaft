@@ -228,13 +228,13 @@ impl CpuModel {
 
 #[cfg(test)]
 mod tests {
-    use nix::unistd::{sysconf, SysconfVar};
+    use crate::types::perf_counter::cpu_info::NR_CPUS;
 
     use super::*;
 
     #[test]
     fn test_detect_cpu_model() {
-        for i in 0..sysconf(SysconfVar::_NPROCESSORS_CONF).unwrap().unwrap() as usize {
+        for i in 0..*NR_CPUS {
             let model = CpuModel::detect(i);
             println!("CPU {i} model is {model:?}");
         }
