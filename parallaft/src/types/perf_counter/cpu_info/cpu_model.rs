@@ -133,6 +133,9 @@ impl CpuModel {
                     // Ice Lake SP
                     (6, 106, _) => Self::IntelLakeCove,
 
+                    // Goldmont Plus
+                    (6, 122, _) => Self::IntelMont,
+
                     _ => Self::IntelOther,
                 }
             }
