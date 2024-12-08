@@ -130,6 +130,9 @@ impl CpuModel {
                     // Raptor Lake big cores
                     (6, 183, _) => Self::IntelLakeCove,
 
+                    // Ice Lake SP
+                    (6, 106, _) => Self::IntelLakeCove,
+
                     _ => Self::IntelOther,
                 }
             }
