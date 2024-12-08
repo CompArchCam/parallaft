@@ -81,12 +81,26 @@ impl CpuModel {
         let max_leaf = cpuid0.eax;
         let vendor = std::str::from_utf8(&vendor).unwrap_or_default();
         let cpuid1 = unsafe { std::arch::x86_64::__cpuid(1) };
-        let model = (cpuid1.eax >> 4) & 0xf;
-        let family_id = (cpuid1.eax >> 8) & 0xf;
+        let base_model = (cpuid1.eax >> 4) & 0xf;
+        let base_family = (cpuid1.eax >> 8) & 0xf;
+        let ext_model = (cpuid1.eax >> 16) & 0xf;
+        let ext_family = (cpuid1.eax >> 20) & 0xff;
+        let model;
+
+        if base_family == 6 || base_family == 15 {
+            model = (ext_model << 4) | base_model;
+        } else {
+            model = base_model;
+        }
+
+        let mut family = base_family;
+        if base_family == 0xf {
+            family += ext_family;
+        }
 
         debug!("Detected CPU{} vendor = {}", processor_id, vendor);
         debug!("Detected CPU{} model = {:x}", processor_id, model);
-        debug!("Detected CPU{} family ID = {:x}", processor_id, family_id);
+        debug!("Detected CPU{} family ID = {:x}", processor_id, family);
 
         match vendor {
             "AuthenticAMD" => Self::Amd,
@@ -105,9 +119,17 @@ impl CpuModel {
                     }
                 }
 
-                match (family_id, model, core_type) {
-                    (0x6, 0x7, IntelCoreType::Atom) => Self::IntelMont,
-                    (0x6, 0x7, _) => Self::IntelLakeCove,
+                match (family, model, core_type) {
+                    // Alder Lake little cores
+                    (6, 151, IntelCoreType::Atom) => Self::IntelMont,
+                    // Alder Lake big cores
+                    (6, 151, _) => Self::IntelLakeCove,
+
+                    // Raptor Lake little cores
+                    (6, 183, IntelCoreType::Atom) => Self::IntelMont,
+                    // Raptor Lake big cores
+                    (6, 183, _) => Self::IntelLakeCove,
+
                     _ => Self::IntelOther,
                 }
             }
